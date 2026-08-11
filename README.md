@@ -126,8 +126,10 @@ packages/ui-cards           Progress/checklist card models
   scheduler controls, routine execution history, run timelines, delivery
   ledgers, and a project-aware client preview.
 - Operator authentication is opt-in for local development and required for a
-  shared deployment. It supports Bearer automation and signed, expiring,
-  HttpOnly browser sessions with CSRF protection for mutations.
+  shared deployment. It maps one or more tokens to named, workspace-scoped
+  principals for both Bearer automation and signed, expiring HttpOnly browser
+  sessions. Viewer principals are read-only, mutations use the authenticated
+  principal for audit, and browser writes retain CSRF protection.
 
 ## MVP
 
@@ -187,16 +189,48 @@ the production-storage roadmap.
 
 ## Operator Authentication
 
-Local loopback development remains open when `OPENTAG_ADMIN_TOKEN` is unset.
-Before binding the server to a shared interface, configure a random token of at
-least 24 characters:
+Local loopback development remains open when no operator credentials are set.
+For a single installation owner, the original random token remains supported:
 
 ```bash
 export OPENTAG_ADMIN_TOKEN="$(openssl rand -hex 32)"
+export OPENTAG_ADMIN_PRINCIPAL_NAME="Platform operations"
 export OPENTAG_ADMIN_SESSION_TTL_SECONDS=28800
 export OPENTAG_ADMIN_COOKIE_SECURE=true
 npm run dev
 ```
+
+`OPENTAG_ADMIN_TOKEN` is backward-compatible installation-owner access. Scope it
+with `OPENTAG_ADMIN_WORKSPACE_IDS=workspace-a,workspace-b` when it should not
+control the whole installation. For multiple named credentials, configure a
+JSON array and a stable session-signing secret:
+
+```bash
+export OPENTAG_OPERATOR_SESSION_SECRET="$(openssl rand -hex 32)"
+export OPENTAG_OPERATOR_PRINCIPALS_JSON='[
+  {
+    "id": "workspace-admin",
+    "displayName": "Workspace admin",
+    "role": "admin",
+    "workspaceIds": ["dev-workspace"],
+    "token": "replace-with-at-least-24-random-characters"
+  },
+  {
+    "id": "audit-viewer",
+    "displayName": "Audit viewer",
+    "role": "viewer",
+    "workspaceIds": ["dev-workspace"],
+    "token": "replace-with-another-random-credential"
+  }
+]'
+```
+
+`owner` and `admin` can mutate resources inside their workspace scope; `viewer`
+is read-only. A `workspaceIds` entry of `"*"` grants installation scope and is
+required for global memory plus cross-workspace worker and scheduler controls.
+Collection APIs are filtered before limiting results, and object actions verify
+the target run, binding, routine, invitation, or delivery belongs to an allowed
+workspace.
 
 The console exchanges that token for a signed, expiring `HttpOnly` session
 cookie. Scripts can send the token directly:
@@ -230,9 +264,10 @@ agent work. Workspace guests can invoke the agent in `workspace` mode but cannot
 write memory or manage routines. Authorization denials are recorded in the
 inbound ledger, and native clients receive a rate-limited access notice.
 
-The current browser/operator credential still has installation-wide control of
-the console. Mapping operator sessions to named workspace principals remains a
-separate multi-tenant hardening step.
+Workspace member roles govern people invoking OpenTag from client threads;
+operator principals govern the separate control plane. Deployment credentials
+are currently configured through environment variables. Self-service token
+rotation and SSO/OIDC remain later control-plane work.
 
 ## Routines
 

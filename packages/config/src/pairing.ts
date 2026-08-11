@@ -326,6 +326,15 @@ export class FilePairingStore {
       .map(publicInvitation);
   }
 
+  async getInvitation(
+    id: string,
+    at = new Date(),
+  ): Promise<PairingInvitation | undefined> {
+    const state = await this.loadAndExpire(at.toISOString());
+    const invitation = state.invitations.find((item) => item.id === id);
+    return invitation ? publicInvitation(invitation) : undefined;
+  }
+
   async revokeInvitation(
     id: string,
     actor = 'admin',

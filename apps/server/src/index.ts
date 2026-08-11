@@ -87,7 +87,14 @@ import {
   type UpsertRoutineInput,
 } from '@opentag/routines';
 import { SqliteOpenTagStore } from '@opentag/storage-sqlite';
-import { OperatorAuth, bearerTokenMatches } from './operator-auth.js';
+import {
+  OperatorAuth,
+  bearerTokenMatches,
+  parseOperatorCredentials,
+  type OperatorAuthentication,
+  type OperatorPrincipal,
+  type OperatorRole,
+} from './operator-auth.js';
 
 const port = Number(process.env.OPENTAG_PORT || 3077);
 const host = process.env.OPENTAG_HOST || '127.0.0.1';
@@ -158,8 +165,24 @@ const routineClaimStaleMs = numberEnvironmentValue(
 );
 const defaultRoutineTimeZone =
   process.env.OPENTAG_DEFAULT_TIME_ZONE || 'Asia/Shanghai';
+const legacyOperatorWorkspaceIds = listEnvironmentValue(
+  'OPENTAG_ADMIN_WORKSPACE_IDS',
+) ?? [];
 const operatorAuth = new OperatorAuth({
   token: process.env.OPENTAG_ADMIN_TOKEN,
+  principal: {
+    id: process.env.OPENTAG_ADMIN_PRINCIPAL_ID || 'installation-owner',
+    displayName:
+      process.env.OPENTAG_ADMIN_PRINCIPAL_NAME || 'Installation owner',
+    role: operatorRoleValue(process.env.OPENTAG_ADMIN_ROLE) ?? 'owner',
+    workspaceIds: legacyOperatorWorkspaceIds.length
+      ? legacyOperatorWorkspaceIds
+      : ['*'],
+  },
+  credentials: parseOperatorCredentials(
+    process.env.OPENTAG_OPERATOR_PRINCIPALS_JSON,
+  ),
+  sessionSecret: process.env.OPENTAG_OPERATOR_SESSION_SECRET,
   sessionTtlSeconds: numberEnvironmentValue(
     'OPENTAG_ADMIN_SESSION_TTL_SECONDS',
     8 * 60 * 60,
@@ -375,6 +398,12 @@ function storageDriverValue(value: string | undefined): 'sqlite' | 'file' {
   throw new Error('OPENTAG_STORAGE_DRIVER must be sqlite or file.');
 }
 
+function operatorRoleValue(value: string | undefined): OperatorRole | undefined {
+  if (!value) return undefined;
+  if (value === 'owner' || value === 'admin' || value === 'viewer') return value;
+  throw new Error('OPENTAG_ADMIN_ROLE must be owner, admin, or viewer.');
+}
+
 function numberEnvironmentValue(name: string, fallback: number): number {
   const value = process.env[name];
   if (!value) return fallback;
@@ -494,7 +523,7 @@ function requiresCsrf(request: IncomingMessage): boolean {
 function requireOperator(
   request: IncomingMessage,
   response: ServerResponse,
-): boolean {
+): OperatorAuthentication | undefined {
   const authentication = operatorAuth.authenticate(request);
   if (!authentication.authenticated) {
     sendJson(
@@ -506,7 +535,7 @@ function requireOperator(
         'www-authenticate': 'Bearer realm="OpenTag operator"',
       },
     );
-    return false;
+    return undefined;
   }
   if (
     requiresCsrf(request) &&
@@ -519,9 +548,100 @@ function requireOperator(
       { error: 'operator_csrf_required' },
       { 'cache-control': 'no-store' },
     );
-    return false;
+    return undefined;
   }
-  return true;
+  if (
+    requiresCsrf(request) &&
+    authentication.principal?.role === 'viewer'
+  ) {
+    sendJson(
+      response,
+      403,
+      { error: 'operator_write_required' },
+      { 'cache-control': 'no-store' },
+    );
+    return undefined;
+  }
+  return authentication;
+}
+
+function operatorActor(authentication: OperatorAuthentication): string {
+  return `operator:${authentication.principal?.id || 'unknown'}`;
+}
+
+function operatorCanAccessWorkspace(
+  principal: OperatorPrincipal | undefined,
+  workspaceId: string,
+): boolean {
+  return Boolean(
+    principal &&
+      (principal.workspaceIds.includes('*') ||
+        principal.workspaceIds.includes(workspaceId)),
+  );
+}
+
+function requireOperatorWorkspace(
+  response: ServerResponse,
+  authentication: OperatorAuthentication,
+  workspaceId: string,
+): boolean {
+  if (operatorCanAccessWorkspace(authentication.principal, workspaceId)) {
+    return true;
+  }
+  sendJson(
+    response,
+    403,
+    { error: 'operator_workspace_forbidden', workspaceId },
+    { 'cache-control': 'no-store' },
+  );
+  return false;
+}
+
+function requireInstallationOperator(
+  response: ServerResponse,
+  authentication: OperatorAuthentication,
+): boolean {
+  if (authentication.principal?.workspaceIds.includes('*')) return true;
+  sendJson(
+    response,
+    403,
+    { error: 'installation_operator_required' },
+    { 'cache-control': 'no-store' },
+  );
+  return false;
+}
+
+function scopedOperatorWorkspace(
+  authentication: OperatorAuthentication,
+): string | undefined {
+  const workspaceIds = authentication.principal?.workspaceIds ?? [];
+  return workspaceIds.includes('*') || workspaceIds.length !== 1
+    ? undefined
+    : workspaceIds[0];
+}
+
+function operatorCollectionWorkspace(
+  response: ServerResponse,
+  authentication: OperatorAuthentication,
+  requestedWorkspaceId?: string,
+): { ok: true; workspaceId?: string } | { ok: false } {
+  const workspaceId =
+    requestedWorkspaceId?.trim() || scopedOperatorWorkspace(authentication);
+  if (workspaceId) {
+    return requireOperatorWorkspace(response, authentication, workspaceId)
+      ? { ok: true, workspaceId }
+      : { ok: false };
+  }
+  if (authentication.principal?.workspaceIds.includes('*')) {
+    return { ok: true };
+  }
+  sendJson(
+    response,
+    400,
+    { error: 'operator_workspace_required' },
+    { 'cache-control': 'no-store' },
+  );
+  return { ok: false };
 }
 
 function genericClientIngressMode(): 'local-open' | 'bearer' | 'disabled' {
@@ -667,16 +787,20 @@ function createPlatformForRun(thread: SourceThread): {
   };
 }
 
-async function deliverySnapshot(limit = 50): Promise<Record<string, unknown>> {
+async function deliverySnapshot(
+  limit = 50,
+  workspaceId?: string,
+): Promise<Record<string, unknown>> {
   const [summary, outbox, turnDeliveries, bindings, inboundEvents] =
     await Promise.all([
-      deliveryStore.summarize(),
-      deliveryStore.listOutbox({ limit }),
-      deliveryStore.listTurnDeliveries({ limit }),
-      deliveryStore.listThreadBindings(limit),
-      deliveryStore.listInboundEvents({ limit }),
+      deliveryStore.summarize(workspaceId),
+      deliveryStore.listOutbox({ limit, workspaceId }),
+      deliveryStore.listTurnDeliveries({ limit, workspaceId }),
+      deliveryStore.listThreadBindings(limit, workspaceId),
+      deliveryStore.listInboundEvents({ limit, workspaceId }),
     ]);
   return {
+    workspaceId,
     summary,
     outbox: outbox.map(stripPayload),
     turnDeliveries,
@@ -702,13 +826,12 @@ async function workspaceSnapshot(
       threadConfigStore.listProjectPolicies(workspaceId),
       deliveryStore.listThreadBindings(500),
       deliveryStore.listAgentRuns({ workspaceId, limit: 500 }),
-      threadConfigStore.listAudit(25),
+      threadConfigStore.listAudit(25, workspaceId),
       routineStore.summarize(workspaceId),
       accessStore.snapshot(workspaceId, 10),
     ]);
   const workspacePolicy =
-    workspacePolicies.find((item) => item.workspace.id === workspaceId) ??
-    workspacePolicies[0];
+    workspacePolicies.find((item) => item.workspace.id === workspaceId);
   return {
     workspace: workspacePolicy,
     projects: projects.map((project) => {
@@ -957,7 +1080,6 @@ function coerceProjectPolicyInput(
             allowedHosts,
           }
         : undefined,
-    actor: stringValue(body, 'actor', 'admin-console'),
   };
 }
 
@@ -1019,7 +1141,6 @@ function coerceRoutineInput(
       visibility: visibilityValue(destination.visibility) || 'public',
       title: stringValue(destination, 'title', name),
     },
-    actor: stringValue(body, 'actor', 'admin-console'),
   };
 }
 
@@ -2232,7 +2353,7 @@ async function executeAgentRun(
     return {
       run: await deliveryStore.getAgentRun(runId),
       route: runRoute(initialRun),
-      delivery: await deliverySnapshot(20),
+      delivery: await deliverySnapshot(20, initialRun.workspaceId),
     };
   }
   if (!options?.alreadyClaimed) {
@@ -2241,7 +2362,7 @@ async function executeAgentRun(
       return {
         run: runningRun,
         route: runRoute(runningRun),
-        delivery: await deliverySnapshot(20),
+        delivery: await deliverySnapshot(20, runningRun.workspaceId),
       };
     }
   }
@@ -2289,7 +2410,7 @@ async function executeAgentRun(
           kind: routineCommand.kind,
           ...commandResult,
         },
-        delivery: await deliverySnapshot(20),
+        delivery: await deliverySnapshot(20, initialRun.workspaceId),
         transport: {
           platform: runPlatform.platform.kind,
           mode: runPlatform.transportMode,
@@ -2358,7 +2479,7 @@ async function executeAgentRun(
           scope: memoryCommand.scope,
           ...commandResult,
         },
-        delivery: await deliverySnapshot(20),
+        delivery: await deliverySnapshot(20, initialRun.workspaceId),
         transport: {
           platform: runPlatform.platform.kind,
           mode: runPlatform.transportMode,
@@ -2410,7 +2531,7 @@ async function executeAgentRun(
       result,
       run: await deliveryStore.getAgentRun(runId),
       route: runRoute(initialRun),
-      delivery: await deliverySnapshot(20),
+      delivery: await deliverySnapshot(20, initialRun.workspaceId),
       transport: {
         platform: runPlatform.platform.kind,
         mode: runPlatform.transportMode,
@@ -2509,6 +2630,7 @@ function scheduleAgentWorkerPass(delayMs = 0): void {
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    let operatorAuthentication: OperatorAuthentication | undefined;
 
     if (request.method === 'GET' && url.pathname === '/health') {
       sendJson(response, 200, {
@@ -2542,6 +2664,7 @@ const server = createServer(async (request, response) => {
         security: {
           operatorAuth: {
             configured: operatorAuth.configured,
+            principalCount: operatorAuth.principalCount,
             sessionTtlSeconds: operatorAuth.sessionTtlSeconds,
           },
           clientIngress: {
@@ -2578,6 +2701,7 @@ const server = createServer(async (request, response) => {
           method: authentication.method,
           expiresAt: authentication.expiresAt,
           csrfToken: authentication.csrfToken,
+          principal: authentication.principal,
         },
         { 'cache-control': 'no-store' },
       );
@@ -2586,10 +2710,16 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'POST' && url.pathname === '/v1/admin/session') {
       if (!operatorAuth.configured) {
+        const authentication = operatorAuth.authenticate(request);
         sendJson(
           response,
           200,
-          { configured: false, authenticated: true, method: 'disabled' },
+          {
+            configured: false,
+            authenticated: true,
+            method: 'disabled',
+            principal: authentication.principal,
+          },
           { 'cache-control': 'no-store' },
         );
         return;
@@ -2617,6 +2747,7 @@ const server = createServer(async (request, response) => {
           method: 'session',
           expiresAt: session.expiresAt,
           csrfToken: session.csrfToken,
+          principal: session.principal,
         },
         {
           'cache-control': 'no-store',
@@ -2674,20 +2805,26 @@ const server = createServer(async (request, response) => {
       url.pathname.startsWith('/v1/') &&
       !isLarkIngress &&
       !isTelegramIngress &&
-      !isGenericClientIngress &&
-      !requireOperator(request, response)
+      !isGenericClientIngress
     ) {
-      return;
+      operatorAuthentication = requireOperator(request, response);
+      if (!operatorAuthentication) return;
     }
 
     if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
+      const selection = operatorCollectionWorkspace(
+        response,
+        operatorAuthentication!,
+        url.searchParams.get('workspaceId') || undefined,
+      );
+      if (!selection.ok) return;
       sendJson(response, 200, {
         ...capabilityManifest,
         larkTransport: larkTransportStatus(),
         telegramTransport: telegramTransportStatus(),
         pairing: {
           ttlSeconds: pairingTtlSeconds,
-          summary: await pairingStore.summarize(),
+          summary: await pairingStore.summarize(selection.workspaceId),
           command: '/pair CODE',
         },
         runWorker: {
@@ -2717,19 +2854,43 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/v1/workspace') {
+      const workspaceId =
+        url.searchParams.get('workspaceId') ||
+        scopedOperatorWorkspace(operatorAuthentication!) ||
+        'dev-workspace';
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
       sendJson(
         response,
         200,
-        await workspaceSnapshot(
-          url.searchParams.get('workspaceId') || 'dev-workspace',
-        ),
+        await workspaceSnapshot(workspaceId),
       );
       return;
     }
 
     if (request.method === 'GET' && url.pathname === '/v1/access') {
+      const workspaceId =
+        url.searchParams.get('workspaceId') ||
+        scopedOperatorWorkspace(operatorAuthentication!) ||
+        'dev-workspace';
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
       const access = await accessStore.snapshot(
-        url.searchParams.get('workspaceId') || 'dev-workspace',
+        workspaceId,
         Number(url.searchParams.get('auditLimit') || 50),
       );
       sendJson(
@@ -2754,6 +2915,15 @@ const server = createServer(async (request, response) => {
         });
         return;
       }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
       try {
         const member = await accessStore.upsertMember({
           id: stringValue(body, 'id'),
@@ -2762,7 +2932,7 @@ const server = createServer(async (request, response) => {
           role,
           status,
           identities,
-          actor: stringValue(body, 'actor', 'admin-console'),
+          actor: operatorActor(operatorAuthentication!),
         });
         sendJson(response, 200, {
           member,
@@ -2785,11 +2955,20 @@ const server = createServer(async (request, response) => {
       );
       const workspaceId =
         url.searchParams.get('workspaceId') || 'dev-workspace';
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
       try {
         const member = await accessStore.removeMember(
           workspaceId,
           memberId,
-          url.searchParams.get('actor') || 'admin-console',
+          operatorActor(operatorAuthentication!),
         );
         if (!member) {
           sendJson(response, 404, { error: 'workspace_member_not_found' });
@@ -2821,6 +3000,15 @@ const server = createServer(async (request, response) => {
         });
         return;
       }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
       const projects = await threadConfigStore.listProjectPolicies(workspaceId);
       if (
         !projects.some(
@@ -2835,7 +3023,7 @@ const server = createServer(async (request, response) => {
         workspaceId,
         projectId,
         mode,
-        actor: stringValue(body, 'actor', 'admin-console'),
+        actor: operatorActor(operatorAuthentication!),
       });
       sendJson(response, 200, {
         policy,
@@ -2859,6 +3047,15 @@ const server = createServer(async (request, response) => {
         });
         return;
       }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
       const projects = await threadConfigStore.listProjectPolicies(workspaceId);
       if (
         !projects.some(
@@ -2875,7 +3072,7 @@ const server = createServer(async (request, response) => {
           projectId,
           memberId,
           role,
-          actor: stringValue(body, 'actor', 'admin-console'),
+          actor: operatorActor(operatorAuthentication!),
         });
         sendJson(response, 200, {
           membership,
@@ -2903,11 +3100,20 @@ const server = createServer(async (request, response) => {
         });
         return;
       }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
       const membership = await accessStore.removeProjectMembership(
         workspaceId,
         projectId,
         memberId,
-        url.searchParams.get('actor') || 'admin-console',
+        operatorActor(operatorAuthentication!),
       );
       if (!membership) {
         sendJson(response, 404, { error: 'project_membership_not_found' });
@@ -2927,7 +3133,19 @@ const server = createServer(async (request, response) => {
         sendJson(response, 400, { error: input.error });
         return;
       }
-      const project = await threadConfigStore.upsertProjectPolicy(input);
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          input.workspaceId,
+        )
+      ) {
+        return;
+      }
+      const project = await threadConfigStore.upsertProjectPolicy({
+        ...input,
+        actor: operatorActor(operatorAuthentication!),
+      });
       sendJson(response, 200, {
         project,
         workspace: await workspaceSnapshot(project.workspaceId),
@@ -2936,20 +3154,42 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/v1/config/audit') {
+      const selection = operatorCollectionWorkspace(
+        response,
+        operatorAuthentication!,
+        url.searchParams.get('workspaceId') || undefined,
+      );
+      if (!selection.ok) return;
+      const audit = await threadConfigStore.listAudit(
+        Number(url.searchParams.get('limit') || 50),
+        selection.workspaceId,
+      );
       sendJson(response, 200, {
-        audit: await threadConfigStore.listAudit(
-          Number(url.searchParams.get('limit') || 50),
-        ),
+        workspaceId: selection.workspaceId,
+        audit,
       });
       return;
     }
 
     if (request.method === 'GET' && url.pathname === '/v1/routines') {
+      const workspaceId =
+        url.searchParams.get('workspaceId') ||
+        scopedOperatorWorkspace(operatorAuthentication!) ||
+        'dev-workspace';
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
       sendJson(
         response,
         200,
         await routineSnapshot(
-          url.searchParams.get('workspaceId') || 'dev-workspace',
+          workspaceId,
           url.searchParams.get('projectId') || undefined,
         ),
       );
@@ -2957,6 +3197,9 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/routines/tick') {
+      if (!requireInstallationOperator(response, operatorAuthentication!)) {
+        return;
+      }
       const result = await runRoutineSchedulerTick();
       sendJson(response, 200, {
         result,
@@ -2972,8 +3215,20 @@ const server = createServer(async (request, response) => {
         sendJson(response, 400, { error: input.error });
         return;
       }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          input.workspaceId,
+        )
+      ) {
+        return;
+      }
       try {
-        const routine = await routineStore.upsertRoutine(input);
+        const routine = await routineStore.upsertRoutine({
+          ...input,
+          actor: operatorActor(operatorAuthentication!),
+        });
         sendJson(response, 200, {
           routine,
           routines: await routineSnapshot(routine.workspaceId),
@@ -2994,11 +3249,25 @@ const server = createServer(async (request, response) => {
       const id = decodeURIComponent(
         url.pathname.slice('/v1/routines/'.length, -'/trigger'.length),
       );
-      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      await readJsonBody(request);
       try {
+        const routine = await routineStore.getRoutine(id);
+        if (!routine) {
+          sendJson(response, 404, { error: 'routine_not_found' });
+          return;
+        }
+        if (
+          !requireOperatorWorkspace(
+            response,
+            operatorAuthentication!,
+            routine.workspaceId,
+          )
+        ) {
+          return;
+        }
         const execution = await routineStore.triggerRoutine(
           id,
-          stringValue(body, 'actor', 'admin-console'),
+          operatorActor(operatorAuthentication!),
         );
         const tick = await runRoutineSchedulerTick({ stageDue: false });
         const currentExecution = (
@@ -3026,7 +3295,24 @@ const server = createServer(async (request, response) => {
       const id = decodeURIComponent(
         url.pathname.slice('/v1/routines/'.length),
       );
-      const routine = await routineStore.deleteRoutine(id, 'admin-console');
+      const existing = await routineStore.getRoutine(id);
+      if (!existing) {
+        sendJson(response, 404, { error: 'routine_not_found' });
+        return;
+      }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          existing.workspaceId,
+        )
+      ) {
+        return;
+      }
+      const routine = await routineStore.deleteRoutine(
+        id,
+        operatorActor(operatorAuthentication!),
+      );
       if (!routine) {
         sendJson(response, 404, { error: 'routine_not_found' });
         return;
@@ -3040,14 +3326,34 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/v1/deliveries') {
       const limit = Number(url.searchParams.get('limit') || 20);
-      sendJson(response, 200, await deliverySnapshot(limit));
+      const selection = operatorCollectionWorkspace(
+        response,
+        operatorAuthentication!,
+        url.searchParams.get('workspaceId') || undefined,
+      );
+      if (!selection.ok) return;
+      sendJson(
+        response,
+        200,
+        await deliverySnapshot(limit, selection.workspaceId),
+      );
       return;
     }
 
     if (request.method === 'GET' && url.pathname === '/v1/bindings') {
       const limit = Number(url.searchParams.get('limit') || 20);
+      const selection = operatorCollectionWorkspace(
+        response,
+        operatorAuthentication!,
+        url.searchParams.get('workspaceId') || undefined,
+      );
+      if (!selection.ok) return;
       sendJson(response, 200, {
-        bindings: await deliveryStore.listThreadBindings(limit),
+        workspaceId: selection.workspaceId,
+        bindings: await deliveryStore.listThreadBindings(
+          limit,
+          selection.workspaceId,
+        ),
       });
       return;
     }
@@ -3059,10 +3365,25 @@ const server = createServer(async (request, response) => {
         sendJson(response, 400, { error: input.error });
         return;
       }
-      const binding = await deliveryStore.configureThreadBinding(input);
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          input.workspaceId,
+        )
+      ) {
+        return;
+      }
+      const binding = await deliveryStore.configureThreadBinding({
+        ...input,
+        metadata: {
+          ...input.metadata,
+          configuredBy: operatorActor(operatorAuthentication!),
+        },
+      });
       sendJson(response, 200, {
         binding,
-        delivery: await deliverySnapshot(20),
+        delivery: await deliverySnapshot(20, input.workspaceId),
       });
       return;
     }
@@ -3072,6 +3393,20 @@ const server = createServer(async (request, response) => {
       url.pathname.startsWith('/v1/bindings/')
     ) {
       const id = decodeURIComponent(url.pathname.slice('/v1/bindings/'.length));
+      const binding = await deliveryStore.getThreadBindingById(id);
+      if (!binding) {
+        sendJson(response, 404, { error: 'binding_not_found' });
+        return;
+      }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          binding.workspaceId,
+        )
+      ) {
+        return;
+      }
       const removed = await deliveryStore.removeThreadBinding(id, {
         cascadeChannel: url.searchParams.get('cascade') !== 'false',
       });
@@ -3081,7 +3416,7 @@ const server = createServer(async (request, response) => {
       }
       sendJson(response, 200, {
         removed,
-        delivery: await deliverySnapshot(20),
+        delivery: await deliverySnapshot(20, binding.workspaceId),
       });
       return;
     }
@@ -3089,10 +3424,16 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/v1/pairing-invitations') {
       const query = Object.fromEntries(url.searchParams.entries());
       const status = url.searchParams.get('status');
+      const selection = operatorCollectionWorkspace(
+        response,
+        operatorAuthentication!,
+        url.searchParams.get('workspaceId') || undefined,
+      );
+      if (!selection.ok) return;
       sendJson(response, 200, {
         invitations: await pairingStore.listInvitations({
           platform: url.searchParams.get('platform') || undefined,
-          workspaceId: url.searchParams.get('workspaceId') || undefined,
+          workspaceId: selection.workspaceId,
           projectId: url.searchParams.get('projectId') || undefined,
           status:
             status === 'pending' ||
@@ -3104,7 +3445,7 @@ const server = createServer(async (request, response) => {
           limit: numberValue(query, 'limit', 100),
         }),
         summary: await pairingStore.summarize(
-          url.searchParams.get('workspaceId') || undefined,
+          selection.workspaceId,
         ),
         ttlSeconds: pairingTtlSeconds,
       });
@@ -3126,6 +3467,15 @@ const server = createServer(async (request, response) => {
         });
         return;
       }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
       const projects = await threadConfigStore.listProjectPolicies(workspaceId);
       const project = projects.find(
         (item) => item.projectId === projectId || item.id === projectId,
@@ -3140,7 +3490,7 @@ const server = createServer(async (request, response) => {
         projectId: project.projectId,
         activationMode: (activationModeValue(body) ?? 'mention') as PairingActivationMode,
         requireMention: booleanValue(body, 'requireMention', true),
-        createdBy: stringValue(body, 'createdBy', 'admin-console'),
+        createdBy: operatorActor(operatorAuthentication!),
       });
       sendJson(response, 201, { ...result });
       return;
@@ -3153,9 +3503,23 @@ const server = createServer(async (request, response) => {
       const id = decodeURIComponent(
         url.pathname.slice('/v1/pairing-invitations/'.length),
       );
+      const existing = await pairingStore.getInvitation(id);
+      if (!existing) {
+        sendJson(response, 404, { error: 'pairing_invitation_not_found' });
+        return;
+      }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          existing.workspaceId,
+        )
+      ) {
+        return;
+      }
       const invitation = await pairingStore.revokeInvitation(
         id,
-        url.searchParams.get('actor') || 'admin-console',
+        operatorActor(operatorAuthentication!),
       );
       if (!invitation) {
         sendJson(response, 404, { error: 'pairing_invitation_not_found' });
@@ -3173,6 +3537,15 @@ const server = createServer(async (request, response) => {
       const thread = coerceMemoryThread(query);
       const { workspace, project } = await memoryContextForThread(thread);
       const scope = memoryScopeValue(query, 'project');
+      const memoryAllowed =
+        scope === 'global'
+          ? requireInstallationOperator(response, operatorAuthentication!)
+          : requireOperatorWorkspace(
+              response,
+              operatorAuthentication!,
+              workspace?.id || thread.workspaceId || 'dev-workspace',
+            );
+      if (!memoryAllowed) return;
       const snapshot = await memoryStore.loadMemory({
         thread,
         workspace,
@@ -3209,6 +3582,16 @@ const server = createServer(async (request, response) => {
         sendJson(response, 400, { error: 'unsupported_memory_action' });
         return;
       }
+      const { workspace } = await memoryContextForThread(thread);
+      const memoryAllowed =
+        scope === 'global'
+          ? requireInstallationOperator(response, operatorAuthentication!)
+          : requireOperatorWorkspace(
+              response,
+              operatorAuthentication!,
+              workspace?.id || thread.workspaceId || 'dev-workspace',
+            );
+      if (!memoryAllowed) return;
       const result = await applyMemoryCommand({
         command: {
           kind: action,
@@ -3230,6 +3613,9 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/deliveries/worker-pass') {
+      if (!requireInstallationOperator(response, operatorAuthentication!)) {
+        return;
+      }
       const result = await runDeliveryWorkerPass(deliveryStore, async (record) => {
         return record.externalId ?? record.target.cardId ?? record.target.chatId;
       });
@@ -3239,17 +3625,45 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'POST' && url.pathname === '/v1/deliveries/recover-stale') {
       const body = (await readJsonBody(request)) as Record<string, unknown>;
-      const result = await deliveryStore.recoverStaleOutbox(
-        coerceRecoverStaleInput(body),
+      const input = coerceRecoverStaleInput(body);
+      const selection = operatorCollectionWorkspace(
+        response,
+        operatorAuthentication!,
+        input.workspaceId,
       );
-      sendJson(response, 200, { result, delivery: await deliverySnapshot(20) });
+      if (!selection.ok) return;
+      input.workspaceId = selection.workspaceId;
+      input.reason = `operator:${operatorAuthentication!.principal?.id || 'unknown'}:${
+        input.reason || 'recover_stale_outbox'
+      }`;
+      const result = await deliveryStore.recoverStaleOutbox(
+        input,
+      );
+      sendJson(response, 200, {
+        result,
+        delivery: await deliverySnapshot(20, selection.workspaceId),
+      });
       return;
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/deliveries/cancel') {
       const body = (await readJsonBody(request)) as Record<string, unknown>;
-      const result = await deliveryStore.cancelOutbox(coerceOutboxFilter(body));
-      sendJson(response, 200, { result, delivery: await deliverySnapshot(20) });
+      const input = coerceOutboxFilter(body);
+      const selection = operatorCollectionWorkspace(
+        response,
+        operatorAuthentication!,
+        input.workspaceId,
+      );
+      if (!selection.ok) return;
+      input.workspaceId = selection.workspaceId;
+      input.reason = `operator:${operatorAuthentication!.principal?.id || 'unknown'}:${
+        input.reason || 'cancel_outbox'
+      }`;
+      const result = await deliveryStore.cancelOutbox(input);
+      sendJson(response, 200, {
+        result,
+        delivery: await deliverySnapshot(20, selection.workspaceId),
+      });
       return;
     }
 
@@ -3261,14 +3675,30 @@ const server = createServer(async (request, response) => {
       const id = decodeURIComponent(
         url.pathname.slice('/v1/deliveries/'.length, -'/retry'.length),
       );
+      const record = await deliveryStore.getOutbox(id);
+      if (!record) {
+        sendJson(response, 404, { error: 'outbox_not_found' });
+        return;
+      }
+      const recordAllowed = record.workspaceId
+        ? requireOperatorWorkspace(
+            response,
+            operatorAuthentication!,
+            record.workspaceId,
+          )
+        : requireInstallationOperator(response, operatorAuthentication!);
+      if (!recordAllowed) return;
       sendJson(response, 200, {
         retried: await deliveryStore.retryFailedOutbox(id),
-        delivery: await deliverySnapshot(20),
+        delivery: await deliverySnapshot(20, record.workspaceId),
       });
       return;
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/runs/worker-pass') {
+      if (!requireInstallationOperator(response, operatorAuthentication!)) {
+        return;
+      }
       const body = (await readJsonBody(request)) as Record<string, unknown>;
       const result = await runAgentWorkerPass(numberValue(body, 'limit', 1));
       sendJson(response, 200, {
@@ -3279,6 +3709,9 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/runs/recover-stale') {
+      if (!requireInstallationOperator(response, operatorAuthentication!)) {
+        return;
+      }
       const body = (await readJsonBody(request)) as Record<string, unknown>;
       const result = await deliveryStore.recoverStaleAgentRuns(
         coerceRecoverStaleAgentRunsInput(body),
@@ -3293,6 +3726,12 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/v1/runs') {
       const query = Object.fromEntries(url.searchParams.entries());
+      const selection = operatorCollectionWorkspace(
+        response,
+        operatorAuthentication!,
+        stringValue(query, 'workspaceId'),
+      );
+      if (!selection.ok) return;
       sendJson(response, 200, {
         runs: await deliveryStore.listAgentRuns({
           status:
@@ -3304,7 +3743,7 @@ const server = createServer(async (request, response) => {
             query.status === 'cancelled'
               ? query.status
               : undefined,
-          workspaceId: stringValue(query, 'workspaceId'),
+          workspaceId: selection.workspaceId,
           projectId: stringValue(query, 'projectId'),
           threadId: stringValue(query, 'threadId'),
           limit: numberValue(query, 'limit', 20),
@@ -3326,6 +3765,14 @@ const server = createServer(async (request, response) => {
         sendJson(response, 404, { error: 'run_not_found' });
         return;
       }
+      const runAllowed = run.workspaceId
+        ? requireOperatorWorkspace(
+            response,
+            operatorAuthentication!,
+            run.workspaceId,
+          )
+        : requireInstallationOperator(response, operatorAuthentication!);
+      if (!runAllowed) return;
       sendJson(response, 200, {
         run,
         events: await deliveryStore.listAgentRunEvents(
@@ -3345,12 +3792,23 @@ const server = createServer(async (request, response) => {
         url.pathname.slice('/v1/runs/'.length, -'/cancel'.length),
       );
       const body = (await readJsonBody(request)) as Record<string, unknown>;
-      const reason = stringValue(body, 'reason', 'operator_cancelled_run');
-      const run = await deliveryStore.requestAgentRunCancel(id, reason);
-      if (!run) {
+      const existing = await deliveryStore.getAgentRun(id);
+      if (!existing) {
         sendJson(response, 404, { error: 'run_not_found' });
         return;
       }
+      const runAllowed = existing.workspaceId
+        ? requireOperatorWorkspace(
+            response,
+            operatorAuthentication!,
+            existing.workspaceId,
+          )
+        : requireInstallationOperator(response, operatorAuthentication!);
+      if (!runAllowed) return;
+      const reason = `operator:${operatorAuthentication!.principal?.id || 'unknown'}:${
+        stringValue(body, 'reason', 'cancelled_run')
+      }`;
+      const run = await deliveryStore.requestAgentRunCancel(id, reason);
       activeRuns.get(id)?.abort(reason);
       const cancelledOutbox = await deliveryStore.cancelOutbox({
         runId: id,
@@ -3360,7 +3818,7 @@ const server = createServer(async (request, response) => {
         run: await deliveryStore.getAgentRun(id),
         active: activeRuns.has(id),
         cancelledOutbox,
-        delivery: await deliverySnapshot(20),
+        delivery: await deliverySnapshot(20, existing.workspaceId),
       });
       return;
     }
@@ -3372,6 +3830,20 @@ const server = createServer(async (request, response) => {
         booleanValue({ ...query, ...body }, 'async', false) ||
         stringValue(body, 'mode') === 'async';
       const normalized = coerceDevMessage(body);
+      const workspaceId = normalized.thread.workspaceId || 'dev-workspace';
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
+      normalized.message.actor = {
+        id: operatorActor(operatorAuthentication!),
+        displayName: operatorAuthentication!.principal?.displayName,
+      };
       const inbound = await deliveryStore.recordInboundEvent({
         platform: normalized.thread.platform,
         externalId: normalized.message.id,
@@ -3390,7 +3862,7 @@ const server = createServer(async (request, response) => {
           accepted: true,
           queued: true,
           ...queued,
-          delivery: await deliverySnapshot(20),
+          delivery: await deliverySnapshot(20, workspaceId),
         });
         return;
       }
@@ -3487,7 +3959,7 @@ const server = createServer(async (request, response) => {
           accepted: true,
           queued: true,
           ...queued,
-          delivery: await deliverySnapshot(20),
+          delivery: await deliverySnapshot(20, routed.thread.workspaceId),
         });
         return;
       }
@@ -3652,7 +4124,7 @@ const server = createServer(async (request, response) => {
         accepted: true,
         queued: true,
         ...queued,
-        delivery: await deliverySnapshot(20),
+        delivery: await deliverySnapshot(20, routed.thread.workspaceId),
       });
       return;
     }
@@ -3801,7 +4273,7 @@ const server = createServer(async (request, response) => {
         accepted: true,
         queued: true,
         ...queued,
-        delivery: await deliverySnapshot(20),
+        delivery: await deliverySnapshot(20, routed.thread.workspaceId),
       });
       return;
     }
@@ -3824,9 +4296,12 @@ server.listen(port, host, () => {
         : ''
     }`,
   );
+  console.log(
+    `OpenTag operator auth configured=${operatorAuth.configured} principals=${operatorAuth.principalCount}`,
+  );
   if (!operatorAuth.configured && !['127.0.0.1', 'localhost', '::1'].includes(host)) {
     console.warn(
-      'OpenTag operator authentication is disabled on a non-loopback host. Set OPENTAG_ADMIN_TOKEN before exposing the console.',
+      'OpenTag operator authentication is disabled on a non-loopback host. Set OPENTAG_ADMIN_TOKEN or OPENTAG_OPERATOR_PRINCIPALS_JSON before exposing the console.',
     );
   }
   void deliveryStore.recoverStaleAgentRuns({

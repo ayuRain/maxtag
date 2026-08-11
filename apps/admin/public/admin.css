@@ -256,6 +256,26 @@ h3 {
   font-size: 11px;
 }
 
+.operator-principal {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 7px;
+}
+
+.operator-principal strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.operator-principal span {
+  overflow-wrap: anywhere;
+  font-size: 9px;
+}
+
+.operator-viewer button:disabled {
+  cursor: not-allowed;
+}
+
 .health {
   display: inline-flex;
   align-items: center;

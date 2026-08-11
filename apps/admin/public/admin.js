@@ -83,11 +83,51 @@ function applyOperatorSession(session) {
   $('#auth-shell').hidden = !signInRequired;
   $('#app-shell').hidden = signInRequired;
   $('#sign-out').hidden = !session.configured;
+  const principal = session.principal;
+  $('#operator-name').textContent = principal?.displayName || 'Unknown operator';
+  const workspaceIds = principal?.workspaceIds || [];
+  const scopeLabel = workspaceIds.includes('*')
+    ? 'installation'
+    : workspaceIds.join(', ') || 'no workspace';
+  $('#operator-scope').textContent = `${statusLabel(principal?.role)} / ${scopeLabel}`;
+  applyOperatorCapabilities();
   if (!signInRequired) {
     $('#auth-error').hidden = true;
     $('#auth-token').value = '';
   }
   return !signInRequired;
+}
+
+function applyOperatorCapabilities() {
+  const principal = state.auth?.principal;
+  const viewer = principal?.role === 'viewer';
+  const installation = Boolean(principal?.workspaceIds?.includes('*'));
+  document.body.classList.toggle('operator-viewer', viewer);
+  for (const selector of [
+    '#new-project',
+    '#save-project',
+    '#save-binding',
+    '#add-access-member',
+    '#save-access-policy',
+    '#add-project-member',
+    '#new-routine',
+    '#trigger-routine',
+    '#delete-routine',
+    '#pairing-form button[type="submit"]',
+    '#memory-form button[type="submit"]',
+    '#forget-memory',
+    '#open-test',
+    '#recover-delivery',
+  ]) {
+    const control = $(selector);
+    if (control) control.disabled = viewer;
+  }
+  for (const selector of ['#tick-routines', '#worker-pass', '#recover-runs']) {
+    const control = $(selector);
+    if (control) control.disabled = viewer || !installation;
+  }
+  const globalMemory = $('#memory-scope [data-scope="global"]');
+  if (globalMemory) globalMemory.disabled = !installation;
 }
 
 async function loadOperatorSession() {
@@ -196,7 +236,14 @@ function setButtonBusy(button, busy, busyLabel, idleLabel) {
 }
 
 function currentWorkspaceId() {
-  return state.workspace?.workspace?.workspace?.id || 'dev-workspace';
+  const principalWorkspace = state.auth?.principal?.workspaceIds?.find(
+    (workspaceId) => workspaceId !== '*',
+  );
+  return (
+    state.workspace?.workspace?.workspace?.id ||
+    principalWorkspace ||
+    'dev-workspace'
+  );
 }
 
 function projectMatches(project, value) {
@@ -463,7 +510,6 @@ async function saveAccessMember(event) {
         role: $('#access-member-role').value,
         platform: $('#access-member-platform').value,
         externalId: $('#access-member-external-id').value,
-        actor: 'admin-console',
       }),
     });
     state.access = data.access;
@@ -486,7 +532,6 @@ async function updateAccessMember(member, updates) {
       body: JSON.stringify({
         ...member,
         ...updates,
-        actor: 'admin-console',
       }),
     });
     state.access = data.access;
@@ -527,7 +572,6 @@ async function saveAccessPolicy(event) {
         workspaceId: currentWorkspaceId(),
         projectId: project.projectId,
         mode: $('#access-mode').value,
-        actor: 'admin-console',
       }),
     });
     state.access = data.access;
@@ -556,7 +600,6 @@ async function assignProjectMember(event) {
         projectId: project.projectId,
         memberId,
         role: $('#access-project-role').value,
-        actor: 'admin-console',
       }),
     });
     state.access = data.access;
@@ -1005,7 +1048,6 @@ async function saveProject(event) {
           .value.split(',')
           .map((host) => host.trim())
           .filter(Boolean),
-        actor: 'admin-console',
       }),
     });
     state.selectedProjectId = projectId;
@@ -1074,7 +1116,6 @@ async function generatePairing(event) {
         projectId: project.projectId,
         activationMode: $('#pairing-activation-mode').value,
         requireMention: $('#pairing-require-mention').checked,
-        createdBy: 'admin-console',
       }),
     });
     await refreshAll({ quiet: true });
@@ -1111,7 +1152,7 @@ async function copyPairingCommand() {
 async function revokePairing(id) {
   try {
     await getJson(
-      `/v1/pairing-invitations/${encodeURIComponent(id)}?actor=admin-console`,
+      `/v1/pairing-invitations/${encodeURIComponent(id)}`,
       { method: 'DELETE' },
     );
     if (state.latestPairing?.invitation?.id === id) state.latestPairing = null;
@@ -1382,7 +1423,6 @@ function routinePayload() {
       visibility: $('#routine-visibility').value,
       title: name,
     },
-    actor: 'admin-console',
   };
 }
 
@@ -1419,7 +1459,7 @@ async function triggerRoutine() {
     const data = await getJson(`/v1/routines/${encodeURIComponent(routine.id)}/trigger`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ actor: 'admin-console' }),
+      body: '{}',
     });
     state.routines = data.routines;
     renderRoutines();
@@ -1899,6 +1939,7 @@ async function refreshAll({ quiet = false } = {}) {
   const button = $('#refresh-all');
   if (!quiet) setButtonBusy(button, true, 'Refreshing', 'Refresh');
   try {
+    const workspaceId = encodeURIComponent(currentWorkspaceId());
     const [
       health,
       capabilities,
@@ -1912,14 +1953,14 @@ async function refreshAll({ quiet = false } = {}) {
     ] =
       await Promise.all([
         getJson('/health'),
-        getJson('/v1/capabilities'),
-        getJson(`/v1/workspace?workspaceId=${encodeURIComponent(currentWorkspaceId())}`),
-        getJson(`/v1/access?workspaceId=${encodeURIComponent(currentWorkspaceId())}`),
-        getJson('/v1/deliveries?limit=20'),
-        getJson('/v1/runs?limit=50'),
-        getJson('/v1/bindings?limit=100'),
-        getJson(`/v1/routines?workspaceId=${encodeURIComponent(currentWorkspaceId())}`),
-        getJson(`/v1/pairing-invitations?workspaceId=${encodeURIComponent(currentWorkspaceId())}`),
+        getJson(`/v1/capabilities?workspaceId=${workspaceId}`),
+        getJson(`/v1/workspace?workspaceId=${workspaceId}`),
+        getJson(`/v1/access?workspaceId=${workspaceId}`),
+        getJson(`/v1/deliveries?limit=20&workspaceId=${workspaceId}`),
+        getJson(`/v1/runs?limit=50&workspaceId=${workspaceId}`),
+        getJson(`/v1/bindings?limit=100&workspaceId=${workspaceId}`),
+        getJson(`/v1/routines?workspaceId=${workspaceId}`),
+        getJson(`/v1/pairing-invitations?workspaceId=${workspaceId}`),
       ]);
     state.health = health;
     state.capabilities = capabilities;
@@ -1936,6 +1977,7 @@ async function refreshAll({ quiet = false } = {}) {
       projectById(state.selectedAccessProjectId)?.projectId || fallback;
     state.memoryProjectId = projectById(state.memoryProjectId)?.projectId || fallback;
     renderAll();
+    applyOperatorCapabilities();
     $('#sync-label').textContent = `Synced ${formatTime(new Date().toISOString())}`;
   } catch (error) {
     state.health = null;
@@ -2058,7 +2100,11 @@ $('#recover-delivery').addEventListener('click', (event) =>
     '/v1/deliveries/recover-stale',
     event.currentTarget,
     { busy: 'Recovering', idle: 'Recover delivery' },
-    { olderThanMs: 120000, reason: 'admin_console_recovery' },
+    {
+      workspaceId: currentWorkspaceId(),
+      olderThanMs: 120000,
+      reason: 'admin_console_recovery',
+    },
   ),
 );
 

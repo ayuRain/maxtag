@@ -268,3 +268,176 @@ test(
     assert.equal(result.route.projectId, 'opentag');
   },
 );
+
+test(
+  'named operator principals enforce workspace scope, write role, and audit identity',
+  { timeout: 20_000 },
+  async (context) => {
+    const adminToken = 'dev-admin-token-that-is-long-enough-123';
+    const viewerToken = 'dev-viewer-token-that-is-long-enough-456';
+    const principals = [
+      {
+        id: 'dev-admin',
+        displayName: 'Development admin',
+        role: 'admin',
+        workspaceIds: ['dev-workspace'],
+        token: adminToken,
+      },
+      {
+        id: 'dev-viewer',
+        displayName: 'Development viewer',
+        role: 'viewer',
+        workspaceIds: ['dev-workspace'],
+        token: viewerToken,
+      },
+    ];
+    const { baseUrl, health } = await launchServer(
+      context,
+      'opentag-principal-api-',
+      {
+        OPENTAG_OPERATOR_PRINCIPALS_JSON: JSON.stringify(principals),
+        OPENTAG_OPERATOR_SESSION_SECRET:
+          'principal-session-secret-that-is-long-enough',
+      },
+    );
+    assert.equal(health.security.operatorAuth.configured, true);
+    assert.equal(health.security.operatorAuth.principalCount, 2);
+
+    const adminLogin = await fetch(`${baseUrl}/v1/admin/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: adminToken }),
+    });
+    assert.equal(adminLogin.status, 200);
+    const adminSession = await adminLogin.json();
+    const adminCookie = adminLogin.headers.get('set-cookie')?.split(';', 1)[0];
+    assert.ok(adminCookie);
+    assert.deepEqual(adminSession.principal, {
+      id: 'dev-admin',
+      displayName: 'Development admin',
+      role: 'admin',
+      workspaceIds: ['dev-workspace'],
+    });
+    assert.equal(Object.hasOwn(adminSession.principal, 'token'), false);
+
+    const allowedWorkspace = await fetch(
+      `${baseUrl}/v1/workspace?workspaceId=dev-workspace`,
+      { headers: { cookie: adminCookie } },
+    );
+    assert.equal(allowedWorkspace.status, 200);
+
+    const forbiddenWorkspace = await fetch(
+      `${baseUrl}/v1/workspace?workspaceId=labs`,
+      { headers: { cookie: adminCookie } },
+    );
+    assert.equal(forbiddenWorkspace.status, 403);
+    assert.equal(
+      (await forbiddenWorkspace.json()).error,
+      'operator_workspace_forbidden',
+    );
+
+    const scopedDelivery = await fetch(`${baseUrl}/v1/deliveries?limit=5`, {
+      headers: { cookie: adminCookie },
+    });
+    assert.equal(scopedDelivery.status, 200);
+    assert.equal((await scopedDelivery.json()).workspaceId, 'dev-workspace');
+
+    const projectWrite = await fetch(`${baseUrl}/v1/projects`, {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'content-type': 'application/json',
+        'x-opentag-csrf': adminSession.csrfToken,
+      },
+      body: JSON.stringify({
+        workspaceId: 'dev-workspace',
+        projectId: 'principal-audit',
+        name: 'Principal audit',
+        actor: 'spoofed-client-actor',
+      }),
+    });
+    assert.equal(projectWrite.status, 200);
+
+    const auditResponse = await fetch(
+      `${baseUrl}/v1/config/audit?workspaceId=dev-workspace&limit=20`,
+      { headers: { cookie: adminCookie } },
+    );
+    assert.equal(auditResponse.status, 200);
+    const audit = await auditResponse.json();
+    assert.equal(
+      audit.audit.find((record) => record.projectId === 'principal-audit').actor,
+      'operator:dev-admin',
+    );
+
+    const installationControl = await fetch(`${baseUrl}/v1/routines/tick`, {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'x-opentag-csrf': adminSession.csrfToken,
+      },
+    });
+    assert.equal(installationControl.status, 403);
+    assert.equal(
+      (await installationControl.json()).error,
+      'installation_operator_required',
+    );
+
+    const globalMemory = await fetch(
+      `${baseUrl}/v1/memory?scope=global&workspaceId=dev-workspace&projectId=opentag`,
+      { headers: { cookie: adminCookie } },
+    );
+    assert.equal(globalMemory.status, 403);
+    assert.equal(
+      (await globalMemory.json()).error,
+      'installation_operator_required',
+    );
+
+    const viewerLogin = await fetch(`${baseUrl}/v1/admin/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: viewerToken }),
+    });
+    assert.equal(viewerLogin.status, 200);
+    const viewerSession = await viewerLogin.json();
+    const viewerCookie = viewerLogin.headers.get('set-cookie')?.split(';', 1)[0];
+    assert.equal(viewerSession.principal.role, 'viewer');
+
+    const viewerRead = await fetch(
+      `${baseUrl}/v1/access?workspaceId=dev-workspace`,
+      { headers: { cookie: viewerCookie } },
+    );
+    assert.equal(viewerRead.status, 200);
+
+    const viewerWrite = await fetch(`${baseUrl}/v1/projects`, {
+      method: 'POST',
+      headers: {
+        cookie: viewerCookie,
+        'content-type': 'application/json',
+        'x-opentag-csrf': viewerSession.csrfToken,
+      },
+      body: JSON.stringify({
+        workspaceId: 'dev-workspace',
+        projectId: 'viewer-write',
+      }),
+    });
+    assert.equal(viewerWrite.status, 403);
+    assert.equal((await viewerWrite.json()).error, 'operator_write_required');
+
+    const viewerBearerWrite = await fetch(`${baseUrl}/v1/projects`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${viewerToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        workspaceId: 'dev-workspace',
+        projectId: 'viewer-bearer-write',
+      }),
+    });
+    assert.equal(viewerBearerWrite.status, 403);
+    assert.equal(
+      (await viewerBearerWrite.json()).error,
+      'operator_write_required',
+    );
+  },
+);

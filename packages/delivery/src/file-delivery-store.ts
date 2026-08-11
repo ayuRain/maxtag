@@ -785,6 +785,7 @@ export class FileDeliveryStore {
   async listOutbox(options?: {
     runId?: string;
     status?: OutboundStatus;
+    workspaceId?: string;
     limit?: number;
   }): Promise<OutboundEnvelope[]> {
     const state = await this.readState();
@@ -792,13 +793,23 @@ export class FileDeliveryStore {
     return state.outbox
       .filter((item) => !options?.runId || item.runId === options.runId)
       .filter((item) => !options?.status || item.status === options.status)
+      .filter(
+        (item) => !options?.workspaceId || item.workspaceId === options.workspaceId,
+      )
       .sort((a, b) => b.sequence - a.sequence)
       .slice(0, limit);
+  }
+
+  async getOutbox(id: string): Promise<OutboundEnvelope | undefined> {
+    const state = await this.readState();
+    const record = state.outbox.find((item) => item.id === id);
+    return record ? { ...record, target: { ...record.target } } : undefined;
   }
 
   async listTurnDeliveries(options?: {
     runId?: string;
     status?: TurnDeliveryStatus;
+    workspaceId?: string;
     limit?: number;
   }): Promise<TurnDeliveryRecord[]> {
     const state = await this.readState();
@@ -806,6 +817,9 @@ export class FileDeliveryStore {
     return state.turnDeliveries
       .filter((item) => !options?.runId || item.runId === options.runId)
       .filter((item) => !options?.status || item.status === options.status)
+      .filter(
+        (item) => !options?.workspaceId || item.workspaceId === options.workspaceId,
+      )
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, limit);
   }
@@ -875,6 +889,12 @@ export class FileDeliveryStore {
     const binding = state.threadBindings.find(
       (item) => item.id === bindingId(platform, externalId),
     );
+    return binding ? copyBinding(binding) : undefined;
+  }
+
+  async getThreadBindingById(id: string): Promise<ThreadBinding | undefined> {
+    const state = await this.readState();
+    const binding = state.threadBindings.find((item) => item.id === id);
     return binding ? copyBinding(binding) : undefined;
   }
 
@@ -980,38 +1000,58 @@ export class FileDeliveryStore {
 
   async listInboundEvents(options?: {
     status?: InboundEventStatus;
+    workspaceId?: string;
     limit?: number;
   }): Promise<InboundEventRecord[]> {
     const state = await this.readState();
     const limit = options?.limit ?? 50;
     return state.inboundEvents
       .filter((item) => !options?.status || item.status === options.status)
+      .filter(
+        (item) => !options?.workspaceId || item.workspaceId === options.workspaceId,
+      )
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, limit);
   }
 
-  async listThreadBindings(limit = 50): Promise<ThreadBinding[]> {
+  async listThreadBindings(
+    limit = 50,
+    workspaceId?: string,
+  ): Promise<ThreadBinding[]> {
     const state = await this.readState();
     return state.threadBindings
+      .filter((item) => !workspaceId || item.workspaceId === workspaceId)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, limit);
   }
 
-  async summarize(): Promise<DeliverySummary> {
+  async summarize(workspaceId?: string): Promise<DeliverySummary> {
     const state = await this.readState();
     const summary = emptySummary();
-    for (const item of state.outbox) summary.outbox[item.status] += 1;
+    for (const item of state.outbox) {
+      if (!workspaceId || item.workspaceId === workspaceId) {
+        summary.outbox[item.status] += 1;
+      }
+    }
     for (const item of state.turnDeliveries) {
-      summary.turnDeliveries[item.status] += 1;
+      if (!workspaceId || item.workspaceId === workspaceId) {
+        summary.turnDeliveries[item.status] += 1;
+      }
     }
     for (const item of state.inboundEvents) {
-      summary.inboundEvents[item.status] += 1;
-      summary.inboundEvents.duplicates += item.duplicateCount;
+      if (!workspaceId || item.workspaceId === workspaceId) {
+        summary.inboundEvents[item.status] += 1;
+        summary.inboundEvents.duplicates += item.duplicateCount;
+      }
     }
     for (const item of state.agentRuns) {
-      summary.agentRuns[item.status] += 1;
+      if (!workspaceId || item.workspaceId === workspaceId) {
+        summary.agentRuns[item.status] += 1;
+      }
     }
-    summary.bindings = state.threadBindings.length;
+    summary.bindings = state.threadBindings.filter(
+      (item) => !workspaceId || item.workspaceId === workspaceId,
+    ).length;
     return summary;
   }
 

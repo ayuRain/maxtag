@@ -452,9 +452,13 @@ export class FileThreadConfigStore implements ThreadConfigStore {
     });
   }
 
-  async listAudit(limit = 50): Promise<ConfigAuditRecord[]> {
+  async listAudit(
+    limit = 50,
+    workspaceId?: string,
+  ): Promise<ConfigAuditRecord[]> {
     const state = await this.readState();
     return state.audit
+      .filter((item) => !workspaceId || item.workspaceId === workspaceId)
       .sort((a, b) => b.at.localeCompare(a.at))
       .slice(0, Math.max(1, Math.min(limit, 200)))
       .map((item) => ({

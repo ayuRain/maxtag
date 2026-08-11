@@ -32,6 +32,10 @@ clients of the same thread-agent core.
 - Lark, Telegram, and generic client events share the same actor authorization
   model after routing. Projects can be open, workspace-member-only, or
   project-member-only.
+- Client-thread membership and operator access are separate trust planes.
+  Named operator principals carry workspace scopes and owner/admin/viewer roles;
+  authenticated principal identity, never a request-body actor string, owns
+  control-plane audit records.
 - Slack: planned.
 - GitHub: planned as both a tool provider and a source client.
 

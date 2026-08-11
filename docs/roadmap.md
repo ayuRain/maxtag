@@ -41,14 +41,15 @@
 - Operator console organized around projects, access, routines, activity,
   scoped memory, delivery, and project-aware agent previews.
 - Optional operator authentication with Bearer automation, signed HttpOnly
-  browser sessions, mutation CSRF protection, and a separate generic-client
-  ingress credential.
+  browser sessions, named multi-token principals, workspace-scoped collection
+  and object authorization, owner/admin/viewer roles, authoritative audit actor,
+  mutation CSRF protection, and a separate generic-client ingress credential.
 - Memory and GitHub tool contracts.
 
 ## Phase 1: Lark Tag MVP
 
-- Map operator browser sessions and automation credentials to named workspace
-  principals before public multi-tenant deployment.
+- Add operator credential CRUD/rotation, finer-grained capabilities, and
+  optional SSO/OIDC on top of the environment-configured named principals.
 - Add binding audit/export and optional actor-restricted invitations around the
   transactional pairing and binding operation.
 - Verify Lark callbacks with token/timestamp checks; add event decrypt before
