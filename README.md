@@ -65,6 +65,7 @@ packages/ui-cards           Progress/checklist card models
   are clients of the same runtime contract.
 - Other clients can enter through `/v1/client/events`, which normalizes a
   client envelope into the same run queue, scoped memory, and delivery ledger.
+  Deployments can protect this adapter-only ingress with its own Bearer token.
 - Memory is scoped into global, workspace, project, and thread files.
 - Workspace and project agent policies are persisted separately from memory,
   including identity, instructions, executor choice, project tool grants,
@@ -115,6 +116,9 @@ packages/ui-cards           Progress/checklist card models
   and Memory workspaces, with project policy editing, self-service chat pairing,
   channel unbinding, scheduler controls, routine execution history, run
   timelines, delivery ledgers, and a project-aware client preview.
+- Operator authentication is opt-in for local development and required for a
+  shared deployment. It supports Bearer automation and signed, expiring,
+  HttpOnly browser sessions with CSRF protection for mutations.
 
 ## MVP
 
@@ -149,6 +153,34 @@ npm run worker
 
 For one-shot smoke tests, set `OPENTAG_WORKER_ONCE=1`; tune claim batch size with
 `OPENTAG_WORKER_BATCH`.
+
+## Operator Authentication
+
+Local loopback development remains open when `OPENTAG_ADMIN_TOKEN` is unset.
+Before binding the server to a shared interface, configure a random token of at
+least 24 characters:
+
+```bash
+export OPENTAG_ADMIN_TOKEN="$(openssl rand -hex 32)"
+export OPENTAG_ADMIN_SESSION_TTL_SECONDS=28800
+export OPENTAG_ADMIN_COOKIE_SECURE=true
+npm run dev
+```
+
+The console exchanges that token for a signed, expiring `HttpOnly` session
+cookie. Scripts can send the token directly:
+
+```bash
+curl -H "Authorization: Bearer $OPENTAG_ADMIN_TOKEN" \
+  http://127.0.0.1:3077/v1/workspace
+```
+
+`/health`, static console assets, and native Lark/Telegram callbacks remain
+outside the operator session boundary; the native callbacks retain their own
+verification token or webhook secret. Generic adapters use a separate
+`OPENTAG_CLIENT_INGRESS_TOKEN` Bearer credential. When operator authentication
+is enabled without that credential, `/v1/client/events` is disabled instead of
+accepting anonymous events.
 
 ## Routines
 
@@ -262,10 +294,9 @@ OPENTAG_PAIRING_TTL_SECONDS=300
 ```
 
 The file-backed pairing and binding stores are suitable for local development
-and a single process. The admin console and its mutation APIs currently assume
-localhost or an authenticated reverse proxy; add admin authentication and a
-transactional database store before exposing them publicly or running multiple
-replicas.
+and a single process. Operator authentication protects the current console and
+APIs, but pairing consumption and binding creation still need one transactional
+database operation before running multiple replicas.
 
 ## Lark Delivery Mode
 

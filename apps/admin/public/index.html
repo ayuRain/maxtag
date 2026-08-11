@@ -7,7 +7,33 @@
     <link rel="stylesheet" href="/admin.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <main class="auth-shell" id="auth-shell" hidden>
+      <form class="auth-panel" id="auth-form">
+        <div class="auth-brand">
+          <span class="brand-mark" aria-hidden="true">O</span>
+          <strong>OpenTag</strong>
+        </div>
+        <div class="auth-heading">
+          <span class="eyebrow">Operator access</span>
+          <h1>Sign in</h1>
+        </div>
+        <label class="field">
+          <span>Access token</span>
+          <input
+            id="auth-token"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        <p class="auth-error" id="auth-error" role="alert" hidden></p>
+        <button class="primary-button auth-submit" id="auth-submit" type="submit">
+          Continue
+        </button>
+      </form>
+    </main>
+
+    <div class="app-shell" id="app-shell" hidden>
       <aside class="sidebar">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">O</span>
@@ -60,6 +86,7 @@
           <div class="topbar-actions">
             <span class="sync-label" id="sync-label">Not synced</span>
             <button class="secondary-button" id="refresh-all" type="button">Refresh</button>
+            <button class="text-button" id="sign-out" type="button" hidden>Sign out</button>
             <button class="primary-button" id="open-test" type="button">Test agent</button>
           </div>
         </header>

@@ -36,12 +36,15 @@
   requester audit.
 - Operator console organized around projects, routines, activity, scoped memory,
   delivery, and project-aware agent previews.
+- Optional operator authentication with Bearer automation, signed HttpOnly
+  browser sessions, mutation CSRF protection, and a separate generic-client
+  ingress credential.
 - Memory and GitHub tool contracts.
 
 ## Phase 1: Lark Tag MVP
 
-- Put the Connectors console and pairing/binding mutation APIs behind operator
-  authentication before public deployment.
+- Add workspace roles and project membership checks on top of the operator
+  authentication boundary before public multi-tenant deployment.
 - Move pairing consumption and binding creation into one transactional database
   operation before running multiple server replicas.
 - Verify Lark callbacks with token/timestamp checks; add event decrypt before

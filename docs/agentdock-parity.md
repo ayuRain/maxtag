@@ -22,6 +22,7 @@ many clients.
 | Inbound callback ledger | Lark token/timestamp and Telegram webhook-secret checks, event idempotency, and duplicate short-circuit |
 | Native Telegram client | Bot API webhook normalization, forum topics, send/edit progress, reply chunking, outgoing files, and tracked delivery |
 | Executor boundary | Project-selectable Codex and Claude dry-run/local CLI modes with bounded output, cancellation, timeout, and filtered child environments |
+| Operator console authentication | Optional local-open mode plus configured Bearer automation and signed, expiring HttpOnly browser sessions; mutation requests carry per-session CSRF tokens |
 
 ## Gaps To Close
 
@@ -33,7 +34,7 @@ many clients.
 | Async run execution | Add production supervisor/deployment manifests and cross-process cancellation heartbeat |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |
 | Real Lark smoke | Verify app scopes, bot-in-chat permissions, text replies, and card patching against a live app |
-| Pairing and binding governance | Put admin APIs behind authentication, move pairing plus binding consumption into one database transaction, and add permission checks, audit history, and import/export |
+| Pairing and binding governance | Add workspace roles and membership permission checks, move pairing plus binding consumption into one database transaction, and add binding audit history and import/export |
 | Encrypted Lark callbacks | Implement decrypt path before enabling encrypted events in production |
 | Memory governance | Add durable write queue, audit history, approval policy, and admin restore |
 | Routine production hardening | Move routine state and claims to the production database, run scheduler under a supervisor, and verify real Lark delivery and restart recovery |

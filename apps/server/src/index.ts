@@ -78,6 +78,7 @@ import {
   type RoutineSchedule,
   type UpsertRoutineInput,
 } from '@opentag/routines';
+import { OperatorAuth, bearerTokenMatches } from './operator-auth.js';
 
 const port = Number(process.env.OPENTAG_PORT || 3077);
 const host = process.env.OPENTAG_HOST || '127.0.0.1';
@@ -148,6 +149,17 @@ const routineClaimStaleMs = numberEnvironmentValue(
 );
 const defaultRoutineTimeZone =
   process.env.OPENTAG_DEFAULT_TIME_ZONE || 'Asia/Shanghai';
+const operatorAuth = new OperatorAuth({
+  token: process.env.OPENTAG_ADMIN_TOKEN,
+  sessionTtlSeconds: numberEnvironmentValue(
+    'OPENTAG_ADMIN_SESSION_TTL_SECONDS',
+    8 * 60 * 60,
+  ),
+  secureCookie: ['1', 'true', 'yes'].includes(
+    String(process.env.OPENTAG_ADMIN_COOKIE_SECURE || 'false').toLowerCase(),
+  ),
+});
+const clientIngressToken = process.env.OPENTAG_CLIENT_INGRESS_TOKEN;
 const routineSchedulerId = `opentag-routines-${process.pid}`;
 const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
 const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
@@ -409,9 +421,55 @@ function sendJson(
   response: ServerResponse,
   statusCode: number,
   body: Record<string, unknown>,
+  headers: Record<string, string | string[]> = {},
 ): void {
-  response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
+  response.writeHead(statusCode, {
+    'content-type': 'application/json; charset=utf-8',
+    ...headers,
+  });
   response.end(JSON.stringify(body, null, 2));
+}
+
+function requiresCsrf(request: IncomingMessage): boolean {
+  return !['GET', 'HEAD', 'OPTIONS'].includes(request.method || 'GET');
+}
+
+function requireOperator(
+  request: IncomingMessage,
+  response: ServerResponse,
+): boolean {
+  const authentication = operatorAuth.authenticate(request);
+  if (!authentication.authenticated) {
+    sendJson(
+      response,
+      401,
+      { error: 'operator_auth_required' },
+      {
+        'cache-control': 'no-store',
+        'www-authenticate': 'Bearer realm="OpenTag operator"',
+      },
+    );
+    return false;
+  }
+  if (
+    requiresCsrf(request) &&
+    authentication.method === 'session' &&
+    !authentication.csrfValid
+  ) {
+    sendJson(
+      response,
+      403,
+      { error: 'operator_csrf_required' },
+      { 'cache-control': 'no-store' },
+    );
+    return false;
+  }
+  return true;
+}
+
+function genericClientIngressMode(): 'local-open' | 'bearer' | 'disabled' {
+  if (clientIngressToken) return 'bearer';
+  return operatorAuth.configured ? 'disabled' : 'local-open';
 }
 
 async function sendFileResponse(
@@ -420,7 +478,21 @@ async function sendFileResponse(
   contentType: string,
 ): Promise<void> {
   const content = await readFile(filePath);
-  response.writeHead(200, { 'content-type': contentType });
+  response.writeHead(200, {
+    'content-type': contentType,
+    'content-security-policy': [
+      "default-src 'self'",
+      "base-uri 'none'",
+      "connect-src 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+      "img-src 'self' data:",
+      "script-src 'self'",
+      "style-src 'self'",
+    ].join('; '),
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+  });
   response.end(content);
 }
 
@@ -2202,6 +2274,15 @@ const server = createServer(async (request, response) => {
           running: Boolean(routineTickPass),
           lastTickAt: routineLastTickAt,
         },
+        security: {
+          operatorAuth: {
+            configured: operatorAuth.configured,
+            sessionTtlSeconds: operatorAuth.sessionTtlSeconds,
+          },
+          clientIngress: {
+            mode: genericClientIngressMode(),
+          },
+        },
       });
       return;
     }
@@ -2218,6 +2299,119 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/admin.js') {
       await sendFileResponse(response, path.join(adminDir, 'admin.js'), 'text/javascript; charset=utf-8');
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/admin/session') {
+      const authentication = operatorAuth.authenticate(request);
+      sendJson(
+        response,
+        200,
+        {
+          configured: operatorAuth.configured,
+          authenticated: authentication.authenticated,
+          method: authentication.method,
+          expiresAt: authentication.expiresAt,
+          csrfToken: authentication.csrfToken,
+        },
+        { 'cache-control': 'no-store' },
+      );
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/admin/session') {
+      if (!operatorAuth.configured) {
+        sendJson(
+          response,
+          200,
+          { configured: false, authenticated: true, method: 'disabled' },
+          { 'cache-control': 'no-store' },
+        );
+        return;
+      }
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const session = operatorAuth.createSession(stringValue(body, 'token') || '');
+      if (!session) {
+        sendJson(
+          response,
+          401,
+          { error: 'invalid_operator_token' },
+          {
+            'cache-control': 'no-store',
+            'www-authenticate': 'Bearer realm="OpenTag operator"',
+          },
+        );
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        {
+          configured: true,
+          authenticated: true,
+          method: 'session',
+          expiresAt: session.expiresAt,
+          csrfToken: session.csrfToken,
+        },
+        {
+          'cache-control': 'no-store',
+          'set-cookie': session.cookie,
+        },
+      );
+      return;
+    }
+
+    if (request.method === 'DELETE' && url.pathname === '/v1/admin/session') {
+      sendJson(
+        response,
+        200,
+        { configured: operatorAuth.configured, authenticated: false },
+        {
+          'cache-control': 'no-store',
+          'set-cookie': operatorAuth.clearSessionCookie(),
+        },
+      );
+      return;
+    }
+
+    const isLarkIngress =
+      request.method === 'POST' && url.pathname === '/v1/lark/events';
+    const isTelegramIngress =
+      request.method === 'POST' && url.pathname === '/v1/telegram/events';
+    const isGenericClientIngress =
+      request.method === 'POST' && url.pathname === '/v1/client/events';
+
+    if (isGenericClientIngress) {
+      const ingressMode = genericClientIngressMode();
+      if (ingressMode === 'disabled') {
+        sendJson(response, 503, {
+          error: 'client_ingress_token_required',
+          message:
+            'Set OPENTAG_CLIENT_INGRESS_TOKEN before enabling generic client ingress.',
+        });
+        return;
+      }
+      if (
+        ingressMode === 'bearer' &&
+        !bearerTokenMatches(request, clientIngressToken)
+      ) {
+        sendJson(
+          response,
+          401,
+          { error: 'client_ingress_auth_required' },
+          { 'www-authenticate': 'Bearer realm="OpenTag client ingress"' },
+        );
+        return;
+      }
+    }
+
+    if (
+      url.pathname.startsWith('/v1/') &&
+      !isLarkIngress &&
+      !isTelegramIngress &&
+      !isGenericClientIngress &&
+      !requireOperator(request, response)
+    ) {
       return;
     }
 
@@ -3115,6 +3309,11 @@ const server = createServer(async (request, response) => {
 
 server.listen(port, host, () => {
   console.log(`OpenTag server listening on http://${host}:${port}`);
+  if (!operatorAuth.configured && !['127.0.0.1', 'localhost', '::1'].includes(host)) {
+    console.warn(
+      'OpenTag operator authentication is disabled on a non-loopback host. Set OPENTAG_ADMIN_TOKEN before exposing the console.',
+    );
+  }
   void deliveryStore.recoverStaleAgentRuns({
     olderThanMs: agentWorkerStaleMs,
     reason: 'server_startup_recovered_stale_run',

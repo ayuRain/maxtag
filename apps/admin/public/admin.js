@@ -2,6 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 const state = {
+  auth: null,
   health: null,
   capabilities: null,
   workspace: null,
@@ -36,15 +37,98 @@ let toastTimer;
 let refreshInFlight = false;
 
 async function getJson(url, options) {
-  const response = await fetch(url, options);
+  const requestOptions = { ...(options || {}) };
+  const method = String(requestOptions.method || 'GET').toUpperCase();
+  const headers = new Headers(requestOptions.headers || {});
+  if (
+    state.auth?.csrfToken &&
+    !['GET', 'HEAD', 'OPTIONS'].includes(method)
+  ) {
+    headers.set('x-opentag-csrf', state.auth.csrfToken);
+  }
+  requestOptions.headers = headers;
+  const response = await fetch(url, requestOptions);
   const contentType = response.headers.get('content-type') || '';
   const data = contentType.includes('application/json')
     ? await response.json()
     : { message: await response.text() };
   if (!response.ok) {
+    if (response.status === 401 && data.error === 'operator_auth_required') {
+      showOperatorLogin('Your operator session expired.');
+    }
     throw new Error(data.message || data.error || response.statusText);
   }
   return data;
+}
+
+function showOperatorLogin(message = '') {
+  state.auth = {
+    configured: true,
+    authenticated: false,
+  };
+  $('#app-shell').hidden = true;
+  $('#auth-shell').hidden = false;
+  const error = $('#auth-error');
+  error.textContent = message;
+  error.hidden = !message;
+  requestAnimationFrame(() => $('#auth-token').focus());
+}
+
+function applyOperatorSession(session) {
+  state.auth = session;
+  const signInRequired = session.configured && !session.authenticated;
+  $('#auth-shell').hidden = !signInRequired;
+  $('#app-shell').hidden = signInRequired;
+  $('#sign-out').hidden = !session.configured;
+  if (!signInRequired) {
+    $('#auth-error').hidden = true;
+    $('#auth-token').value = '';
+  }
+  return !signInRequired;
+}
+
+async function loadOperatorSession() {
+  try {
+    return applyOperatorSession(await getJson('/v1/admin/session'));
+  } catch (error) {
+    showOperatorLogin(error.message || 'OpenTag is unavailable.');
+    return false;
+  }
+}
+
+async function signInOperator(event) {
+  event.preventDefault();
+  const button = $('#auth-submit');
+  const error = $('#auth-error');
+  error.hidden = true;
+  setButtonBusy(button, true, 'Signing in', 'Continue');
+  try {
+    const session = await getJson('/v1/admin/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: $('#auth-token').value }),
+    });
+    applyOperatorSession(session);
+    await refreshAll();
+  } catch (failure) {
+    error.textContent =
+      failure.message === 'invalid_operator_token'
+        ? 'That access token is not valid.'
+        : failure.message;
+    error.hidden = false;
+    $('#auth-token').select();
+  } finally {
+    setButtonBusy(button, false, 'Signing in', 'Continue');
+  }
+}
+
+async function signOutOperator() {
+  try {
+    await getJson('/v1/admin/session', { method: 'DELETE' });
+  } finally {
+    showOperatorLogin();
+    $('#auth-token').value = '';
+  }
 }
 
 function element(tag, className, text) {
@@ -1554,6 +1638,8 @@ for (const button of $$('[data-go-view]')) {
   button.addEventListener('click', () => showView(button.dataset.goView));
 }
 
+$('#auth-form').addEventListener('submit', (event) => void signInOperator(event));
+$('#sign-out').addEventListener('click', () => void signOutOperator());
 $('#refresh-all').addEventListener('click', () => void refreshAll());
 $('#open-test').addEventListener('click', () => $('#test-dialog').showModal());
 $('#test-form').addEventListener('submit', (event) => void runTest(event));
@@ -1651,11 +1737,12 @@ $('#recover-delivery').addEventListener('click', (event) =>
 
 const initialView = location.hash.slice(1);
 showView(viewCopy[initialView] ? initialView : 'overview', false);
-await refreshAll();
+if (await loadOperatorSession()) await refreshAll();
 
 setInterval(() => {
   if (
     document.visibilityState === 'visible' &&
+    state.auth?.authenticated &&
     !state.projectDirty &&
     !state.routineDirty
   ) {
