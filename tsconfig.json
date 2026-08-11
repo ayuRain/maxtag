@@ -1,0 +1,16 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/ui-cards" },
+    { "path": "packages/memory" },
+    { "path": "packages/platform-lark" },
+    { "path": "packages/platform-telegram" },
+    { "path": "packages/executor-codex" },
+    { "path": "packages/executor-claude" },
+    { "path": "packages/tools-github" },
+    { "path": "apps/server" },
+    { "path": "apps/admin" }
+  ]
+}
+

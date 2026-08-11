@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/executor-codex" },
+    { "path": "../../packages/memory" },
+    { "path": "../../packages/platform-lark" }
+  ],
+  "include": ["src/**/*.ts"]
+}
+
