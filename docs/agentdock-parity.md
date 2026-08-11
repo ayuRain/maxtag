@@ -10,7 +10,7 @@ many clients.
 | --- | --- |
 | Client-neutral event model | `SourceThread`, `SourceMessage`, and `PlatformAdapter` |
 | Lark first client | Lark normalize path, progress cards, dry-run server route, and HTTP OpenAPI transport |
-| Multiple future clients | Telegram stub plus Slack/GitHub entries in capability manifest |
+| Multiple clients | Generic `/v1/client/events` ingress plus tracked text delivery for non-Lark clients |
 | Scoped memory | Global, workspace, project, and thread file scopes; Lark groups route to project scope; remember/forget commands |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
 | Topic continuation | Mention establishes a Lark topic binding; later messages in that topic continue without repeating the mention |
@@ -23,6 +23,7 @@ many clients.
 
 | AgentDock capability | OpenTag next step |
 | --- | --- |
+| Native non-Lark adapters | Map Telegram/Slack/GitHub webhooks into `/v1/client/events` and add real send/edit transports |
 | Durable IM outbox | Replace file store with SQLite/Postgres claim/retry worker |
 | Async run execution | Split inline worker into independently deployed workers with durable resume |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |

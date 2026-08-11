@@ -20,7 +20,8 @@ clients of the same thread-agent core.
 ## Current Status
 
 - Lark: first concrete adapter shell with dry-run card rendering.
-- Telegram: placeholder adapter to keep the client boundary honest.
+- Telegram: generic client event envelope can enter the shared run queue and use
+  tracked text receipts; native Bot API send/edit is still pending.
 - Slack: planned.
 - GitHub: planned as both a tool provider and a source client.
 
@@ -39,3 +40,8 @@ client event -> SourceThread -> Workspace -> Project -> scoped memory -> Executo
 Lark groups and topics are the first implementation target. Telegram chats,
 Slack threads, and GitHub comments should only add adapters; they should not add
 new executor or memory concepts.
+
+Before a native adapter exists, a client can submit the normalized envelope to
+`/v1/client/events`. The server records inbound idempotency, resolves bindings,
+loads scoped memory, enqueues an agent run, and writes non-Lark progress/text
+receipts into the same delivery ledger.

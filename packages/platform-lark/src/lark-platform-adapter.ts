@@ -73,7 +73,7 @@ export class LarkPlatformAdapter implements PlatformAdapter {
     thread: SourceThread,
     text: string,
     artifacts?: Artifact[],
-    options?: { runId?: string },
+    options?: { runId?: string; replyToMessageId?: string },
   ): Promise<void> {
     const artifactLines = (artifacts || [])
       .filter((artifact) => artifact.url)
@@ -82,6 +82,7 @@ export class LarkPlatformAdapter implements PlatformAdapter {
     await this.transport.sendText({
       chatId: thread.channelId || thread.externalId,
       rootId: thread.rootMessageId,
+      replyToMessageId: options?.replyToMessageId,
       text: artifactLines ? `${text}\n\nArtifacts:\n${artifactLines}` : text,
       metadata: {
         runId: options?.runId,

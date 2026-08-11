@@ -16,6 +16,8 @@
 - File-backed agent run ledger with status, cancel request, and timeline events.
 - Durable run queue with inline worker claim, startup stale recovery, and manual
   worker/recovery API controls.
+- Generic client ingress that maps non-Lark envelopes into the same run queue,
+  memory scopes, and tracked text delivery.
 - Memory and GitHub tool contracts.
 
 ## Phase 1: Lark Tag MVP
@@ -68,6 +70,7 @@
 
 ## Phase 5: Multi-Platform
 
+- Keep native platform webhooks thin by mapping them into `/v1/client/events`.
 - Telegram adapter reaches parity for messages, files, and progress receipts.
 - Slack adapter can map thread_ts to `SourceThread`.
 - GitHub issue/PR comments can become first-class work threads.

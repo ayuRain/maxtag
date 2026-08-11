@@ -55,6 +55,8 @@ packages/ui-cards           Progress/checklist card models
   Lark transport are wired.
 - The core model is client-neutral: Lark, Telegram, Slack, and GitHub comments
   are clients of the same runtime contract.
+- Non-Lark clients can enter through `/v1/client/events`, which normalizes a
+  client envelope into the same run queue, scoped memory, and delivery ledger.
 - Memory is scoped into global, workspace, project, and thread files.
 - Dry-run Lark delivery now runs through a file-backed outbox, per-run delivery
   records, and thread-to-project bindings.
@@ -75,6 +77,8 @@ packages/ui-cards           Progress/checklist card models
   thread.
 - Lark topic continuation is supported: a mention can establish a thread binding,
   then later messages in that topic continue without repeating the mention.
+- Non-Lark delivery uses tracked text receipts in the outbox until a real
+  platform transport is wired.
 - Channel/project bindings can be configured through the admin API and console,
   including mention-only vs always-on activation.
 - Scoped memory can be viewed and updated through `/v1/memory`, the admin
@@ -102,6 +106,37 @@ npm install
 npm run build
 node apps/server/dist/index.js
 ```
+
+## Generic Client Ingress
+
+Use `/v1/client/events` when wiring a new platform adapter before the native
+webhook transport is ready:
+
+```bash
+curl -X POST 'http://127.0.0.1:3077/v1/client/events' \
+  -H 'content-type: application/json' \
+  -d '{
+    "platform": "telegram",
+    "eventId": "tg-event-1",
+    "thread": {
+      "externalId": "tg-chat-42",
+      "channelId": "tg-chat-42",
+      "workspaceId": "dev-workspace",
+      "projectId": "opentag",
+      "visibility": "public"
+    },
+    "message": {
+      "id": "tg-message-1",
+      "text": "/opentag summarize this repo",
+      "actor": { "id": "tg-user-1", "displayName": "Ada" }
+    }
+  }'
+```
+
+Public generic clients require `mentionsAgent: true`, an `/opentag` or
+`@opentag` trigger, or an already established thread with `rootMessageId` or
+`topicId`. Chat-only events do not silently turn a whole group into an active
+session.
 
 ## Lark Delivery Mode
 

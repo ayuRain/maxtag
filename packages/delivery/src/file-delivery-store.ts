@@ -827,10 +827,7 @@ export class FileDeliveryStore {
     );
     if (channelConfigured) return copyBinding(channelConfigured);
     if (exactObserved) return copyBinding(exactObserved);
-    const channelObserved = state.threadBindings.find(
-      (item) => item.id === channelId || item.channelId === thread.channelId,
-    );
-    return channelObserved ? copyBinding(channelObserved) : undefined;
+    return undefined;
   }
 
   async recordInboundEvent(

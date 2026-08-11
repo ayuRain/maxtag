@@ -7,7 +7,11 @@ import {
   StaticThreadConfigStore,
   type AgentRunEvent,
   type MemoryScopeKind,
+  type PlatformAdapter,
+  type PlatformCapabilities,
+  type PlatformKind,
   type Project,
+  type SourceAttachment,
   type SourceMessage,
   type SourceThread,
   type Workspace,
@@ -15,6 +19,7 @@ import {
 import {
   FileDeliveryStore,
   TrackedLarkTransport,
+  TrackedTextPlatformAdapter,
   runDeliveryWorkerPass,
   type CancelOutboxOptions,
   type AgentRunRecord,
@@ -89,7 +94,7 @@ const capabilityManifest = {
     status: 'partial',
     model: 'one workspace bot routes every client event into the same thread-agent runtime',
   },
-  platforms: ['lark', 'telegram-placeholder', 'slack-planned', 'github-planned'],
+  platforms: ['lark', 'telegram-generic', 'slack-planned', 'github-planned'],
   executors: ['codex-dry-run', 'claude-placeholder'],
   clients: [
     {
@@ -103,8 +108,8 @@ const capabilityManifest = {
       id: 'telegram',
       label: 'Telegram',
       status: 'partial',
-      inbound: 'adapter stub',
-      surface: 'text receipt',
+      inbound: 'generic client event envelope',
+      surface: 'tracked text receipt',
     },
     {
       id: 'slack',
@@ -151,7 +156,7 @@ const capabilityManifest = {
     {
       capability: 'Multi-client routing',
       agentdock: 'Feishu, Telegram, QQ, Web adapters',
-      opentag: 'shared client model, Lark ready, Telegram stub',
+      opentag: 'shared client event ingress, Lark callback, Telegram-style tracked text delivery',
       status: 'partial',
     },
     {
@@ -284,6 +289,49 @@ function createLarkTransportForRun(): {
   };
 }
 
+function genericClientCapabilities(
+  platform: PlatformKind,
+): Partial<PlatformCapabilities> {
+  if (platform === 'telegram') {
+    return {
+      supportsThreads: false,
+      supportsCards: false,
+      supportsFiles: true,
+      supportsReactions: false,
+      supportsMentions: true,
+    };
+  }
+  return {};
+}
+
+function createPlatformForRun(thread: SourceThread): {
+  platform: PlatformAdapter;
+  transportMode: string;
+  larkDryRun?: MemoryLarkTransport;
+  larkTransport?: { mode: 'memory' | 'http' };
+} {
+  if (thread.platform === 'lark') {
+    const larkTransport = createLarkTransportForRun();
+    return {
+      platform: new LarkPlatformAdapter(
+        new TrackedLarkTransport(larkTransport.transport, deliveryStore),
+      ),
+      transportMode: `lark-${larkTransport.mode}`,
+      larkDryRun: larkTransport.dryRun,
+      larkTransport: { mode: larkTransport.mode },
+    };
+  }
+
+  return {
+    platform: new TrackedTextPlatformAdapter({
+      kind: thread.platform,
+      store: deliveryStore,
+      capabilities: genericClientCapabilities(thread.platform),
+    }),
+    transportMode: 'tracked-text',
+  };
+}
+
 async function deliverySnapshot(limit = 50): Promise<Record<string, unknown>> {
   const [summary, outbox, turnDeliveries, bindings, inboundEvents] =
     await Promise.all([
@@ -302,8 +350,7 @@ async function deliverySnapshot(limit = 50): Promise<Record<string, unknown>> {
   };
 }
 
-function createRuntimeForDryRun(transport: LarkTransport): OpenTagRuntime {
-  const platform = new LarkPlatformAdapter(transport);
+function createRuntimeForPlatform(platform: PlatformAdapter): OpenTagRuntime {
   return new OpenTagRuntime({
     platform,
     executor: createCodexExecutor({ mode: 'dry-run' }),
@@ -349,6 +396,16 @@ function coerceDevMessage(body: Record<string, unknown>): {
   };
 }
 
+function recordValue(
+  body: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  const value = body[key];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 function stringValue(
   body: Record<string, unknown>,
   key: string,
@@ -383,6 +440,215 @@ function numberValue(
   if (typeof value !== 'string') return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function isoDateValue(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const timestamp = value < 10_000_000_000 ? value * 1000 : value;
+    return new Date(timestamp).toISOString();
+  }
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const numeric = Number(trimmed);
+  const date = Number.isFinite(numeric)
+    ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
+    : new Date(trimmed);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function visibilityValue(value: unknown): SourceThread['visibility'] | undefined {
+  return value === 'public' || value === 'private' || value === 'direct'
+    ? value
+    : undefined;
+}
+
+function attachmentKindValue(value: unknown): SourceAttachment['kind'] {
+  return value === 'image' ||
+    value === 'file' ||
+    value === 'audio' ||
+    value === 'video' ||
+    value === 'link'
+    ? value
+    : 'file';
+}
+
+function coerceAttachments(value: unknown): SourceAttachment[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const attachments = value
+    .map((item, index): SourceAttachment | undefined => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        return undefined;
+      }
+      const body = item as Record<string, unknown>;
+      const id =
+        stringValue(body, 'id') ||
+        stringValue(body, 'fileKey') ||
+        stringValue(body, 'url') ||
+        `attachment-${index + 1}`;
+      return {
+        id,
+        kind: attachmentKindValue(body.kind),
+        name: stringValue(body, 'name'),
+        mimeType: stringValue(body, 'mimeType'),
+        sizeBytes: numberValue(body, 'sizeBytes'),
+        url: stringValue(body, 'url'),
+        localPath: stringValue(body, 'localPath'),
+        metadata: {
+          clientPayload: body,
+        },
+      };
+    })
+    .filter((item): item is SourceAttachment => Boolean(item));
+  return attachments.length ? attachments : undefined;
+}
+
+function inferredAgentMention(text: string, visibility: SourceThread['visibility']): boolean {
+  return visibility === 'direct' || /^\s*(\/opentag\b|@opentag\b)/i.test(text);
+}
+
+function coerceClientEvent(
+  body: Record<string, unknown>,
+): {
+  eventId: string;
+  eventType: string;
+  thread: SourceThread;
+  message: SourceMessage;
+} | { error: string } {
+  const threadBody = recordValue(body, 'thread') || {};
+  const messageBody = recordValue(body, 'message') || {};
+  const actorBody =
+    recordValue(messageBody, 'actor') || recordValue(body, 'actor') || {};
+  const platform =
+    stringValue(body, 'platform') ||
+    stringValue(threadBody, 'platform') ||
+    stringValue(messageBody, 'platform');
+  const channelId =
+    stringValue(threadBody, 'channelId') ||
+    stringValue(body, 'channelId') ||
+    stringValue(threadBody, 'chatId') ||
+    stringValue(body, 'chatId');
+  const rootMessageId =
+    stringValue(threadBody, 'rootMessageId') ||
+    stringValue(body, 'rootMessageId') ||
+    stringValue(threadBody, 'topicId') ||
+    stringValue(body, 'topicId');
+  const externalId =
+    stringValue(threadBody, 'externalId') ||
+    stringValue(body, 'externalId') ||
+    (channelId && rootMessageId ? `${channelId}:${rootMessageId}` : channelId);
+  if (!platform || !externalId) {
+    return { error: 'platform_and_thread_externalId_required' };
+  }
+
+  const messageId =
+    stringValue(messageBody, 'id') ||
+    stringValue(body, 'messageId') ||
+    randomUUID();
+  const text =
+    stringValue(messageBody, 'text') ||
+    stringValue(body, 'text') ||
+    '';
+  const attachments = coerceAttachments(
+    messageBody.attachments ?? body.attachments,
+  );
+  if (!text && !attachments?.length) {
+    return { error: 'message_text_or_attachments_required' };
+  }
+
+  const visibility =
+    visibilityValue(threadBody.visibility) ||
+    visibilityValue(body.visibility) ||
+    'public';
+  const platformKind = platform as PlatformKind;
+  const threadId =
+    stringValue(threadBody, 'id') ||
+    stringValue(body, 'threadId') ||
+    `${platform}:${externalId}`;
+  const eventId =
+    stringValue(body, 'eventId') ||
+    stringValue(messageBody, 'eventId') ||
+    `${externalId}:${messageId}`;
+  const eventType =
+    stringValue(body, 'eventType') ||
+    stringValue(messageBody, 'eventType') ||
+    'client.message';
+  const thread: SourceThread = {
+    id: threadId,
+    platform: platformKind,
+    externalId,
+    workspaceId:
+      stringValue(threadBody, 'workspaceId') ||
+      stringValue(body, 'workspaceId') ||
+      'dev-workspace',
+    projectId:
+      stringValue(threadBody, 'projectId') ||
+      stringValue(body, 'projectId') ||
+      channelId ||
+      `${platform}-general`,
+    channelId,
+    rootMessageId,
+    topicId:
+      stringValue(threadBody, 'topicId') ||
+      stringValue(body, 'topicId') ||
+      rootMessageId,
+    title:
+      stringValue(threadBody, 'title') ||
+      stringValue(body, 'title') ||
+      `${platform} ${channelId || externalId}`,
+    visibility,
+    permalink: stringValue(threadBody, 'permalink') || stringValue(body, 'permalink'),
+    metadata: {
+      clientIngress: true,
+      clientThread: threadBody,
+    },
+  };
+
+  return {
+    eventId,
+    eventType,
+    thread,
+    message: {
+      id: messageId,
+      threadId: thread.id,
+      platform: platformKind,
+      text,
+      actor: {
+        id:
+          stringValue(actorBody, 'id') ||
+          stringValue(messageBody, 'actorId') ||
+          stringValue(body, 'actorId') ||
+          'unknown',
+        displayName:
+          stringValue(actorBody, 'displayName') ||
+          stringValue(messageBody, 'actorDisplayName') ||
+          stringValue(body, 'actorDisplayName'),
+        platformUserId:
+          stringValue(actorBody, 'platformUserId') ||
+          stringValue(messageBody, 'platformUserId') ||
+          stringValue(body, 'platformUserId'),
+        isBot: booleanValue(actorBody, 'isBot'),
+      },
+      createdAt:
+        isoDateValue(messageBody.createdAt) ||
+        isoDateValue(body.createdAt) ||
+        new Date().toISOString(),
+      mentionsAgent: booleanValue(
+        { ...body, ...messageBody },
+        'mentionsAgent',
+        inferredAgentMention(text, visibility),
+      ) ?? false,
+      replyToMessageId:
+        stringValue(messageBody, 'replyToMessageId') ||
+        stringValue(body, 'replyToMessageId'),
+      attachments,
+      metadata: {
+        eventId,
+        eventType,
+        clientMessage: messageBody,
+      },
+    },
+  };
 }
 
 function coerceOutboxFilter(
@@ -479,6 +745,10 @@ function applyBindingToThread(
   };
 }
 
+function canUseEstablishedThreadBinding(thread: SourceThread): boolean {
+  return Boolean(thread.rootMessageId || thread.topicId);
+}
+
 async function routeMessage(input: {
   thread: SourceThread;
   message: SourceMessage;
@@ -496,7 +766,8 @@ async function routeMessage(input: {
     return {
       ...input,
       establishedThreadBinding:
-        establishedThreadBinding?.scope === 'thread'
+        establishedThreadBinding?.scope === 'thread' &&
+        canUseEstablishedThreadBinding(input.thread)
           ? establishedThreadBinding
           : undefined,
     };
@@ -510,7 +781,8 @@ async function routeMessage(input: {
     },
     binding,
     establishedThreadBinding:
-      establishedThreadBinding?.scope === 'thread'
+      establishedThreadBinding?.scope === 'thread' &&
+      canUseEstablishedThreadBinding(thread)
         ? establishedThreadBinding
         : undefined,
   };
@@ -531,7 +803,8 @@ function shouldHandleMessage(input: {
     return true;
   }
   const requireMention =
-    input.binding?.requireMention ?? Boolean(botOpenId);
+    input.binding?.requireMention ??
+    (input.thread.platform === 'lark' ? Boolean(botOpenId) : true);
   return !requireMention || input.message.mentionsAgent;
 }
 
@@ -688,7 +961,11 @@ interface QueuedMessageRun {
     kind: ParsedMemoryCommand['kind'];
     scope: MemoryScopeKind;
   };
-  larkTransport: {
+  transport: {
+    platform: PlatformKind;
+    mode: string;
+  };
+  larkTransport?: {
     mode: 'memory' | 'http';
   };
 }
@@ -717,7 +994,11 @@ async function enqueueMessageRun(input: {
     requireMention: routed.binding?.requireMention,
   });
   const routeBinding = routed.binding ?? observedBinding;
-  const larkTransport = larkTransportStatus();
+  const larkTransport =
+    routed.thread.platform === 'lark' ? larkTransportStatus() : undefined;
+  const transportMode = larkTransport
+    ? `lark-${String(larkTransport.mode)}`
+    : 'tracked-text';
   const route = {
     workspaceId: routed.thread.workspaceId,
     projectId: routed.thread.projectId,
@@ -739,7 +1020,7 @@ async function enqueueMessageRun(input: {
     inboundEventId: options?.inboundEventId,
     bindingId: routeBinding.id,
     executorId: memoryCommand ? 'memory-command' : 'codex',
-    transportMode: String(larkTransport.mode),
+    transportMode,
     metadata: {
       memoryCommand: memoryCommand
         ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
@@ -753,7 +1034,13 @@ async function enqueueMessageRun(input: {
     memoryCommand: memoryCommand
       ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
       : undefined,
-    larkTransport: { mode: larkTransport.mode as 'memory' | 'http' },
+    transport: {
+      platform: routed.thread.platform,
+      mode: transportMode,
+    },
+    larkTransport: larkTransport
+      ? { mode: larkTransport.mode as 'memory' | 'http' }
+      : undefined,
   };
 }
 
@@ -815,14 +1102,9 @@ async function executeAgentRun(
     }
   }
 
-  let larkTransport: ReturnType<typeof createLarkTransportForRun>;
-  let trackedTransport: TrackedLarkTransport;
+  let runPlatform: ReturnType<typeof createPlatformForRun>;
   try {
-    larkTransport = createLarkTransportForRun();
-    trackedTransport = new TrackedLarkTransport(
-      larkTransport.transport,
-      deliveryStore,
-    );
+    runPlatform = createPlatformForRun(initialRun.thread);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await deliveryStore.markAgentRunFailed(runId, message);
@@ -846,17 +1128,12 @@ async function executeAgentRun(
           scope: memoryCommand.scope,
         },
       });
-      await trackedTransport.sendText({
-        chatId: initialRun.thread.channelId || initialRun.thread.externalId,
-        rootId: initialRun.thread.rootMessageId,
-        replyToMessageId: initialRun.message.id,
-        text: String(commandResult.summary),
-        metadata: {
-          runId,
-          thread: initialRun.thread,
-          stage: 'thread-reply',
-        },
-      });
+      await runPlatform.platform.sendMessage(
+        initialRun.thread,
+        String(commandResult.summary),
+        [],
+        { runId, replyToMessageId: initialRun.message.id },
+      );
       await markRunInboundProcessed(initialRun);
       await deliveryStore.markAgentRunCompleted(
         runId,
@@ -875,11 +1152,15 @@ async function executeAgentRun(
           ...commandResult,
         },
         delivery: await deliverySnapshot(20),
-        larkTransport: { mode: larkTransport.mode },
-        larkDryRun: larkTransport.dryRun
+        transport: {
+          platform: runPlatform.platform.kind,
+          mode: runPlatform.transportMode,
+        },
+        larkTransport: runPlatform.larkTransport,
+        larkDryRun: runPlatform.larkDryRun
           ? {
-              texts: larkTransport.dryRun.texts,
-              cards: larkTransport.dryRun.cards,
+              texts: runPlatform.larkDryRun.texts,
+              cards: runPlatform.larkDryRun.cards,
             }
           : undefined,
       };
@@ -891,7 +1172,7 @@ async function executeAgentRun(
     }
   }
 
-  const runtime = createRuntimeForDryRun(trackedTransport);
+  const runtime = createRuntimeForPlatform(runPlatform.platform);
   const abortController = new AbortController();
   activeRuns.set(runId, abortController);
   try {
@@ -915,11 +1196,15 @@ async function executeAgentRun(
       run: await deliveryStore.getAgentRun(runId),
       route: runRoute(initialRun),
       delivery: await deliverySnapshot(20),
-      larkTransport: { mode: larkTransport.mode },
-      larkDryRun: larkTransport.dryRun
+      transport: {
+        platform: runPlatform.platform.kind,
+        mode: runPlatform.transportMode,
+      },
+      larkTransport: runPlatform.larkTransport,
+      larkDryRun: runPlatform.larkDryRun
         ? {
-            texts: larkTransport.dryRun.texts,
-            cards: larkTransport.dryRun.cards,
+            texts: runPlatform.larkDryRun.texts,
+            cards: runPlatform.larkDryRun.cards,
           }
         : undefined,
     };
@@ -1302,6 +1587,89 @@ const server = createServer(async (request, response) => {
         return;
       }
       sendJson(response, 200, await runMessageSync(normalized, {
+        inboundEventId: inbound.record.id,
+      }));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/client/events') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const normalized = coerceClientEvent(body);
+      if ('error' in normalized) {
+        sendJson(response, 400, {
+          accepted: false,
+          reason: normalized.error,
+        });
+        return;
+      }
+      const query = Object.fromEntries(url.searchParams.entries());
+      const asyncRequested =
+        stringValue({ ...query, ...body }, 'mode') === 'sync'
+          ? false
+          : booleanValue({ ...query, ...body }, 'async', true) ?? true;
+      const inbound = await deliveryStore.recordInboundEvent({
+        platform: normalized.thread.platform,
+        externalId: normalized.eventId,
+        eventType: normalized.eventType,
+        workspaceId: normalized.thread.workspaceId,
+        projectId: normalized.thread.projectId,
+        threadId: normalized.thread.id,
+        messageId: normalized.message.id,
+        metadata: {
+          ingress: 'client',
+        },
+      });
+      if (inbound.duplicate) {
+        sendJson(response, 200, {
+          accepted: true,
+          duplicate: true,
+          inbound: inbound.record,
+        });
+        return;
+      }
+
+      const routed = await routeMessage(normalized);
+      if (!shouldHandleMessage(routed)) {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'mention_required',
+          {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            messageId: routed.message.id,
+          },
+        );
+        sendJson(response, 202, {
+          accepted: false,
+          reason: 'mention_required',
+          route: {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            platform: routed.thread.platform,
+            bindingId: routed.binding?.id,
+            establishedThreadBindingId: routed.establishedThreadBinding?.id,
+          },
+        });
+        return;
+      }
+
+      if (asyncRequested) {
+        const queued = await enqueueMessageRun(routed, {
+          inboundEventId: inbound.record.id,
+        });
+        scheduleAgentWorkerPass();
+        sendJson(response, 202, {
+          accepted: true,
+          queued: true,
+          ...queued,
+          delivery: await deliverySnapshot(20),
+        });
+        return;
+      }
+
+      sendJson(response, 200, await runMessageSync(routed, {
         inboundEventId: inbound.record.id,
       }));
       return;

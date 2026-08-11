@@ -38,7 +38,7 @@ export class TelegramPlatformAdapter implements PlatformAdapter {
     _thread: SourceThread,
     _text: string,
     _artifacts?: Artifact[],
-    _options?: { runId?: string },
+    _options?: { runId?: string; replyToMessageId?: string },
   ): Promise<void> {
     throw new Error('Telegram transport is not implemented yet.');
   }

@@ -240,7 +240,7 @@ export interface PlatformAdapter {
     thread: SourceThread,
     text: string,
     artifacts?: Artifact[],
-    options?: { runId?: string },
+    options?: { runId?: string; replyToMessageId?: string },
   ): Promise<void>;
 }
 
