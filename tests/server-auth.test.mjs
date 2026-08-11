@@ -92,6 +92,8 @@ test(
     );
     assert.equal(health.security.operatorAuth.configured, true);
     assert.equal(health.security.clientIngress.mode, 'disabled');
+    assert.equal(health.storage.driver, 'sqlite');
+    assert.equal(health.storage.wal, true);
 
     const consoleResponse = await fetch(`${baseUrl}/`);
     assert.equal(consoleResponse.status, 200);

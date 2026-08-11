@@ -40,6 +40,12 @@ function executorMode(): 'dry-run' | 'local-cli' {
     : 'dry-run';
 }
 
+function storageDriver(): 'file' | 'sqlite' {
+  const value = (process.env.OPENTAG_STORAGE_DRIVER || 'sqlite').toLowerCase();
+  if (value === 'file' || value === 'sqlite') return value;
+  throw new Error('OPENTAG_STORAGE_DRIVER must be sqlite or file.');
+}
+
 function larkDomainValue(value: string | undefined): LarkOpenApiDomain {
   return value === 'lark' ? 'lark' : 'feishu';
 }
@@ -108,6 +114,11 @@ async function main(): Promise<void> {
       defaultTimeZone:
         process.env.OPENTAG_DEFAULT_TIME_ZONE || 'Asia/Shanghai',
     },
+    storage: {
+      driver: storageDriver(),
+      databasePath: process.env.OPENTAG_SQLITE_PATH,
+      busyTimeoutMs: optionalNumberEnv('OPENTAG_SQLITE_BUSY_TIMEOUT_MS'),
+    },
   });
 
   let stopping = false;
@@ -127,6 +138,7 @@ async function main(): Promise<void> {
     larkTransport: host.larkTransportStatus(),
     telegramTransport: host.telegramTransportStatus(),
     executors: host.executorStatus(),
+    storage: host.storageStatus(),
   });
 
   const recovered = await host.recoverStaleAgentRuns({
@@ -150,8 +162,11 @@ async function main(): Promise<void> {
     await delay(intervalMs);
   } while (!stopping);
 
+  const storage = host.storageStatus();
+  host.close();
   log('stopped', {
     activeRuns: host.activeRunCount,
+    storage,
   });
 }
 

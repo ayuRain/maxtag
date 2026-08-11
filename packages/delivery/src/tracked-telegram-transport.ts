@@ -3,7 +3,7 @@ import type {
   TelegramDocumentInput,
   TelegramTransport,
 } from '@opentag/platform-telegram';
-import type { FileDeliveryStore } from './file-delivery-store.js';
+import type { DeliveryStore } from './file-delivery-store.js';
 import type { OutboundTarget } from './types.js';
 
 function errorMessage(error: unknown): string {
@@ -25,7 +25,7 @@ function target(
 export class TrackedTelegramTransport implements TelegramTransport {
   constructor(
     private readonly delegate: TelegramTransport,
-    private readonly store: FileDeliveryStore,
+    private readonly store: DeliveryStore,
   ) {}
 
   async sendText(input: {

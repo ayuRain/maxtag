@@ -48,7 +48,7 @@ function now(): string {
   return new Date().toISOString();
 }
 
-function cloneEmptyState(): FileDeliveryState {
+export function createEmptyDeliveryState(): FileDeliveryState {
   return {
     nextSequence: EMPTY_STATE.nextSequence,
     outbox: [],
@@ -57,6 +57,20 @@ function cloneEmptyState(): FileDeliveryState {
     inboundEvents: [],
     agentRuns: [],
     agentRunEvents: [],
+  };
+}
+
+export function normalizeDeliveryState(
+  parsed: Partial<FileDeliveryState>,
+): FileDeliveryState {
+  return {
+    nextSequence: parsed.nextSequence ?? 1,
+    outbox: parsed.outbox ?? [],
+    turnDeliveries: parsed.turnDeliveries ?? [],
+    threadBindings: parsed.threadBindings ?? [],
+    inboundEvents: parsed.inboundEvents ?? [],
+    agentRuns: parsed.agentRuns ?? [],
+    agentRunEvents: parsed.agentRunEvents ?? [],
   };
 }
 
@@ -71,6 +85,50 @@ function targetIdFor(input: CreateOutboundInput): string {
 
 function bindingId(platform: string, externalId: string): string {
   return `${platform}:${externalId}`.replace(/[^a-zA-Z0-9_.:-]/g, '_');
+}
+
+export function upsertThreadBindingInState(
+  state: FileDeliveryState,
+  input: ConfigureThreadBindingInput & { scope: ThreadBindingScope },
+  timestamp = now(),
+): ThreadBinding {
+  const id = bindingId(input.platform, input.externalId);
+  const existing = state.threadBindings.find((binding) => binding.id === id);
+  if (existing) {
+    existing.scope = input.scope ?? existing.scope;
+    existing.source =
+      existing.source === 'configured' && input.source === 'observed'
+        ? existing.source
+        : input.source ?? existing.source;
+    existing.channelId = input.channelId ?? existing.channelId;
+    existing.workspaceId = input.workspaceId;
+    existing.projectId = input.projectId;
+    existing.title = input.title ?? existing.title;
+    existing.activationMode = input.activationMode ?? existing.activationMode;
+    existing.requireMention = input.requireMention ?? existing.requireMention;
+    existing.updatedAt = timestamp;
+    existing.metadata = input.metadata ?? existing.metadata;
+    return copyBinding(existing);
+  }
+
+  const binding: ThreadBinding = {
+    id,
+    platform: input.platform,
+    externalId: input.externalId,
+    scope: input.scope,
+    source: input.source ?? 'observed',
+    channelId: input.channelId,
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    title: input.title,
+    activationMode: input.activationMode ?? 'mention',
+    requireMention: input.requireMention ?? true,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    metadata: input.metadata,
+  };
+  state.threadBindings.push(binding);
+  return copyBinding(binding);
 }
 
 function copyBinding(binding: ThreadBinding): ThreadBinding {
@@ -200,18 +258,10 @@ export class FileDeliveryStore {
       const parsed = JSON.parse(
         await fs.readFile(this.stateFile, 'utf8'),
       ) as Partial<FileDeliveryState>;
-      return {
-        nextSequence: parsed.nextSequence ?? 1,
-        outbox: parsed.outbox ?? [],
-        turnDeliveries: parsed.turnDeliveries ?? [],
-        threadBindings: parsed.threadBindings ?? [],
-        inboundEvents: parsed.inboundEvents ?? [],
-        agentRuns: parsed.agentRuns ?? [],
-        agentRunEvents: parsed.agentRunEvents ?? [],
-      };
+      return normalizeDeliveryState(parsed);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return cloneEmptyState();
+        return createEmptyDeliveryState();
       }
       throw error;
     }
@@ -224,12 +274,12 @@ export class FileDeliveryStore {
     await fs.rename(temporaryFile, this.stateFile);
   }
 
-  private async readState(): Promise<FileDeliveryState> {
+  protected async readState(): Promise<FileDeliveryState> {
     await this.mutationQueue;
     return this.load();
   }
 
-  private async mutate<T>(
+  protected async mutate<T>(
     operation: (state: FileDeliveryState) => T,
   ): Promise<T> {
     const run = this.mutationQueue.then(async () => {
@@ -764,7 +814,7 @@ export class FileDeliveryStore {
     input: ConfigureThreadBindingInput,
   ): Promise<ThreadBinding> {
     return this.mutate((state) =>
-      this.upsertBindingInState(state, {
+      upsertThreadBindingInState(state, {
         ...input,
         scope: input.scope ?? 'channel',
         source: input.source ?? 'configured',
@@ -800,7 +850,7 @@ export class FileDeliveryStore {
     input: UpsertThreadBindingInput,
   ): Promise<ThreadBinding> {
     return this.mutate((state) =>
-      this.upsertBindingInState(state, {
+      upsertThreadBindingInState(state, {
         platform: input.thread.platform,
         externalId: input.thread.externalId,
         scope: 'thread',
@@ -1029,51 +1079,6 @@ export class FileDeliveryStore {
     });
   }
 
-  private upsertBindingInState(
-    state: FileDeliveryState,
-    input: ConfigureThreadBindingInput & { scope: ThreadBindingScope },
-  ): ThreadBinding {
-    const timestamp = now();
-    const id = bindingId(input.platform, input.externalId);
-    const existing = state.threadBindings.find((binding) => binding.id === id);
-    if (existing) {
-      existing.scope = input.scope ?? existing.scope;
-      existing.source =
-        existing.source === 'configured' && input.source === 'observed'
-          ? existing.source
-          : input.source ?? existing.source;
-      existing.channelId = input.channelId ?? existing.channelId;
-      existing.workspaceId = input.workspaceId;
-      existing.projectId = input.projectId;
-      existing.title = input.title ?? existing.title;
-      existing.activationMode = input.activationMode ?? existing.activationMode;
-      existing.requireMention =
-        input.requireMention ?? existing.requireMention;
-      existing.updatedAt = timestamp;
-      existing.metadata = input.metadata ?? existing.metadata;
-      return copyBinding(existing);
-    }
-
-    const binding: ThreadBinding = {
-      id,
-      platform: input.platform,
-      externalId: input.externalId,
-      scope: input.scope,
-      source: input.source ?? 'observed',
-      channelId: input.channelId,
-      workspaceId: input.workspaceId,
-      projectId: input.projectId,
-      title: input.title,
-      activationMode: input.activationMode ?? 'mention',
-      requireMention: input.requireMention ?? true,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      metadata: input.metadata,
-    };
-    state.threadBindings.push(binding);
-    return copyBinding(binding);
-  }
-
   private async updateInboundEvent(
     id: string,
     status: InboundEventStatus,
@@ -1125,3 +1130,5 @@ export class FileDeliveryStore {
     if (status === 'failed') delivery.failedAt = timestamp;
   }
 }
+
+export type DeliveryStore = Pick<FileDeliveryStore, keyof FileDeliveryStore>;

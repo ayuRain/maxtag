@@ -78,6 +78,7 @@ import {
   type RoutineSchedule,
   type UpsertRoutineInput,
 } from '@opentag/routines';
+import { SqliteOpenTagStore } from '@opentag/storage-sqlite';
 import { OperatorAuth, bearerTokenMatches } from './operator-auth.js';
 
 const port = Number(process.env.OPENTAG_PORT || 3077);
@@ -160,16 +161,43 @@ const operatorAuth = new OperatorAuth({
   ),
 });
 const clientIngressToken = process.env.OPENTAG_CLIENT_INGRESS_TOKEN;
+const storageDriver = storageDriverValue(process.env.OPENTAG_STORAGE_DRIVER);
+const sqliteStorage =
+  storageDriver === 'sqlite'
+    ? new SqliteOpenTagStore({
+        databasePath:
+          process.env.OPENTAG_SQLITE_PATH || path.join(dataDir, 'opentag.sqlite'),
+        pairingTtlMs: pairingTtlSeconds * 1000,
+        busyTimeoutMs: numberEnvironmentValue(
+          'OPENTAG_SQLITE_BUSY_TIMEOUT_MS',
+          5_000,
+        ),
+        legacyDeliveryFile: path.join(
+          dataDir,
+          'delivery',
+          'delivery-state.json',
+        ),
+        legacyPairingFile: path.join(
+          dataDir,
+          'pairing',
+          'pairing-state.json',
+        ),
+      })
+    : undefined;
 const routineSchedulerId = `opentag-routines-${process.pid}`;
-const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
+const deliveryStore =
+  sqliteStorage?.deliveryStore ??
+  new FileDeliveryStore(path.join(dataDir, 'delivery'));
 const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
 const routineStore = new FileRoutineStore(path.join(dataDir, 'routines'));
 const routineCommandService = new RoutineCommandService(routineStore, {
   defaultTimeZone: defaultRoutineTimeZone,
 });
-const pairingStore = new FilePairingStore(path.join(dataDir, 'pairing'), {
-  ttlMs: pairingTtlSeconds * 1000,
-});
+const pairingStore =
+  sqliteStorage?.pairingStore ??
+  new FilePairingStore(path.join(dataDir, 'pairing'), {
+    ttlMs: pairingTtlSeconds * 1000,
+  });
 const activeRuns = new Map<string, AbortController>();
 const pairingNoticeAt = new Map<string, number>();
 let agentWorkerTimer: NodeJS.Timeout | undefined;
@@ -296,7 +324,7 @@ const capabilityManifest = {
     {
       capability: 'Reliable delivery',
       agentdock: 'SQLite outbox and turn delivery tracking',
-      opentag: 'file-backed outbox and turn delivery tracker',
+      opentag: 'SQLite WAL outbox, turn delivery tracking, and cross-process claims',
       status: 'partial',
     },
     {
@@ -316,6 +344,12 @@ const capabilityManifest = {
 
 function larkDomainValue(value: string | undefined): LarkOpenApiDomain {
   return value === 'lark' ? 'lark' : 'feishu';
+}
+
+function storageDriverValue(value: string | undefined): 'sqlite' | 'file' {
+  const normalized = (value || 'sqlite').trim().toLowerCase();
+  if (normalized === 'sqlite' || normalized === 'file') return normalized;
+  throw new Error('OPENTAG_STORAGE_DRIVER must be sqlite or file.');
 }
 
 function numberEnvironmentValue(name: string, fallback: number): number {
@@ -1364,13 +1398,21 @@ async function handlePairingCommand(
   const code = pairingCommandCode(input.message.text);
   if (!code) return undefined;
   const channelId = input.thread.channelId || input.thread.externalId;
-  const consumed = await pairingStore.consumeCode({
+  const consumeInput = {
     platform: input.thread.platform,
     code,
     channelId,
     threadExternalId: input.thread.externalId,
     actorId: input.message.actor.id,
-  });
+  };
+  const atomicPairing = sqliteStorage
+    ? await sqliteStorage.consumePairingAndConfigureBinding({
+        ...consumeInput,
+        title: input.thread.title,
+      })
+    : undefined;
+  const consumed =
+    atomicPairing?.consumed ?? (await pairingStore.consumeCode(consumeInput));
   if (!consumed.ok) {
     await deliveryStore.markInboundEventIgnored(
       inboundEventId,
@@ -1396,23 +1438,25 @@ async function handlePairingCommand(
   }
 
   const invitation = consumed.invitation;
-  const binding = await deliveryStore.configureThreadBinding({
-    platform: input.thread.platform,
-    externalId: channelId,
-    workspaceId: invitation.workspaceId,
-    projectId: invitation.projectId,
-    scope: 'channel',
-    source: 'configured',
-    channelId,
-    title: input.thread.title,
-    activationMode: invitation.activationMode,
-    requireMention: invitation.requireMention,
-    metadata: {
-      pairedAt: invitation.consumedAt,
-      pairedBy: input.message.actor.id,
-      pairingInvitationId: invitation.id,
-    },
-  });
+  const binding =
+    atomicPairing?.binding ??
+    (await deliveryStore.configureThreadBinding({
+      platform: input.thread.platform,
+      externalId: channelId,
+      workspaceId: invitation.workspaceId,
+      projectId: invitation.projectId,
+      scope: 'channel',
+      source: 'configured',
+      channelId,
+      title: input.thread.title,
+      activationMode: invitation.activationMode,
+      requireMention: invitation.requireMention,
+      metadata: {
+        pairedAt: invitation.consumedAt,
+        pairedBy: input.message.actor.id,
+        pairingInvitationId: invitation.id,
+      },
+    }));
   const thread = applyBindingToThread(input.thread, binding);
   const policy = await threadConfigStore.resolveThreadPolicy(thread);
   const transport = await sendControlMessage(
@@ -2274,6 +2318,11 @@ const server = createServer(async (request, response) => {
           running: Boolean(routineTickPass),
           lastTickAt: routineLastTickAt,
         },
+        storage: {
+          driver: storageDriver,
+          wal: Boolean(sqliteStorage),
+          migration: sqliteStorage?.migration,
+        },
         security: {
           operatorAuth: {
             configured: operatorAuth.configured,
@@ -2441,6 +2490,11 @@ const server = createServer(async (request, response) => {
           running: Boolean(routineTickPass),
           lastTickAt: routineLastTickAt,
           lastTickResult: routineLastTickResult,
+        },
+        storage: {
+          driver: storageDriver,
+          wal: Boolean(sqliteStorage),
+          migration: sqliteStorage?.migration,
         },
       });
       return;
@@ -3309,6 +3363,13 @@ const server = createServer(async (request, response) => {
 
 server.listen(port, host, () => {
   console.log(`OpenTag server listening on http://${host}:${port}`);
+  console.log(
+    `OpenTag storage driver=${storageDriver}${
+      sqliteStorage
+        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_pairing=${sqliteStorage.migration.pairingImported}`
+        : ''
+    }`,
+  );
   if (!operatorAuth.configured && !['127.0.0.1', 'localhost', '::1'].includes(host)) {
     console.warn(
       'OpenTag operator authentication is disabled on a non-loopback host. Set OPENTAG_ADMIN_TOKEN before exposing the console.',

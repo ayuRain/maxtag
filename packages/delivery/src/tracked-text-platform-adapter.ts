@@ -8,7 +8,7 @@ import type {
   ProgressSurface,
   SourceThread,
 } from '@opentag/core';
-import type { FileDeliveryStore } from './file-delivery-store.js';
+import type { DeliveryStore } from './file-delivery-store.js';
 
 function targetChatId(thread: SourceThread): string {
   return thread.channelId || thread.externalId;
@@ -39,12 +39,12 @@ function progressText(state: ProgressState): string {
 class TrackedTextProgressSurface implements ProgressSurface {
   private readonly platform: PlatformKind;
   private readonly thread: SourceThread;
-  private readonly store: FileDeliveryStore;
+  private readonly store: DeliveryStore;
 
   constructor(
     platform: PlatformKind,
     thread: SourceThread,
-    store: FileDeliveryStore,
+    store: DeliveryStore,
   ) {
     this.platform = platform;
     this.thread = thread;
@@ -93,11 +93,11 @@ class TrackedTextProgressSurface implements ProgressSurface {
 export class TrackedTextPlatformAdapter implements PlatformAdapter {
   readonly kind: PlatformKind;
   readonly capabilities: PlatformCapabilities;
-  private readonly store: FileDeliveryStore;
+  private readonly store: DeliveryStore;
 
   constructor(options: {
     kind: PlatformKind;
-    store: FileDeliveryStore;
+    store: DeliveryStore;
     capabilities?: Partial<PlatformCapabilities>;
   }) {
     this.kind = options.kind;

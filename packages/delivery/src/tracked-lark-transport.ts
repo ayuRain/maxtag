@@ -2,7 +2,7 @@ import type {
   LarkDeliveryMetadata,
   LarkTransport,
 } from '@opentag/platform-lark';
-import type { FileDeliveryStore } from './file-delivery-store.js';
+import type { DeliveryStore } from './file-delivery-store.js';
 import type { OutboundTarget } from './types.js';
 
 function errorMessage(error: unknown): string {
@@ -22,9 +22,9 @@ function metadataTarget(
 
 export class TrackedLarkTransport implements LarkTransport {
   private readonly delegate: LarkTransport;
-  private readonly store: FileDeliveryStore;
+  private readonly store: DeliveryStore;
 
-  constructor(delegate: LarkTransport, store: FileDeliveryStore) {
+  constructor(delegate: LarkTransport, store: DeliveryStore) {
     this.delegate = delegate;
     this.store = store;
   }

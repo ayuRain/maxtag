@@ -50,6 +50,7 @@ packages/tools-github       GitHub tool contract placeholder
 packages/memory             Global/workspace/project/thread memory stores
 packages/routines           Scheduled work, execution claims, and audit history
 packages/delivery           Durable outbox, delivery tracking, bindings
+packages/storage-sqlite     WAL storage, migration, and atomic control transactions
 packages/ui-cards           Progress/checklist card models
 ```
 
@@ -73,11 +74,12 @@ packages/ui-cards           Progress/checklist card models
 - Codex and Claude executors are selected per project. They support safe-by-default
   dry-runs or explicit local CLI execution, and the standalone worker resolves
   the same policy and runtime mode as the HTTP server.
-- Dry-run Lark delivery now runs through a file-backed outbox, per-run delivery
-  records, and thread-to-project bindings.
+- Delivery, run, inbound-event, binding, and pairing state defaults to a shared
+  SQLite WAL database. The outbox and run claims are transactional across the
+  HTTP server and standalone workers.
 - Delivery recovery can requeue stale `sending` records and cancel only the
   selected run/thread/workspace/project scope.
-- Agent runs are recorded in a file-backed run ledger with status, timeline
+- Agent runs are recorded in the durable run ledger with status, timeline
   events, and cancel requests.
 - Agent execution can be enqueued into a durable run queue and claimed by an
   inline worker, with stale run recovery on startup and through the admin API.
@@ -153,6 +155,27 @@ npm run worker
 
 For one-shot smoke tests, set `OPENTAG_WORKER_ONCE=1`; tune claim batch size with
 `OPENTAG_WORKER_BATCH`.
+
+## Storage
+
+SQLite WAL is the default for delivery, run, inbound-event, channel-binding,
+and pairing state:
+
+```bash
+OPENTAG_STORAGE_DRIVER=sqlite
+OPENTAG_SQLITE_PATH=./data/opentag.sqlite
+OPENTAG_SQLITE_BUSY_TIMEOUT_MS=5000
+```
+
+The HTTP server and standalone worker can safely share this database. Outbox
+and run claims use immediate write transactions, and consuming a pairing code
+plus creating its channel binding commits atomically. On first startup, OpenTag
+imports existing `delivery-state.json` and `pairing-state.json` files when the
+SQLite documents do not yet exist; later restarts use only the database.
+
+Set `OPENTAG_STORAGE_DRIVER=file` only for legacy or isolated local operation.
+Project policy, scoped memory, and routines are still file-backed and remain on
+the production-storage roadmap.
 
 ## Operator Authentication
 
@@ -293,10 +316,9 @@ OPENTAG_TELEGRAM_REQUIRE_BINDING=true
 OPENTAG_PAIRING_TTL_SECONDS=300
 ```
 
-The file-backed pairing and binding stores are suitable for local development
-and a single process. Operator authentication protects the current console and
-APIs, but pairing consumption and binding creation still need one transactional
-database operation before running multiple replicas.
+Pairing invitations and bindings share the SQLite control database. Invitation
+consumption and configured channel creation are one transaction, so two server
+replicas cannot consume the same code into different projects.
 
 ## Lark Delivery Mode
 

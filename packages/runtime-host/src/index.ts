@@ -17,6 +17,7 @@ import {
   TrackedTelegramTransport,
   TrackedTextPlatformAdapter,
   type AgentRunRecord,
+  type DeliveryStore,
   type RecoverStaleAgentRunsOptions,
 } from '@opentag/delivery';
 import { createCodexExecutor } from '@opentag/executor-codex';
@@ -43,6 +44,7 @@ import {
   FileRoutineStore,
   RoutineCommandService,
 } from '@opentag/routines';
+import { SqliteOpenTagStore } from '@opentag/storage-sqlite';
 
 export interface RuntimeHostLarkConfig {
   transportMode?: string;
@@ -75,6 +77,12 @@ export interface RuntimeHostRoutineConfig {
   defaultTimeZone?: string;
 }
 
+export interface RuntimeHostStorageConfig {
+  driver?: 'file' | 'sqlite';
+  databasePath?: string;
+  busyTimeoutMs?: number;
+}
+
 export interface RuntimeHostConfig {
   dataDir: string;
   workerId?: string;
@@ -82,6 +90,7 @@ export interface RuntimeHostConfig {
   telegram?: RuntimeHostTelegramConfig;
   executors?: RuntimeHostExecutorConfig;
   routines?: RuntimeHostRoutineConfig;
+  storage?: RuntimeHostStorageConfig;
 }
 
 export interface AgentWorkerPassResult {
@@ -185,20 +194,40 @@ function agentRunEventSummary(event: AgentRunEvent): {
 }
 
 export class OpenTagWorkerHost {
-  readonly deliveryStore: FileDeliveryStore;
+  readonly deliveryStore: DeliveryStore;
   readonly memoryStore: ScopedFileMemoryStore;
   readonly routineStore: FileRoutineStore;
   private readonly config: RuntimeHostConfig;
   readonly threadConfigStore: FileThreadConfigStore;
   private readonly routineCommandService: RoutineCommandService;
+  private readonly sqliteStorage?: SqliteOpenTagStore;
   private readonly activeRuns = new Map<string, AbortController>();
   private workerPass: Promise<AgentWorkerPassResult> | undefined;
 
   constructor(config: RuntimeHostConfig) {
     this.config = config;
-    this.deliveryStore = new FileDeliveryStore(
-      path.join(config.dataDir, 'delivery'),
-    );
+    this.sqliteStorage =
+      config.storage?.driver === 'sqlite'
+        ? new SqliteOpenTagStore({
+            databasePath:
+              config.storage.databasePath ||
+              path.join(config.dataDir, 'opentag.sqlite'),
+            busyTimeoutMs: config.storage.busyTimeoutMs,
+            legacyDeliveryFile: path.join(
+              config.dataDir,
+              'delivery',
+              'delivery-state.json',
+            ),
+            legacyPairingFile: path.join(
+              config.dataDir,
+              'pairing',
+              'pairing-state.json',
+            ),
+          })
+        : undefined;
+    this.deliveryStore =
+      this.sqliteStorage?.deliveryStore ??
+      new FileDeliveryStore(path.join(config.dataDir, 'delivery'));
     this.memoryStore = new ScopedFileMemoryStore(
       path.join(config.dataDir, 'memory'),
     );
@@ -234,6 +263,22 @@ export class OpenTagWorkerHost {
     return this.activeRuns.size;
   }
 
+  storageStatus(): {
+    driver: 'file' | 'sqlite';
+    wal: boolean;
+    migration?: { deliveryImported: boolean; pairingImported: boolean };
+  } {
+    return {
+      driver: this.sqliteStorage ? 'sqlite' : 'file',
+      wal: Boolean(this.sqliteStorage),
+      migration: this.sqliteStorage?.migration,
+    };
+  }
+
+  close(): void {
+    this.sqliteStorage?.close();
+  }
+
   larkTransportStatus(): ReturnType<typeof larkTransportStatus> {
     return larkTransportStatus(this.config.lark);
   }
@@ -263,7 +308,7 @@ export class OpenTagWorkerHost {
 
   async recoverStaleAgentRuns(
     options: RecoverStaleAgentRunsOptions,
-  ): Promise<Awaited<ReturnType<FileDeliveryStore['recoverStaleAgentRuns']>>> {
+  ): Promise<Awaited<ReturnType<DeliveryStore['recoverStaleAgentRuns']>>> {
     return this.deliveryStore.recoverStaleAgentRuns(options);
   }
 

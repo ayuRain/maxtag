@@ -1,4 +1,4 @@
-import type { FileDeliveryStore } from './file-delivery-store.js';
+import type { DeliveryStore } from './file-delivery-store.js';
 import type { OutboundEnvelope } from './types.js';
 
 export interface DeliveryWorkerPassResult {
@@ -13,7 +13,7 @@ function errorMessage(error: unknown): string {
 }
 
 export async function runDeliveryWorkerPass(
-  store: FileDeliveryStore,
+  store: DeliveryStore,
   dispatch: (record: OutboundEnvelope) => Promise<string | undefined>,
   options?: { limit?: number },
 ): Promise<DeliveryWorkerPassResult> {

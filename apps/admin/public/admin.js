@@ -254,9 +254,10 @@ function renderWorkspaceHeader() {
       (runSummary.cancel_requested || 0),
   );
   const workerMode = state.capabilities?.runWorker?.mode || 'manual';
-  const executorMode = state.capabilities?.executorRuntime?.mode || 'dry-run';
+  const storageLabel =
+    state.capabilities?.storage?.driver === 'sqlite' ? 'SQLite WAL' : 'file';
   const activeClients = clients.filter((client) => client.status !== 'planned').length;
-  $('#runtime-label').textContent = `${activeClients} clients / ${executorMode} / ${workerMode}`;
+  $('#runtime-label').textContent = `${activeClients} clients / ${storageLabel} / ${workerMode}`;
 }
 
 function metric(value, label) {

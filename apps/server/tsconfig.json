@@ -14,7 +14,8 @@
     { "path": "../../packages/memory" },
     { "path": "../../packages/platform-lark" },
     { "path": "../../packages/platform-telegram" },
-    { "path": "../../packages/routines" }
+    { "path": "../../packages/routines" },
+    { "path": "../../packages/storage-sqlite" }
   ],
   "include": ["src/**/*.ts"]
 }

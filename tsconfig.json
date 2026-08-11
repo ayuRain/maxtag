@@ -13,6 +13,7 @@
     { "path": "packages/executor-claude" },
     { "path": "packages/runtime-host" },
     { "path": "packages/routines" },
+    { "path": "packages/storage-sqlite" },
     { "path": "packages/tools-github" },
     { "path": "apps/server" },
     { "path": "apps/worker" },

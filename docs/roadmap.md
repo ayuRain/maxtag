@@ -10,13 +10,14 @@
   real app bots.
 - Global/workspace/project/thread memory scopes.
 - Explicit scoped memory commands and admin API for remember, forget, and show.
-- File-backed outbox, inbound event ledger, turn delivery tracker, and
-  configured channel/project bindings.
-- File-backed Lark/Telegram pairing invitations with short-lived single-use
-  codes, hashed persistence, project route creation, revocation, and cascading
-  chat unbind.
+- SQLite WAL outbox, inbound event ledger, turn delivery tracker, and configured
+  channel/project bindings, with transactional claims across server and worker.
+- SQLite-backed Lark/Telegram pairing invitations with short-lived single-use
+  codes, hashed persistence, atomic project route creation, revocation, and
+  cascading chat unbind; existing JSON state imports on first startup.
 - Outbox recovery controls for stale `sending` records and scoped cancellation.
-- File-backed agent run ledger with status, cancel request, and timeline events.
+- SQLite WAL agent run ledger with status, cancel request, timeline events, and
+  restart-safe cross-process claims.
 - Durable run queue with inline worker claim, startup stale recovery, and manual
   worker/recovery API controls.
 - Standalone worker process that can claim the shared run queue while HTTP
@@ -45,8 +46,8 @@
 
 - Add workspace roles and project membership checks on top of the operator
   authentication boundary before public multi-tenant deployment.
-- Move pairing consumption and binding creation into one transactional database
-  operation before running multiple server replicas.
+- Add binding audit/export and workspace membership authorization around the
+  transactional pairing and binding operation.
 - Verify Lark callbacks with token/timestamp checks; add event decrypt before
   production encrypted callbacks.
 - Normalize group messages, mentions, files, images, and topic/thread metadata.
@@ -61,8 +62,8 @@
 - Send text replies and interactive progress cards through a real Lark app bot
   once credentials and scopes are configured.
 - Short-circuit duplicate Lark events by `event_id` or message id.
-- Persist inbound event idempotency and upgrade outbound deliveries from the
-  file-backed MVP to a worker-backed durable queue.
+- Add retention, compaction, and queue-depth metrics to the SQLite-backed inbound
+  ledger and worker-backed durable outbound queue.
 - Queue accepted Lark events quickly, then execute runs through the shared worker
   path instead of blocking callback delivery.
 - Keep operator recovery scoped to a run, thread, workspace, project, target, or
@@ -79,8 +80,8 @@
 - Add cross-process cancellation heartbeat for active runs.
 - Support turn steering while a run is active.
 - Attach artifacts: final message, file, patch, hosted report, PR link.
-- Move agent runs to resumable background workers with DB-backed timeline
-  storage.
+- Add resumable execution checkpoints and lease heartbeats so a replacement
+  worker can continue interrupted runs instead of restarting them from scratch.
 
 ## Phase 3: Access Bundles
 

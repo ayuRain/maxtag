@@ -83,12 +83,12 @@ export interface PairingInvitationFilter {
   limit?: number;
 }
 
-interface StoredPairingInvitation extends PairingInvitation {
+export interface StoredPairingInvitation extends PairingInvitation {
   codeHash: string;
   codeSalt: string;
 }
 
-interface PairingState {
+export interface PairingState {
   version: 1;
   invitations: StoredPairingInvitation[];
 }
@@ -96,8 +96,14 @@ interface PairingState {
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 8;
 
-function emptyState(): PairingState {
+export function createEmptyPairingState(): PairingState {
   return { version: 1, invitations: [] };
+}
+
+export function normalizePairingState(
+  parsed: Partial<PairingState>,
+): PairingState {
+  return { version: 1, invitations: parsed.invitations ?? [] };
 }
 
 function publicInvitation(
@@ -146,6 +152,43 @@ function invitationStatus(
   return invitation.status;
 }
 
+export function consumePairingCodeInState(
+  state: PairingState,
+  input: ConsumePairingCodeInput,
+  timestamp: string,
+): ConsumePairingCodeResult {
+  const code = normalizeCode(input.code);
+  if (code.length !== CODE_LENGTH) return { ok: false, reason: 'invalid_code' };
+  let match: StoredPairingInvitation | undefined;
+  for (const invitation of state.invitations) {
+    invitationStatus(invitation, timestamp);
+    if (matchesCode(invitation, code)) match = invitation;
+  }
+  if (!match) return { ok: false, reason: 'invalid_code' };
+  const invitation = publicInvitation(match);
+  if (match.platform !== input.platform) {
+    return { ok: false, reason: 'platform_mismatch', invitation };
+  }
+  if (match.status === 'expired') {
+    return { ok: false, reason: 'expired_code', invitation };
+  }
+  if (match.status === 'revoked') {
+    return { ok: false, reason: 'revoked_code', invitation };
+  }
+  if (match.status === 'consumed') {
+    return { ok: false, reason: 'consumed_code', invitation };
+  }
+
+  match.status = 'consumed';
+  match.consumedAt = timestamp;
+  match.consumedBy = {
+    channelId: input.channelId,
+    threadExternalId: input.threadExternalId,
+    actorId: input.actorId,
+  };
+  return { ok: true, invitation: publicInvitation(match) };
+}
+
 export class FilePairingStore {
   private readonly stateFile: string;
   private readonly ttlMs: number;
@@ -161,9 +204,11 @@ export class FilePairingStore {
       const parsed = JSON.parse(
         await fs.readFile(this.stateFile, 'utf8'),
       ) as Partial<PairingState>;
-      return { version: 1, invitations: parsed.invitations ?? [] };
+      return normalizePairingState(parsed);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyState();
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return createEmptyPairingState();
+      }
       throw error;
     }
   }
@@ -175,12 +220,12 @@ export class FilePairingStore {
     await fs.rename(temporary, this.stateFile);
   }
 
-  private async readState(): Promise<PairingState> {
+  protected async readState(): Promise<PairingState> {
     await this.mutationQueue;
     return this.load();
   }
 
-  private async mutate<T>(operation: (state: PairingState) => T): Promise<T> {
+  protected async mutate<T>(operation: (state: PairingState) => T): Promise<T> {
     const run = this.mutationQueue.then(async () => {
       const state = await this.load();
       const result = operation(state);
@@ -256,40 +301,10 @@ export class FilePairingStore {
     input: ConsumePairingCodeInput,
     at = new Date(),
   ): Promise<ConsumePairingCodeResult> {
-    const code = normalizeCode(input.code);
-    if (code.length !== CODE_LENGTH) return { ok: false, reason: 'invalid_code' };
     const timestamp = at.toISOString();
-
-    return this.mutate((state) => {
-      let match: StoredPairingInvitation | undefined;
-      for (const invitation of state.invitations) {
-        invitationStatus(invitation, timestamp);
-        if (matchesCode(invitation, code)) match = invitation;
-      }
-      if (!match) return { ok: false, reason: 'invalid_code' };
-      const invitation = publicInvitation(match);
-      if (match.platform !== input.platform) {
-        return { ok: false, reason: 'platform_mismatch', invitation };
-      }
-      if (match.status === 'expired') {
-        return { ok: false, reason: 'expired_code', invitation };
-      }
-      if (match.status === 'revoked') {
-        return { ok: false, reason: 'revoked_code', invitation };
-      }
-      if (match.status === 'consumed') {
-        return { ok: false, reason: 'consumed_code', invitation };
-      }
-
-      match.status = 'consumed';
-      match.consumedAt = timestamp;
-      match.consumedBy = {
-        channelId: input.channelId,
-        threadExternalId: input.threadExternalId,
-        actorId: input.actorId,
-      };
-      return { ok: true, invitation: publicInvitation(match) };
-    });
+    return this.mutate((state) =>
+      consumePairingCodeInState(state, input, timestamp),
+    );
   }
 
   async listInvitations(
@@ -365,3 +380,5 @@ export class FilePairingStore {
     });
   }
 }
+
+export type PairingStore = Pick<FilePairingStore, keyof FilePairingStore>;
