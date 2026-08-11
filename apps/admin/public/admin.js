@@ -12,6 +12,8 @@ const delivery = document.querySelector('#delivery');
 const recoverDeliveryButton = document.querySelector('#recover-delivery');
 const cancelRunButton = document.querySelector('#cancel-run');
 const cancelDeliveryButton = document.querySelector('#cancel-delivery');
+const runWorkerButton = document.querySelector('#run-worker');
+const recoverRunsButton = document.querySelector('#recover-runs');
 const runs = document.querySelector('#runs');
 const bindings = document.querySelector('#bindings');
 const bindingForm = document.querySelector('#binding-form');
@@ -169,6 +171,12 @@ function renderMetricStrip(keys, summary) {
 function renderDelivery(data) {
   delivery.replaceChildren();
 
+  appendText(delivery, 'subhead', 'Agent Runs');
+  delivery.append(renderMetricStrip(
+    ['queued', 'running', 'cancel_requested', 'completed', 'failed', 'cancelled'],
+    data?.summary?.agentRuns,
+  ));
+
   appendText(delivery, 'subhead', 'Outbound');
   delivery.append(renderMetricStrip(
     ['delivered', 'pending', 'sending', 'failed', 'cancelled'],
@@ -235,7 +243,10 @@ function renderRuns(items) {
     appendText(
       row,
       'row-detail',
-      `${item.workspaceId || 'workspace'} / ${item.projectId || 'project'}`,
+      [
+        `${item.workspaceId || 'workspace'} / ${item.projectId || 'project'}`,
+        item.workerId ? `worker ${item.workerId}` : '',
+      ].filter(Boolean).join(' · '),
     );
     return row;
   });
@@ -258,7 +269,8 @@ async function refreshCapabilities() {
   const activeClients = (data.clients || []).length;
   const activeScopes = (data.memoryScopes || []).length;
   const transport = data.larkTransport?.mode || 'memory';
-  capabilityLine.textContent = `${lark?.label || 'Lark'} ${lark?.status || 'ready'} · ${transport} transport · ${activeClients} clients · ${activeScopes} memory scopes`;
+  const worker = data.runWorker?.enabled ? data.runWorker?.mode || 'inline' : 'manual';
+  capabilityLine.textContent = `${lark?.label || 'Lark'} ${lark?.status || 'ready'} · ${transport} transport · ${worker} worker · ${activeClients} clients · ${activeScopes} memory scopes`;
   renderClients(data.clients || []);
   renderMemoryScopes(data.memoryScopes || []);
   renderParity(data.parity || []);
@@ -350,6 +362,49 @@ async function cancelLatestRun() {
   } finally {
     cancelRunButton.disabled = false;
     cancelRunButton.textContent = 'Cancel run';
+  }
+}
+
+async function runWorkerPass() {
+  runWorkerButton.disabled = true;
+  runWorkerButton.textContent = 'Working';
+  try {
+    const data = await getJson('/v1/runs/worker-pass', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ limit: 1 }),
+    });
+    renderDelivery(data.delivery);
+    await refreshRuns();
+    routeLine.textContent = `worker claimed ${data.result?.claimed || 0}`;
+  } catch (error) {
+    routeLine.textContent = error.message;
+  } finally {
+    runWorkerButton.disabled = false;
+    runWorkerButton.textContent = 'Worker pass';
+  }
+}
+
+async function recoverRuns() {
+  recoverRunsButton.disabled = true;
+  recoverRunsButton.textContent = 'Recovering';
+  try {
+    const data = await getJson('/v1/runs/recover-stale', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        olderThanMs: 120000,
+        reason: 'admin_recover_stale_runs',
+      }),
+    });
+    renderDelivery(data.delivery);
+    await refreshRuns();
+    routeLine.textContent = `runs requeued ${data.result?.requeued || 0}`;
+  } catch (error) {
+    routeLine.textContent = error.message;
+  } finally {
+    recoverRunsButton.disabled = false;
+    recoverRunsButton.textContent = 'Recover runs';
   }
 }
 
@@ -501,6 +556,14 @@ cancelRunButton.addEventListener('click', () => {
 
 cancelDeliveryButton.addEventListener('click', () => {
   void cancelProjectDelivery();
+});
+
+runWorkerButton.addEventListener('click', () => {
+  void runWorkerPass();
+});
+
+recoverRunsButton.addEventListener('click', () => {
+  void recoverRuns();
 });
 
 bindingForm.addEventListener('submit', (event) => {

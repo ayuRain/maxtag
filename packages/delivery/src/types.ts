@@ -126,6 +126,8 @@ export interface AgentRunRecord {
   id: string;
   status: AgentRunStatus;
   platform: PlatformKind;
+  thread?: SourceThread;
+  message?: SourceMessage;
   threadId: string;
   threadExternalId: string;
   workspaceId?: string;
@@ -136,6 +138,9 @@ export interface AgentRunRecord {
   executorId?: string;
   transportMode?: string;
   title?: string;
+  inboundEventId?: string;
+  workerId?: string;
+  claimedAt?: string;
   summary?: string;
   lastError?: string;
   createdAt: string;
@@ -161,10 +166,30 @@ export interface CreateAgentRunInput {
   runId: string;
   thread: SourceThread;
   message?: SourceMessage;
+  inboundEventId?: string;
   bindingId?: string;
   executorId?: string;
   transportMode?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface ClaimAgentRunsOptions {
+  limit?: number;
+  workerId?: string;
+  now?: Date;
+}
+
+export interface RecoverStaleAgentRunsOptions {
+  olderThanMs?: number;
+  now?: Date;
+  limit?: number;
+  reason?: string;
+}
+
+export interface RecoverStaleAgentRunsResult {
+  requeued: number;
+  cancelled: number;
+  records: AgentRunRecord[];
 }
 
 export interface ListAgentRunsOptions {

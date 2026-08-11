@@ -14,7 +14,7 @@ many clients.
 | Scoped memory | Global, workspace, project, and thread file scopes; Lark groups route to project scope; remember/forget commands |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
 | Durable delivery skeleton | File-backed outbox, turn delivery records, scoped cancel, stale recovery, and bindings |
-| Agent run ledger | File-backed run status, timeline events, and cancel requests |
+| Agent run queue | File-backed run status, timeline events, cancel requests, inline worker claim, and stale recovery |
 | Inbound callback ledger | Lark token/timestamp checks, event idempotency, and duplicate short-circuit |
 | Executor boundary | Codex dry-run and Claude placeholder behind `Executor` |
 
@@ -23,7 +23,7 @@ many clients.
 | AgentDock capability | OpenTag next step |
 | --- | --- |
 | Durable IM outbox | Replace file store with SQLite/Postgres claim/retry worker |
-| Async run execution | Move from synchronous request handling to resumable background workers |
+| Async run execution | Split inline worker into independently deployed workers with durable resume |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |
 | Real Lark smoke | Verify app scopes, bot-in-chat permissions, text replies, and card patching against a live app |
 | Binding governance | Add permission checks, audit history, and import/export for configured bindings |

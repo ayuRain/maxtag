@@ -62,6 +62,8 @@ packages/ui-cards           Progress/checklist card models
   selected run/thread/workspace/project scope.
 - Agent runs are recorded in a file-backed run ledger with status, timeline
   events, and cancel requests.
+- Agent execution can be enqueued into a durable run queue and claimed by an
+  inline worker, with stale run recovery on startup and through the admin API.
 - Real Lark delivery can be enabled with `OPENTAG_LARK_TRANSPORT=http`,
   `OPENTAG_LARK_APP_ID`, and `OPENTAG_LARK_APP_SECRET`; use
   `OPENTAG_LARK_DOMAIN=lark` for international Lark.
@@ -88,7 +90,8 @@ packages/ui-cards           Progress/checklist card models
 5. Thread-level agent identity and access bundle.
 6. Durable outbound delivery, retry, scoped cancel, and stale recovery.
 7. GitHub draft PR loop.
-8. Async runner, run resume, and production database backing.
+8. Production database backing, independent worker deployment, and full run
+   resume.
 
 ## Local Build
 

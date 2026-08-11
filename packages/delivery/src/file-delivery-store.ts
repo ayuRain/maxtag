@@ -8,6 +8,7 @@ import type {
   AgentRunTimelineEvent,
   CancelOutboxOptions,
   CancelOutboxResult,
+  ClaimAgentRunsOptions,
   ClaimOutboundOptions,
   ConfigureThreadBindingInput,
   CreateAgentRunInput,
@@ -23,6 +24,8 @@ import type {
   RecordInboundEventResult,
   RecoverStaleOutboxOptions,
   RecoverStaleOutboxResult,
+  RecoverStaleAgentRunsOptions,
+  RecoverStaleAgentRunsResult,
   ThreadBinding,
   ThreadBindingScope,
   TurnDeliveryRecord,
@@ -75,6 +78,38 @@ function copyBinding(binding: ThreadBinding): ThreadBinding {
     ...binding,
     metadata: binding.metadata ? { ...binding.metadata } : undefined,
   };
+}
+
+function copyRun(run: AgentRunRecord): AgentRunRecord {
+  return {
+    ...run,
+    thread: run.thread
+      ? {
+          ...run.thread,
+          metadata: run.thread.metadata ? { ...run.thread.metadata } : undefined,
+        }
+      : undefined,
+    message: run.message
+      ? {
+          ...run.message,
+          actor: { ...run.message.actor },
+          attachments: run.message.attachments
+            ? run.message.attachments.map((attachment) => ({
+                ...attachment,
+                metadata: attachment.metadata
+                  ? { ...attachment.metadata }
+                  : undefined,
+              }))
+            : undefined,
+          metadata: run.message.metadata ? { ...run.message.metadata } : undefined,
+        }
+      : undefined,
+    metadata: run.metadata ? { ...run.metadata } : undefined,
+  };
+}
+
+function isTerminalRunStatus(status: AgentRunStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
 function inboundEventId(platform: string, externalId: string): string {
@@ -430,11 +465,13 @@ export class FileDeliveryStore {
     return this.mutate((state) => {
       const timestamp = now();
       const existing = state.agentRuns.find((run) => run.id === input.runId);
-      if (existing) return { ...existing };
+      if (existing) return copyRun(existing);
       const record: AgentRunRecord = {
         id: input.runId,
         status: 'queued',
         platform: input.thread.platform,
+        thread: input.thread,
+        message: input.message,
         threadId: input.thread.id,
         threadExternalId: input.thread.externalId,
         workspaceId: input.thread.workspaceId,
@@ -445,6 +482,7 @@ export class FileDeliveryStore {
         executorId: input.executorId,
         transportMode: input.transportMode,
         title: input.thread.title,
+        inboundEventId: input.inboundEventId,
         createdAt: timestamp,
         updatedAt: timestamp,
         metadata: input.metadata,
@@ -458,7 +496,100 @@ export class FileDeliveryStore {
           bindingId: input.bindingId,
         },
       });
-      return { ...record };
+      return copyRun(record);
+    });
+  }
+
+  async claimQueuedAgentRuns(
+    options: ClaimAgentRunsOptions = {},
+  ): Promise<AgentRunRecord[]> {
+    return this.mutate((state) => {
+      const limit = Math.max(1, Math.min(options.limit ?? 1, 20));
+      const timestamp = (options.now ?? new Date()).toISOString();
+      const claimed: AgentRunRecord[] = [];
+      const ordered = [...state.agentRuns].sort((a, b) =>
+        a.createdAt.localeCompare(b.createdAt),
+      );
+
+      for (const run of ordered) {
+        if (claimed.length >= limit) break;
+        if (run.status !== 'queued') continue;
+        if (!run.thread || !run.message) {
+          run.status = 'failed';
+          run.failedAt = timestamp;
+          run.lastError = 'missing_saved_run_payload';
+          run.updatedAt = timestamp;
+          this.appendAgentRunEventInState(state, run.id, 'failed', {
+            message: run.lastError,
+          });
+          continue;
+        }
+
+        run.status = 'running';
+        run.startedAt = run.startedAt ?? timestamp;
+        run.claimedAt = timestamp;
+        run.workerId = options.workerId;
+        run.updatedAt = timestamp;
+        this.appendAgentRunEventInState(state, run.id, 'started', {
+          message: 'Agent run claimed by worker',
+          metadata: {
+            workerId: options.workerId,
+          },
+        });
+        claimed.push(copyRun(run));
+      }
+
+      return claimed;
+    });
+  }
+
+  async recoverStaleAgentRuns(
+    options: RecoverStaleAgentRunsOptions = {},
+  ): Promise<RecoverStaleAgentRunsResult> {
+    return this.mutate((state) => {
+      const timestamp = options.now ?? new Date();
+      const cutoff = new Date(
+        timestamp.getTime() - (options.olderThanMs ?? 120_000),
+      ).toISOString();
+      const nowIso = timestamp.toISOString();
+      const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
+      const result: RecoverStaleAgentRunsResult = {
+        requeued: 0,
+        cancelled: 0,
+        records: [],
+      };
+
+      for (const run of state.agentRuns) {
+        if (result.records.length >= limit) break;
+        if (run.updatedAt > cutoff) continue;
+        if (run.status === 'running') {
+          const reason = options.reason ?? 'stale_running_recovered';
+          run.status = 'queued';
+          run.workerId = undefined;
+          run.claimedAt = undefined;
+          run.lastError = reason;
+          run.updatedAt = nowIso;
+          this.appendAgentRunEventInState(state, run.id, 'log', {
+            message: reason,
+            metadata: { recoveredFrom: 'running' },
+          });
+          result.requeued += 1;
+          result.records.push(copyRun(run));
+        } else if (run.status === 'cancel_requested') {
+          const reason = options.reason ?? 'stale_cancel_request_finalized';
+          run.status = 'cancelled';
+          run.cancelledAt = nowIso;
+          run.lastError = reason;
+          run.updatedAt = nowIso;
+          this.appendAgentRunEventInState(state, run.id, 'cancelled', {
+            message: reason,
+          });
+          result.cancelled += 1;
+          result.records.push(copyRun(run));
+        }
+      }
+
+      return result;
     });
   }
 
@@ -510,13 +641,25 @@ export class FileDeliveryStore {
       const run = state.agentRuns.find((item) => item.id === id);
       if (!run) return undefined;
       if (
-        run.status === 'completed' ||
-        run.status === 'failed' ||
-        run.status === 'cancelled'
+        isTerminalRunStatus(run.status)
       ) {
-        return { ...run };
+        return copyRun(run);
       }
       const timestamp = now();
+      if (run.status === 'queued') {
+        run.status = 'cancelled';
+        run.cancelRequestedAt = timestamp;
+        run.cancelledAt = timestamp;
+        run.lastError = reason ?? run.lastError;
+        run.updatedAt = timestamp;
+        this.appendAgentRunEventInState(state, id, 'cancel_requested', {
+          message: reason ?? 'Cancel requested',
+        });
+        this.appendAgentRunEventInState(state, id, 'cancelled', {
+          message: reason ?? 'Queued run cancelled',
+        });
+        return copyRun(run);
+      }
       run.status = 'cancel_requested';
       run.cancelRequestedAt = timestamp;
       run.lastError = reason ?? run.lastError;
@@ -524,7 +667,7 @@ export class FileDeliveryStore {
       this.appendAgentRunEventInState(state, id, 'cancel_requested', {
         message: reason ?? 'Cancel requested',
       });
-      return { ...run };
+      return copyRun(run);
     });
   }
 
@@ -559,7 +702,7 @@ export class FileDeliveryStore {
   async getAgentRun(id: string): Promise<AgentRunRecord | undefined> {
     const state = await this.readState();
     const run = state.agentRuns.find((item) => item.id === id);
-    return run ? { ...run } : undefined;
+    return run ? copyRun(run) : undefined;
   }
 
   async listAgentRuns(
@@ -574,7 +717,7 @@ export class FileDeliveryStore {
       .filter((item) => !options.threadId || item.threadId === options.threadId)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, limit)
-      .map((item) => ({ ...item }));
+      .map(copyRun);
   }
 
   async listAgentRunEvents(
@@ -841,6 +984,9 @@ export class FileDeliveryStore {
     return this.mutate((state) => {
       const run = state.agentRuns.find((item) => item.id === id);
       if (!run) return undefined;
+      if (isTerminalRunStatus(run.status) && run.status !== status) {
+        return copyRun(run);
+      }
       const timestamp = now();
       run.status = status;
       run.startedAt = input?.startedAt ?? run.startedAt;
@@ -858,7 +1004,7 @@ export class FileDeliveryStore {
           metadata: input.event.metadata,
         });
       }
-      return { ...run };
+      return copyRun(run);
     });
   }
 

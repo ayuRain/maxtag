@@ -270,7 +270,15 @@ select:focus {
   gap: 8px;
 }
 
-.delivery-actions button {
+.run-actions {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  gap: 8px;
+}
+
+.delivery-actions button,
+.run-actions button {
   min-width: 0;
 }
 
@@ -592,7 +600,8 @@ pre {
 
   .binding-actions,
   .memory-actions,
-  .delivery-actions {
+  .delivery-actions,
+  .run-actions {
     grid-template-columns: 1fr;
     justify-items: start;
   }

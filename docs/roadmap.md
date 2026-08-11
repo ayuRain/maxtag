@@ -14,6 +14,8 @@
   configured channel/project bindings.
 - Outbox recovery controls for stale `sending` records and scoped cancellation.
 - File-backed agent run ledger with status, cancel request, and timeline events.
+- Durable run queue with inline worker claim, startup stale recovery, and manual
+  worker/recovery API controls.
 - Memory and GitHub tool contracts.
 
 ## Phase 1: Lark Tag MVP
@@ -32,6 +34,8 @@
 - Short-circuit duplicate Lark events by `event_id` or message id.
 - Persist inbound event idempotency and upgrade outbound deliveries from the
   file-backed MVP to a worker-backed durable queue.
+- Queue accepted Lark events quickly, then execute runs through the shared worker
+  path instead of blocking callback delivery.
 - Keep operator recovery scoped to a run, thread, workspace, project, target, or
   kind so one noisy topic can be stopped without disrupting other projects.
 - Keep the Lark implementation behind `PlatformAdapter`; do not let Lark field
@@ -40,6 +44,7 @@
 ## Phase 2: Agent Runs
 
 - Run Codex and Claude through a common `Executor` contract.
+- Split inline run execution into independent worker processes.
 - Support turn steering while a run is active.
 - Attach artifacts: final message, file, patch, hosted report, PR link.
 - Move agent runs to resumable background workers with DB-backed timeline

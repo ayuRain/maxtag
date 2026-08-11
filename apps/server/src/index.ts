@@ -17,7 +17,9 @@ import {
   TrackedLarkTransport,
   runDeliveryWorkerPass,
   type CancelOutboxOptions,
+  type AgentRunRecord,
   type ConfigureThreadBindingInput,
+  type RecoverStaleAgentRunsOptions,
   type RecoverStaleOutboxOptions,
   type ThreadActivationMode,
   type ThreadBinding,
@@ -56,9 +58,16 @@ const larkVerificationToken = process.env.OPENTAG_LARK_VERIFICATION_TOKEN;
 const larkCallbackMaxSkewSeconds = Number(
   process.env.OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS || 300,
 );
+const agentWorkerMode = process.env.OPENTAG_AGENT_WORKER || 'inline';
+const agentWorkerEnabled = agentWorkerMode !== 'manual';
+const agentWorkerIntervalMs = Number(process.env.OPENTAG_AGENT_WORKER_INTERVAL_MS || 2000);
+const agentWorkerStaleMs = Number(process.env.OPENTAG_AGENT_WORKER_STALE_MS || 120_000);
+const agentWorkerId = `opentag-${process.pid}`;
 const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
 const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
 const activeRuns = new Map<string, AbortController>();
+let agentWorkerTimer: NodeJS.Timeout | undefined;
+let agentWorkerPass: Promise<AgentWorkerPassResult> | undefined;
 const threadConfigStore = new StaticThreadConfigStore({
   identity: {
     displayName: 'OpenTag',
@@ -172,8 +181,8 @@ const capabilityManifest = {
     {
       capability: 'Long-running work',
       agentdock: 'scheduled tasks and dynamic workflows',
-      opentag: 'executor interface only',
-      status: 'planned',
+      opentag: 'durable run queue with inline worker and stale recovery',
+      status: 'partial',
     },
   ],
 };
@@ -391,6 +400,16 @@ function coerceRecoverStaleInput(
   return {
     ...coerceOutboxFilter(body),
     olderThanMs: numberValue(body, 'olderThanMs', 120_000),
+  };
+}
+
+function coerceRecoverStaleAgentRunsInput(
+  body: Record<string, unknown>,
+): RecoverStaleAgentRunsOptions {
+  return {
+    olderThanMs: numberValue(body, 'olderThanMs', agentWorkerStaleMs),
+    limit: numberValue(body, 'limit', 100),
+    reason: stringValue(body, 'reason'),
   };
 }
 
@@ -633,19 +652,33 @@ async function applyMemoryCommand(input: {
   };
 }
 
-async function runDryMessage(input: {
+interface QueuedMessageRun {
+  run: AgentRunRecord;
+  route: Record<string, unknown>;
+  memoryCommand?: {
+    kind: ParsedMemoryCommand['kind'];
+    scope: MemoryScopeKind;
+  };
+  larkTransport: {
+    mode: 'memory' | 'http';
+  };
+}
+
+interface AgentWorkerPassResult {
+  claimed: number;
+  completed: number;
+  failed: number;
+  runs: AgentRunRecord[];
+}
+
+async function enqueueMessageRun(input: {
   thread: SourceThread;
   message: SourceMessage;
 }, options?: {
   inboundEventId?: string;
-}): Promise<Record<string, unknown>> {
-  const larkTransport = createLarkTransportForRun();
-  const trackedTransport = new TrackedLarkTransport(
-    larkTransport.transport,
-    deliveryStore,
-  );
-  const runtime = createRuntimeForDryRun(trackedTransport);
-  const runId = randomUUID();
+  runId?: string;
+}): Promise<QueuedMessageRun> {
+  const runId = options?.runId ?? randomUUID();
   const routed = await routeMessage(input);
   const observedBinding = await deliveryStore.upsertThreadBinding({
     thread: routed.thread,
@@ -655,6 +688,7 @@ async function runDryMessage(input: {
     requireMention: routed.binding?.requireMention,
   });
   const routeBinding = routed.binding ?? observedBinding;
+  const larkTransport = larkTransportStatus();
   const route = {
     workspaceId: routed.thread.workspaceId,
     projectId: routed.thread.projectId,
@@ -668,25 +702,112 @@ async function runDryMessage(input: {
   const memoryCommand = parseMemoryCommand(routed.message.text, {
     defaultScope: memoryCommandDefaultScope(routed.thread),
   });
-  await deliveryStore.createAgentRun({
+  const run = await deliveryStore.createAgentRun({
     runId,
     thread: routed.thread,
     message: routed.message,
+    inboundEventId: options?.inboundEventId,
     bindingId: routeBinding.id,
     executorId: memoryCommand ? 'memory-command' : 'codex',
-    transportMode: larkTransport.mode,
+    transportMode: String(larkTransport.mode),
     metadata: {
       memoryCommand: memoryCommand
         ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
         : undefined,
     },
   });
+
+  return {
+    run,
+    route,
+    memoryCommand: memoryCommand
+      ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
+      : undefined,
+    larkTransport: { mode: larkTransport.mode as 'memory' | 'http' },
+  };
+}
+
+async function markRunInboundProcessed(run: AgentRunRecord): Promise<void> {
+  if (!run.inboundEventId || !run.thread || !run.message) return;
+  await deliveryStore.markInboundEventProcessed(run.inboundEventId, {
+    workspaceId: run.thread.workspaceId,
+    projectId: run.thread.projectId,
+    threadId: run.thread.id,
+    messageId: run.message.id,
+  });
+}
+
+async function markRunInboundFailed(
+  run: AgentRunRecord,
+  error: string,
+): Promise<void> {
+  if (!run.inboundEventId) return;
+  await deliveryStore.markInboundEventFailed(run.inboundEventId, error);
+}
+
+function runRoute(run: AgentRunRecord): Record<string, unknown> {
+  return {
+    workspaceId: run.workspaceId,
+    projectId: run.projectId,
+    threadId: run.threadId,
+    platform: run.platform,
+    bindingId: run.bindingId,
+    workerId: run.workerId,
+  };
+}
+
+async function executeAgentRun(
+  initialRun: AgentRunRecord,
+  options?: { alreadyClaimed?: boolean },
+): Promise<Record<string, unknown>> {
+  const runId = initialRun.id;
+  if (!initialRun.thread || !initialRun.message) {
+    const message = 'missing_saved_run_payload';
+    await deliveryStore.markAgentRunFailed(runId, message);
+    throw new Error(message);
+  }
+  if (initialRun.status === 'cancel_requested') {
+    await deliveryStore.markAgentRunCancelled(runId, 'cancel_requested_before_start');
+    return {
+      run: await deliveryStore.getAgentRun(runId),
+      route: runRoute(initialRun),
+      delivery: await deliverySnapshot(20),
+    };
+  }
+  if (!options?.alreadyClaimed) {
+    const runningRun = await deliveryStore.markAgentRunRunning(runId);
+    if (runningRun?.status === 'cancelled') {
+      return {
+        run: runningRun,
+        route: runRoute(runningRun),
+        delivery: await deliverySnapshot(20),
+      };
+    }
+  }
+
+  let larkTransport: ReturnType<typeof createLarkTransportForRun>;
+  let trackedTransport: TrackedLarkTransport;
+  try {
+    larkTransport = createLarkTransportForRun();
+    trackedTransport = new TrackedLarkTransport(
+      larkTransport.transport,
+      deliveryStore,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await deliveryStore.markAgentRunFailed(runId, message);
+    await markRunInboundFailed(initialRun, message);
+    throw error;
+  }
+  const memoryCommand = parseMemoryCommand(initialRun.message.text, {
+    defaultScope: memoryCommandDefaultScope(initialRun.thread),
+  });
+
   if (memoryCommand) {
     try {
-      await deliveryStore.markAgentRunRunning(runId);
       const commandResult = await applyMemoryCommand({
         command: memoryCommand,
-        thread: routed.thread,
+        thread: initialRun.thread,
       });
       await deliveryStore.appendAgentRunEvent(runId, 'memory_command', {
         message: String(commandResult.summary),
@@ -696,24 +817,17 @@ async function runDryMessage(input: {
         },
       });
       await trackedTransport.sendText({
-        chatId: routed.thread.channelId || routed.thread.externalId,
-        rootId: routed.thread.rootMessageId,
-        replyToMessageId: routed.message.id,
+        chatId: initialRun.thread.channelId || initialRun.thread.externalId,
+        rootId: initialRun.thread.rootMessageId,
+        replyToMessageId: initialRun.message.id,
         text: String(commandResult.summary),
         metadata: {
           runId,
-          thread: routed.thread,
+          thread: initialRun.thread,
           stage: 'thread-reply',
         },
       });
-      if (options?.inboundEventId) {
-        await deliveryStore.markInboundEventProcessed(options.inboundEventId, {
-          workspaceId: observedBinding.workspaceId,
-          projectId: observedBinding.projectId,
-          threadId: routed.thread.id,
-          messageId: routed.message.id,
-        });
-      }
+      await markRunInboundProcessed(initialRun);
       await deliveryStore.markAgentRunCompleted(
         runId,
         String(commandResult.summary),
@@ -724,7 +838,7 @@ async function runDryMessage(input: {
           artifacts: [],
         },
         run: await deliveryStore.getAgentRun(runId),
-        route,
+        route: runRoute(initialRun),
         memoryCommand: {
           kind: memoryCommand.kind,
           scope: memoryCommand.scope,
@@ -742,24 +856,19 @@ async function runDryMessage(input: {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await deliveryStore.markAgentRunFailed(runId, message);
-      if (options?.inboundEventId) {
-        await deliveryStore.markInboundEventFailed(
-          options.inboundEventId,
-          message,
-        );
-      }
+      await markRunInboundFailed(initialRun, message);
       throw error;
     }
   }
-  let result;
+
+  const runtime = createRuntimeForDryRun(trackedTransport);
   const abortController = new AbortController();
   activeRuns.set(runId, abortController);
   try {
-    await deliveryStore.markAgentRunRunning(runId);
-    result = await runtime.handleMessage({
+    const result = await runtime.handleMessage({
       runId,
-      thread: routed.thread,
-      message: routed.message,
+      thread: initialRun.thread,
+      message: initialRun.message,
       abortSignal: abortController.signal,
       onEvent: async (event) => {
         await deliveryStore.appendAgentRunEvent(
@@ -769,15 +878,21 @@ async function runDryMessage(input: {
         );
       },
     });
-    if (options?.inboundEventId) {
-      await deliveryStore.markInboundEventProcessed(options.inboundEventId, {
-        workspaceId: observedBinding.workspaceId,
-        projectId: observedBinding.projectId,
-        threadId: routed.thread.id,
-        messageId: routed.message.id,
-      });
-    }
+    await markRunInboundProcessed(initialRun);
     await deliveryStore.markAgentRunCompleted(runId, result.summary);
+    return {
+      result,
+      run: await deliveryStore.getAgentRun(runId),
+      route: runRoute(initialRun),
+      delivery: await deliverySnapshot(20),
+      larkTransport: { mode: larkTransport.mode },
+      larkDryRun: larkTransport.dryRun
+        ? {
+            texts: larkTransport.dryRun.texts,
+            cards: larkTransport.dryRun.cards,
+          }
+        : undefined,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (abortController.signal.aborted) {
@@ -785,30 +900,71 @@ async function runDryMessage(input: {
     } else {
       await deliveryStore.markAgentRunFailed(runId, message);
     }
-    if (options?.inboundEventId) {
-      await deliveryStore.markInboundEventFailed(
-        options.inboundEventId,
-        message,
-      );
-    }
+    await markRunInboundFailed(initialRun, message);
     throw error;
   } finally {
     activeRuns.delete(runId);
   }
-  const delivery = await deliverySnapshot(20);
+}
+
+async function runMessageSync(input: {
+  thread: SourceThread;
+  message: SourceMessage;
+}, options?: {
+  inboundEventId?: string;
+}): Promise<Record<string, unknown>> {
+  const queued = await enqueueMessageRun(input, options);
+  const result = await executeAgentRun(queued.run);
   return {
-    result,
-    run: await deliveryStore.getAgentRun(runId),
-    route,
-    delivery,
-    larkTransport: { mode: larkTransport.mode },
-    larkDryRun: larkTransport.dryRun
-      ? {
-          texts: larkTransport.dryRun.texts,
-          cards: larkTransport.dryRun.cards,
-        }
-      : undefined,
+    ...result,
+    route: queued.route,
   };
+}
+
+async function runAgentWorkerPass(
+  limit = 1,
+): Promise<AgentWorkerPassResult> {
+  if (agentWorkerPass) return agentWorkerPass;
+  agentWorkerPass = (async () => {
+    const claimed = await deliveryStore.claimQueuedAgentRuns({
+      limit,
+      workerId: agentWorkerId,
+    });
+    const result: AgentWorkerPassResult = {
+      claimed: claimed.length,
+      completed: 0,
+      failed: 0,
+      runs: [],
+    };
+    for (const run of claimed) {
+      try {
+        await executeAgentRun(run, { alreadyClaimed: true });
+        result.completed += 1;
+      } catch {
+        result.failed += 1;
+      } finally {
+        const latest = await deliveryStore.getAgentRun(run.id);
+        if (latest) result.runs.push(latest);
+      }
+    }
+    return result;
+  })();
+  try {
+    return await agentWorkerPass;
+  } finally {
+    agentWorkerPass = undefined;
+  }
+}
+
+function scheduleAgentWorkerPass(delayMs = 0): void {
+  if (!agentWorkerEnabled || agentWorkerTimer || agentWorkerPass) return;
+  agentWorkerTimer = setTimeout(() => {
+    agentWorkerTimer = undefined;
+    void runAgentWorkerPass(1).catch((error) => {
+      console.error('OpenTag agent worker pass failed', error);
+    });
+  }, delayMs);
+  agentWorkerTimer.unref?.();
 }
 
 const server = createServer(async (request, response) => {
@@ -816,7 +972,16 @@ const server = createServer(async (request, response) => {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
 
     if (request.method === 'GET' && url.pathname === '/health') {
-      sendJson(response, 200, { ok: true, service: 'opentag-server' });
+      sendJson(response, 200, {
+        ok: true,
+        service: 'opentag-server',
+        worker: {
+          mode: agentWorkerMode,
+          enabled: agentWorkerEnabled,
+          activeRuns: activeRuns.size,
+          passRunning: Boolean(agentWorkerPass),
+        },
+      });
       return;
     }
 
@@ -839,6 +1004,14 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         ...capabilityManifest,
         larkTransport: larkTransportStatus(),
+        runWorker: {
+          mode: agentWorkerMode,
+          enabled: agentWorkerEnabled,
+          intervalMs: agentWorkerIntervalMs,
+          staleMs: agentWorkerStaleMs,
+          activeRuns: activeRuns.size,
+          passRunning: Boolean(agentWorkerPass),
+        },
       });
       return;
     }
@@ -972,6 +1145,29 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'POST' && url.pathname === '/v1/runs/worker-pass') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const result = await runAgentWorkerPass(numberValue(body, 'limit', 1));
+      sendJson(response, 200, {
+        result,
+        delivery: await deliverySnapshot(20),
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/runs/recover-stale') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const result = await deliveryStore.recoverStaleAgentRuns(
+        coerceRecoverStaleAgentRunsInput(body),
+      );
+      if (result.requeued > 0) scheduleAgentWorkerPass();
+      sendJson(response, 200, {
+        result,
+        delivery: await deliverySnapshot(20),
+      });
+      return;
+    }
+
     if (request.method === 'GET' && url.pathname === '/v1/runs') {
       const query = Object.fromEntries(url.searchParams.entries());
       sendJson(response, 200, {
@@ -1048,6 +1244,10 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'POST' && url.pathname === '/v1/dev/messages') {
       const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const query = Object.fromEntries(url.searchParams.entries());
+      const asyncRequested =
+        booleanValue({ ...query, ...body }, 'async', false) ||
+        stringValue(body, 'mode') === 'async';
       const normalized = coerceDevMessage(body);
       const inbound = await deliveryStore.recordInboundEvent({
         platform: 'lark',
@@ -1058,11 +1258,22 @@ const server = createServer(async (request, response) => {
         threadId: normalized.thread.id,
         messageId: normalized.message.id,
       });
-      sendJson(
-        response,
-        200,
-        await runDryMessage(normalized, { inboundEventId: inbound.record.id }),
-      );
+      if (asyncRequested) {
+        const queued = await enqueueMessageRun(normalized, {
+          inboundEventId: inbound.record.id,
+        });
+        scheduleAgentWorkerPass();
+        sendJson(response, 202, {
+          accepted: true,
+          queued: true,
+          ...queued,
+          delivery: await deliverySnapshot(20),
+        });
+        return;
+      }
+      sendJson(response, 200, await runMessageSync(normalized, {
+        inboundEventId: inbound.record.id,
+      }));
       return;
     }
 
@@ -1151,16 +1362,16 @@ const server = createServer(async (request, response) => {
         });
         return;
       }
-      sendJson(
-        response,
-        200,
-        {
-          accepted: true,
-          ...(await runDryMessage(routed, {
-            inboundEventId: inbound.record.id,
-          })),
-        },
-      );
+      const queued = await enqueueMessageRun(routed, {
+        inboundEventId: inbound.record.id,
+      });
+      scheduleAgentWorkerPass();
+      sendJson(response, 202, {
+        accepted: true,
+        queued: true,
+        ...queued,
+        delivery: await deliverySnapshot(20),
+      });
       return;
     }
 
@@ -1175,4 +1386,23 @@ const server = createServer(async (request, response) => {
 
 server.listen(port, host, () => {
   console.log(`OpenTag server listening on http://${host}:${port}`);
+  void deliveryStore.recoverStaleAgentRuns({
+    olderThanMs: agentWorkerStaleMs,
+    reason: 'server_startup_recovered_stale_run',
+  }).then((result) => {
+    if (result.requeued > 0 || result.cancelled > 0) {
+      console.log(
+        `OpenTag recovered agent runs requeued=${result.requeued} cancelled=${result.cancelled}`,
+      );
+    }
+    scheduleAgentWorkerPass();
+  }).catch((error) => {
+    console.error('OpenTag failed to recover stale agent runs', error);
+  });
+  if (agentWorkerEnabled) {
+    const interval = setInterval(() => {
+      scheduleAgentWorkerPass();
+    }, agentWorkerIntervalMs);
+    interval.unref?.();
+  }
 });
