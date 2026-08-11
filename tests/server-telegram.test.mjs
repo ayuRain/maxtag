@@ -78,6 +78,7 @@ test(
         OPENTAG_HOST: '127.0.0.1',
         OPENTAG_DATA_DIR: dataDir,
         OPENTAG_EXECUTOR_MODE: 'dry-run',
+        OPENTAG_LARK_REQUIRE_BINDING: 'true',
         OPENTAG_TELEGRAM_TRANSPORT: 'memory',
         OPENTAG_TELEGRAM_BOT_USERNAME: 'OpenTagBot',
         OPENTAG_TELEGRAM_WEBHOOK_SECRET: 'integration-secret',
@@ -110,6 +111,31 @@ test(
     );
     assert.equal(health.clients.telegram.mode, 'memory');
     assert.equal(health.clients.telegram.webhookSecretConfigured, true);
+    assert.equal(health.clients.lark.requireBinding, true);
+
+    const larkBlockedResponse = await fetch(`${baseUrl}/v1/lark/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        event_id: 'lark-blocked-event-1',
+        event: {
+          message: {
+            message_id: 'om_blocked_1',
+            chat_id: 'oc_unpaired',
+            chat_type: 'group',
+            message_type: 'text',
+            content: JSON.stringify({ text: 'hello before pairing' }),
+            create_time: String(Date.now()),
+          },
+          sender: {
+            sender_id: { open_id: 'ou_unpaired_user' },
+            tenant_key: 'dev-workspace',
+          },
+        },
+      }),
+    });
+    assert.equal(larkBlockedResponse.status, 202);
+    assert.equal((await larkBlockedResponse.json()).reason, 'binding_required');
 
     const capabilityResponse = await fetch(`${baseUrl}/v1/capabilities`);
     const capabilities = await capabilityResponse.json();
@@ -118,21 +144,104 @@ test(
       'ready',
     );
 
-    const bindingResponse = await fetch(`${baseUrl}/v1/bindings`, {
+    const larkInvitationResponse = await fetch(
+      `${baseUrl}/v1/pairing-invitations`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          platform: 'lark',
+          workspaceId: 'dev-workspace',
+          projectId: 'opentag',
+          activationMode: 'mention',
+          requireMention: true,
+        }),
+      },
+    );
+    assert.equal(larkInvitationResponse.status, 201);
+    const larkInvitation = await larkInvitationResponse.json();
+    const larkPairResponse = await fetch(`${baseUrl}/v1/lark/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        event_id: 'lark-pair-event-1',
+        event: {
+          message: {
+            message_id: 'om_pair_1',
+            chat_id: 'oc_pairing',
+            chat_type: 'group',
+            message_type: 'text',
+            content: JSON.stringify({ text: `/pair ${larkInvitation.code}` }),
+            create_time: String(Date.now()),
+          },
+          sender: {
+            sender_id: { open_id: 'ou_pairing_user' },
+            tenant_key: 'dev-workspace',
+          },
+        },
+      }),
+    });
+    assert.equal(larkPairResponse.status, 200);
+    const larkPaired = await larkPairResponse.json();
+    assert.equal(larkPaired.paired, true);
+    assert.equal(larkPaired.binding.platform, 'lark');
+    assert.equal(larkPaired.binding.externalId, 'oc_pairing');
+    assert.equal(larkPaired.binding.projectId, 'opentag');
+
+    const blockedResponse = await fetch(`${baseUrl}/v1/telegram/events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-telegram-bot-api-secret-token': 'integration-secret',
+      },
+      body: JSON.stringify(update(8_999)),
+    });
+    assert.equal(blockedResponse.status, 202);
+    const blocked = await blockedResponse.json();
+    assert.equal(blocked.reason, 'binding_required');
+    assert.equal(blocked.notice.notified, true);
+
+    const invitationResponse = await fetch(`${baseUrl}/v1/pairing-invitations`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         platform: 'telegram',
-        externalId: '-100123',
-        channelId: '-100123',
         workspaceId: 'dev-workspace',
         projectId: 'opentag',
-        scope: 'channel',
         activationMode: 'mention',
         requireMention: true,
       }),
     });
-    assert.equal(bindingResponse.status, 200);
+    assert.equal(invitationResponse.status, 201);
+    const invitation = await invitationResponse.json();
+    assert.match(invitation.code, /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
+
+    const pairResponse = await fetch(`${baseUrl}/v1/telegram/events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-telegram-bot-api-secret-token': 'integration-secret',
+      },
+      body: JSON.stringify(update(9_000, `/pair ${invitation.code}`)),
+    });
+    assert.equal(pairResponse.status, 200);
+    const paired = await pairResponse.json();
+    assert.equal(paired.paired, true);
+    assert.equal(paired.binding.externalId, '-100123');
+    assert.equal(paired.binding.scope, 'channel');
+    assert.equal(paired.binding.source, 'configured');
+    assert.equal(paired.binding.projectId, 'opentag');
+
+    const invitationsResponse = await fetch(
+      `${baseUrl}/v1/pairing-invitations?workspaceId=dev-workspace`,
+    );
+    const invitations = await invitationsResponse.json();
+    assert.equal(
+      invitations.invitations.find(
+        (item) => item.id === invitation.invitation.id,
+      ).status,
+      'consumed',
+    );
 
     const webhookResponse = await fetch(`${baseUrl}/v1/telegram/events`, {
       method: 'POST',
@@ -216,5 +325,27 @@ test(
       (await rejectedResponse.json()).reason,
       'invalid_webhook_secret',
     );
+
+    const unbindResponse = await fetch(
+      `${baseUrl}/v1/bindings/${encodeURIComponent(paired.binding.id)}`,
+      { method: 'DELETE' },
+    );
+    assert.equal(unbindResponse.status, 200);
+    const unbound = await unbindResponse.json();
+    assert.ok(unbound.removed.some((item) => item.id === paired.binding.id));
+    assert.ok(
+      unbound.removed.some((item) => item.externalId === '-100123:77'),
+    );
+
+    const blockedAgainResponse = await fetch(`${baseUrl}/v1/telegram/events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-telegram-bot-api-secret-token': 'integration-secret',
+      },
+      body: JSON.stringify(update(9_004)),
+    });
+    assert.equal(blockedAgainResponse.status, 202);
+    assert.equal((await blockedAgainResponse.json()).reason, 'binding_required');
   },
 );

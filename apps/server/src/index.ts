@@ -18,7 +18,9 @@ import {
   type Workspace,
 } from '@opentag/core';
 import {
+  FilePairingStore,
   FileThreadConfigStore,
+  type PairingActivationMode,
   type UpsertProjectAgentPolicyInput,
 } from '@opentag/config';
 import {
@@ -89,6 +91,9 @@ const larkVerificationToken = process.env.OPENTAG_LARK_VERIFICATION_TOKEN;
 const larkCallbackMaxSkewSeconds = Number(
   process.env.OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS || 300,
 );
+const larkRequireBinding = ['1', 'true', 'yes'].includes(
+  String(process.env.OPENTAG_LARK_REQUIRE_BINDING || 'false').toLowerCase(),
+);
 const telegramTransportMode = process.env.OPENTAG_TELEGRAM_TRANSPORT || 'memory';
 const telegramBotToken = process.env.OPENTAG_TELEGRAM_BOT_TOKEN;
 const telegramBotUsername = process.env.OPENTAG_TELEGRAM_BOT_USERNAME;
@@ -98,6 +103,10 @@ const telegramWorkspaceId =
   process.env.OPENTAG_TELEGRAM_WORKSPACE_ID || 'dev-workspace';
 const telegramRequireBinding = ['1', 'true', 'yes'].includes(
   String(process.env.OPENTAG_TELEGRAM_REQUIRE_BINDING || 'false').toLowerCase(),
+);
+const pairingTtlSeconds = Math.max(
+  30,
+  numberEnvironmentValue('OPENTAG_PAIRING_TTL_SECONDS', 300),
 );
 const agentWorkerMode = process.env.OPENTAG_AGENT_WORKER || 'inline';
 const agentWorkerEnabled = agentWorkerMode !== 'manual';
@@ -141,7 +150,11 @@ const routineSchedulerId = `opentag-routines-${process.pid}`;
 const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
 const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
 const routineStore = new FileRoutineStore(path.join(dataDir, 'routines'));
+const pairingStore = new FilePairingStore(path.join(dataDir, 'pairing'), {
+  ttlMs: pairingTtlSeconds * 1000,
+});
 const activeRuns = new Map<string, AbortController>();
+const pairingNoticeAt = new Map<string, number>();
 let agentWorkerTimer: NodeJS.Timeout | undefined;
 let agentWorkerPass: Promise<AgentWorkerPassResult> | undefined;
 let routineTickPass: Promise<RoutineTickResult> | undefined;
@@ -246,6 +259,12 @@ const capabilityManifest = {
       status: 'partial',
     },
     {
+      capability: 'Self-service pairing',
+      agentdock: 'one-time IM pairing codes bind chats to an owner workspace',
+      opentag: 'one-time client/project invitations bind chats to workspace projects',
+      status: 'partial',
+    },
+    {
       capability: 'Project agent policy',
       agentdock: 'agent templates, tool nodes, and per-session configuration',
       opentag: 'persisted identity, instructions, executor, project grants, network policy, and audit',
@@ -335,6 +354,8 @@ function larkTransportStatus(): Record<string, unknown> {
     hasCredentials,
     domain: larkDomain,
     baseUrl: larkBaseUrl || undefined,
+    verificationTokenConfigured: Boolean(larkVerificationToken),
+    requireBinding: larkRequireBinding,
   };
 }
 
@@ -1221,6 +1242,150 @@ function shouldHandleMessage(input: {
   return !requireMention || input.message.mentionsAgent;
 }
 
+function pairingCommandCode(text: string): string | undefined {
+  return /^\s*\/pair(?:@[a-z0-9_]+)?\s+([a-z0-9-]{8,16})\s*$/iu.exec(
+    text,
+  )?.[1];
+}
+
+function requiresConfiguredBinding(platform: PlatformKind): boolean {
+  if (platform === 'lark') return larkRequireBinding;
+  if (platform === 'telegram') return telegramRequireBinding;
+  return false;
+}
+
+function pairingFailureMessage(reason: string): string {
+  if (reason === 'expired_code') return 'This pairing code has expired.';
+  if (reason === 'consumed_code') return 'This pairing code has already been used.';
+  if (reason === 'revoked_code') return 'This pairing code was revoked.';
+  if (reason === 'platform_mismatch') {
+    return 'This pairing code belongs to another client.';
+  }
+  return 'This pairing code is invalid.';
+}
+
+async function sendControlMessage(
+  thread: SourceThread,
+  messageId: string,
+  text: string,
+): Promise<{ mode?: string; error?: string }> {
+  try {
+    const runPlatform = createPlatformForRun(thread);
+    await runPlatform.platform.sendMessage(thread, text, [], {
+      replyToMessageId: messageId,
+    });
+    return { mode: runPlatform.transportMode };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function handlePairingCommand(
+  input: { thread: SourceThread; message: SourceMessage },
+  inboundEventId: string,
+): Promise<Record<string, unknown> | undefined> {
+  const code = pairingCommandCode(input.message.text);
+  if (!code) return undefined;
+  const channelId = input.thread.channelId || input.thread.externalId;
+  const consumed = await pairingStore.consumeCode({
+    platform: input.thread.platform,
+    code,
+    channelId,
+    threadExternalId: input.thread.externalId,
+    actorId: input.message.actor.id,
+  });
+  if (!consumed.ok) {
+    await deliveryStore.markInboundEventIgnored(
+      inboundEventId,
+      `pairing_${consumed.reason}`,
+      {
+        workspaceId: input.thread.workspaceId,
+        projectId: input.thread.projectId,
+        threadId: input.thread.id,
+        messageId: input.message.id,
+      },
+    );
+    const transport = await sendControlMessage(
+      input.thread,
+      input.message.id,
+      pairingFailureMessage(consumed.reason),
+    );
+    return {
+      accepted: false,
+      paired: false,
+      reason: consumed.reason,
+      transport,
+    };
+  }
+
+  const invitation = consumed.invitation;
+  const binding = await deliveryStore.configureThreadBinding({
+    platform: input.thread.platform,
+    externalId: channelId,
+    workspaceId: invitation.workspaceId,
+    projectId: invitation.projectId,
+    scope: 'channel',
+    source: 'configured',
+    channelId,
+    title: input.thread.title,
+    activationMode: invitation.activationMode,
+    requireMention: invitation.requireMention,
+    metadata: {
+      pairedAt: invitation.consumedAt,
+      pairedBy: input.message.actor.id,
+      pairingInvitationId: invitation.id,
+    },
+  });
+  const thread = applyBindingToThread(input.thread, binding);
+  const policy = await threadConfigStore.resolveThreadPolicy(thread);
+  const transport = await sendControlMessage(
+    thread,
+    input.message.id,
+    `Connected to ${policy.workspace.name} / ${policy.project.name}.`,
+  );
+  await deliveryStore.markInboundEventProcessed(inboundEventId, {
+    workspaceId: thread.workspaceId,
+    projectId: thread.projectId,
+    threadId: thread.id,
+    messageId: input.message.id,
+  });
+  return {
+    accepted: true,
+    paired: true,
+    invitation,
+    binding,
+    route: {
+      workspaceId: thread.workspaceId,
+      projectId: thread.projectId,
+      threadId: thread.id,
+      platform: thread.platform,
+      bindingId: binding.id,
+    },
+    transport,
+  };
+}
+
+async function pairingRequiredNotice(
+  input: { thread: SourceThread; message: SourceMessage },
+): Promise<{ notified: boolean; mode?: string; error?: string }> {
+  const key = `${input.thread.platform}:${input.thread.channelId || input.thread.externalId}`;
+  const current = Date.now();
+  const last = pairingNoticeAt.get(key) ?? 0;
+  if (current - last < 60_000) return { notified: false };
+  pairingNoticeAt.set(key, current);
+  if (pairingNoticeAt.size > 1_000) {
+    for (const [entry, timestamp] of pairingNoticeAt) {
+      if (current - timestamp > 60_000) pairingNoticeAt.delete(entry);
+    }
+  }
+  const transport = await sendControlMessage(
+    input.thread,
+    input.message.id,
+    'This chat is not connected. Create an invitation in OpenTag Connectors, then send /pair CODE.',
+  );
+  return { notified: true, ...transport };
+}
+
 async function memoryContextForThread(
   thread: SourceThread,
 ): Promise<{ workspace?: Workspace; project?: Project }> {
@@ -1948,6 +2113,10 @@ const server = createServer(async (request, response) => {
           lark: larkTransportStatus(),
           telegram: telegramTransportStatus(),
         },
+        pairing: {
+          ttlSeconds: pairingTtlSeconds,
+          summary: await pairingStore.summarize(),
+        },
         routines: {
           enabled: routinesEnabled,
           running: Boolean(routineTickPass),
@@ -1977,6 +2146,11 @@ const server = createServer(async (request, response) => {
         ...capabilityManifest,
         larkTransport: larkTransportStatus(),
         telegramTransport: telegramTransportStatus(),
+        pairing: {
+          ttlSeconds: pairingTtlSeconds,
+          summary: await pairingStore.summarize(),
+          command: '/pair CODE',
+        },
         runWorker: {
           mode: agentWorkerMode,
           enabled: agentWorkerEnabled,
@@ -2152,6 +2326,107 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         binding,
         delivery: await deliverySnapshot(20),
+      });
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      url.pathname.startsWith('/v1/bindings/')
+    ) {
+      const id = decodeURIComponent(url.pathname.slice('/v1/bindings/'.length));
+      const removed = await deliveryStore.removeThreadBinding(id, {
+        cascadeChannel: url.searchParams.get('cascade') !== 'false',
+      });
+      if (!removed.length) {
+        sendJson(response, 404, { error: 'binding_not_found' });
+        return;
+      }
+      sendJson(response, 200, {
+        removed,
+        delivery: await deliverySnapshot(20),
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/pairing-invitations') {
+      const query = Object.fromEntries(url.searchParams.entries());
+      const status = url.searchParams.get('status');
+      sendJson(response, 200, {
+        invitations: await pairingStore.listInvitations({
+          platform: url.searchParams.get('platform') || undefined,
+          workspaceId: url.searchParams.get('workspaceId') || undefined,
+          projectId: url.searchParams.get('projectId') || undefined,
+          status:
+            status === 'pending' ||
+            status === 'consumed' ||
+            status === 'expired' ||
+            status === 'revoked'
+              ? status
+              : undefined,
+          limit: numberValue(query, 'limit', 100),
+        }),
+        summary: await pairingStore.summarize(
+          url.searchParams.get('workspaceId') || undefined,
+        ),
+        ttlSeconds: pairingTtlSeconds,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/pairing-invitations') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const platform = stringValue(body, 'platform');
+      const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+      const projectId = stringValue(body, 'projectId');
+      if (
+        (platform !== 'lark' && platform !== 'telegram') ||
+        !workspaceId ||
+        !projectId
+      ) {
+        sendJson(response, 400, {
+          error: 'pairing_platform_workspaceId_projectId_required',
+        });
+        return;
+      }
+      const projects = await threadConfigStore.listProjectPolicies(workspaceId);
+      const project = projects.find(
+        (item) => item.projectId === projectId || item.id === projectId,
+      );
+      if (!project) {
+        sendJson(response, 404, { error: 'pairing_project_not_found' });
+        return;
+      }
+      const result = await pairingStore.createInvitation({
+        platform,
+        workspaceId,
+        projectId: project.projectId,
+        activationMode: (activationModeValue(body) ?? 'mention') as PairingActivationMode,
+        requireMention: booleanValue(body, 'requireMention', true),
+        createdBy: stringValue(body, 'createdBy', 'admin-console'),
+      });
+      sendJson(response, 201, { ...result });
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      url.pathname.startsWith('/v1/pairing-invitations/')
+    ) {
+      const id = decodeURIComponent(
+        url.pathname.slice('/v1/pairing-invitations/'.length),
+      );
+      const invitation = await pairingStore.revokeInvitation(
+        id,
+        url.searchParams.get('actor') || 'admin-console',
+      );
+      if (!invitation) {
+        sendJson(response, 404, { error: 'pairing_invitation_not_found' });
+        return;
+      }
+      sendJson(response, 200, {
+        invitation,
+        summary: await pairingStore.summarize(invitation.workspaceId),
       });
       return;
     }
@@ -2537,8 +2812,20 @@ const server = createServer(async (request, response) => {
         return;
       }
 
+      const pairing = await handlePairingCommand(
+        normalized,
+        inbound.record.id,
+      );
+      if (pairing) {
+        sendJson(response, 200, pairing);
+        return;
+      }
+
       const routed = await routeMessage(normalized);
-      if (telegramRequireBinding && routed.binding?.source !== 'configured') {
+      if (
+        requiresConfiguredBinding(routed.thread.platform) &&
+        routed.binding?.source !== 'configured'
+      ) {
         await deliveryStore.markInboundEventIgnored(
           inbound.record.id,
           'binding_required',
@@ -2549,9 +2836,11 @@ const server = createServer(async (request, response) => {
             messageId: routed.message.id,
           },
         );
+        const notice = await pairingRequiredNotice(routed);
         sendJson(response, 202, {
           accepted: false,
           reason: 'binding_required',
+          notice,
           route: {
             workspaceId: routed.thread.workspaceId,
             projectId: routed.thread.projectId,
@@ -2660,7 +2949,43 @@ const server = createServer(async (request, response) => {
         sendJson(response, 202, { accepted: false, reason: 'unsupported_lark_event' });
         return;
       }
+      const pairing = await handlePairingCommand(
+        normalized,
+        inbound.record.id,
+      );
+      if (pairing) {
+        sendJson(response, 200, pairing);
+        return;
+      }
       const routed = await routeMessage(normalized);
+      if (
+        requiresConfiguredBinding(routed.thread.platform) &&
+        routed.binding?.source !== 'configured'
+      ) {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'binding_required',
+          {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            messageId: routed.message.id,
+          },
+        );
+        const notice = await pairingRequiredNotice(routed);
+        sendJson(response, 202, {
+          accepted: false,
+          reason: 'binding_required',
+          notice,
+          route: {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            platform: routed.thread.platform,
+          },
+        });
+        return;
+      }
       if (!shouldHandleMessage(routed)) {
         await deliveryStore.markInboundEventIgnored(
           inbound.record.id,

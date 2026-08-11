@@ -22,6 +22,9 @@ clients of the same thread-agent core.
 - Lark: native callback adapter with progress cards and HTTP OpenAPI delivery.
 - Telegram: native Bot API webhook adapter with forum-topic routing, editable
   progress messages, chunked replies, outgoing documents, and tracked delivery.
+- Lark and Telegram share the same invitation model: an operator targets a
+  workspace/project/client, then `/pair CODE` turns the consuming chat into a
+  configured channel binding.
 - Slack: planned.
 - GitHub: planned as both a tool provider and a source client.
 
@@ -35,6 +38,12 @@ Every inbound client event is normalized into the same sequence:
 
 ```text
 client event -> SourceThread -> Workspace -> Project -> scoped memory -> Executor
+```
+
+Client onboarding is separate from execution:
+
+```text
+pairing invitation -> client chat -> configured project binding -> SourceThread route
 ```
 
 Lark groups/topics and Telegram chats/forum topics now share this route. Slack

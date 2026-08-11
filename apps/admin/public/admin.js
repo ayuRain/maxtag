@@ -7,6 +7,7 @@ const state = {
   workspace: null,
   delivery: null,
   routines: null,
+  pairings: null,
   runs: [],
   bindings: [],
   selectedProjectId: null,
@@ -16,6 +17,8 @@ const state = {
   memoryScope: 'project',
   memoryProjectId: null,
   testProjectId: null,
+  pairingProjectId: null,
+  latestPairing: null,
   projectDirty: false,
   routineDirty: false,
 };
@@ -23,7 +26,7 @@ const state = {
 const viewCopy = {
   overview: { eyebrow: 'Workspace', title: 'Overview' },
   projects: { eyebrow: 'Routing and access', title: 'Projects' },
-  connectors: { eyebrow: 'Client runtime', title: 'Connectors' },
+  connectors: { eyebrow: 'Multi-client routing', title: 'Connectors' },
   routines: { eyebrow: 'Proactive work', title: 'Routines' },
   activity: { eyebrow: 'Runs and delivery', title: 'Activity' },
   memory: { eyebrow: 'Scoped context', title: 'Memory' },
@@ -313,6 +316,51 @@ function clientCell(label, value, className = '') {
   return cell;
 }
 
+function renderLatestPairing() {
+  const root = $('#pairing-result');
+  const pairing = state.latestPairing;
+  root.hidden = !pairing;
+  if (!pairing) return;
+  $('#pairing-command').textContent = pairing.command;
+  $('#pairing-expiry').textContent = `Expires ${formatTime(pairing.invitation.expiresAt, true)}`;
+}
+
+function renderPairingInvitations() {
+  const root = $('#pairing-invitations');
+  root.replaceChildren();
+  const invitations = state.pairings?.invitations || [];
+  if (!invitations.length) {
+    root.append(element('div', 'empty-state compact-empty', 'No invitations yet'));
+    return;
+  }
+  for (const invitation of invitations.slice(0, 8)) {
+    const row = element('div', 'pairing-invitation-row');
+    const identity = element('div', 'pairing-invitation-copy');
+    identity.append(
+      element('strong', '', `${statusLabel(invitation.platform)} / ${invitation.projectId}`),
+      element('small', '', `Created ${formatTime(invitation.createdAt, true)}`),
+    );
+    const expiry = element(
+      'span',
+      'pairing-invitation-expiry',
+      invitation.status === 'pending'
+        ? `Expires ${formatTime(invitation.expiresAt, true)}`
+        : invitation.consumedAt
+          ? `Used ${formatTime(invitation.consumedAt, true)}`
+          : statusLabel(invitation.status),
+    );
+    const actions = element('div', 'pairing-row-actions');
+    if (invitation.status === 'pending') {
+      const revoke = element('button', 'danger-text-button', 'Revoke');
+      revoke.type = 'button';
+      revoke.addEventListener('click', () => void revokePairing(invitation.id));
+      actions.append(revoke);
+    }
+    row.append(identity, expiry, statePill(invitation.status), actions);
+    root.append(row);
+  }
+}
+
 function renderConnectorConsole() {
   const clients = state.capabilities?.clients || [];
   const transports = clients
@@ -325,8 +373,11 @@ function renderConnectorConsole() {
     metric(clients.filter((client) => client.status === 'ready').length, 'Native clients'),
     metric(transports.filter((transport) => transport.mode === 'http').length, 'Live transports'),
     metric(configuredBindings.length, 'Configured routes'),
-    metric(clients.filter((client) => client.status === 'planned').length, 'Planned clients'),
+    metric(state.pairings?.summary?.pending || 0, 'Pending invites'),
   );
+
+  renderLatestPairing();
+  renderPairingInvitations();
 
   const table = $('#client-table');
   table.replaceChildren();
@@ -356,11 +407,11 @@ function renderConnectorConsole() {
 
   const bindingList = $('#connector-bindings');
   bindingList.replaceChildren();
-  if (!state.bindings.length) {
-    bindingList.append(element('div', 'empty-state', 'No client routes'));
+  if (!configuredBindings.length) {
+    bindingList.append(element('div', 'empty-state compact-empty', 'No chats connected'));
     return;
   }
-  for (const binding of state.bindings) {
+  for (const binding of configuredBindings) {
     const row = element('div', 'connector-binding-row');
     const identity = element('div');
     identity.append(
@@ -376,10 +427,18 @@ function renderConnectorConsole() {
       element('span', 'client-cell-label', 'Project'),
       element('strong', '', binding.projectId || 'general'),
     );
+    const actions = element('div', 'binding-actions');
+    if (binding.source === 'configured') {
+      const unbind = element('button', 'danger-text-button', 'Unbind');
+      unbind.type = 'button';
+      unbind.addEventListener('click', () => void removeBinding(binding.id));
+      actions.append(unbind);
+    }
     row.append(
       identity,
       project,
       statePill(binding.activationMode, statusLabel(binding.activationMode)),
+      actions,
     );
     bindingList.append(row);
   }
@@ -605,6 +664,88 @@ async function saveBinding() {
     showToast(error.message, 'error');
   } finally {
     setButtonBusy(button, false, 'Binding', 'Bind');
+  }
+}
+
+async function generatePairing(event) {
+  event.preventDefault();
+  const button = $('#generate-pairing');
+  const projectId = $('#pairing-project').value;
+  const project = projectById(projectId);
+  if (!project) {
+    showToast('Select a project first', 'error');
+    return;
+  }
+  state.pairingProjectId = project.projectId;
+  setButtonBusy(button, true, 'Generating', 'Generate code');
+  try {
+    state.latestPairing = await getJson('/v1/pairing-invitations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        platform: $('#pairing-platform').value,
+        workspaceId: project.workspaceId || currentWorkspaceId(),
+        projectId: project.projectId,
+        activationMode: $('#pairing-activation-mode').value,
+        requireMention: $('#pairing-require-mention').checked,
+        createdBy: 'admin-console',
+      }),
+    });
+    await refreshAll({ quiet: true });
+    showToast('Pairing command ready');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Generating', 'Generate code');
+  }
+}
+
+async function copyPairingCommand() {
+  const command = state.latestPairing?.command;
+  if (!command) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(command);
+    } else {
+      const input = document.createElement('textarea');
+      input.value = command;
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      document.body.append(input);
+      input.select();
+      document.execCommand('copy');
+      input.remove();
+    }
+    showToast('Command copied');
+  } catch (error) {
+    showToast(error.message || 'Could not copy command', 'error');
+  }
+}
+
+async function revokePairing(id) {
+  try {
+    await getJson(
+      `/v1/pairing-invitations/${encodeURIComponent(id)}?actor=admin-console`,
+      { method: 'DELETE' },
+    );
+    if (state.latestPairing?.invitation?.id === id) state.latestPairing = null;
+    await refreshAll({ quiet: true });
+    showToast('Invitation revoked');
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+async function removeBinding(id) {
+  try {
+    const result = await getJson(`/v1/bindings/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    await refreshAll({ quiet: true });
+    const count = result.removed?.length || 1;
+    showToast(count > 1 ? `Chat and ${count - 1} topic routes unbound` : 'Chat unbound');
+  } catch (error) {
+    showToast(error.message, 'error');
   }
 }
 
@@ -1119,10 +1260,15 @@ function fillProjectSelects() {
   state.memoryProjectId = projectById(state.memoryProjectId)?.projectId || fallback;
   state.testProjectId =
     projectById(state.testProjectId)?.projectId ||
+      projectById(state.selectedProjectId)?.projectId ||
+      fallback;
+  state.pairingProjectId =
+    projectById(state.pairingProjectId)?.projectId ||
     projectById(state.selectedProjectId)?.projectId ||
     fallback;
   fillProjectSelect($('#memory-project'), state.memoryProjectId);
   fillProjectSelect($('#test-project'), state.testProjectId);
+  fillProjectSelect($('#pairing-project'), state.pairingProjectId);
 }
 
 function memoryThread() {
@@ -1347,13 +1493,13 @@ function renderAll() {
   renderSummary();
   renderOverviewProjects();
   renderConnectors();
+  fillProjectSelects();
   renderConnectorConsole();
   renderOverviewRuns();
   renderProjectList();
   renderRoutines();
   renderRunTable();
   renderDelivery();
-  fillProjectSelects();
 
   const fallback = state.workspace?.projects?.[0]?.projectId;
   if (!projectById(state.selectedProjectId)) state.selectedProjectId = fallback;
@@ -1366,7 +1512,7 @@ async function refreshAll({ quiet = false } = {}) {
   const button = $('#refresh-all');
   if (!quiet) setButtonBusy(button, true, 'Refreshing', 'Refresh');
   try {
-    const [health, capabilities, workspace, delivery, runs, bindings, routines] =
+    const [health, capabilities, workspace, delivery, runs, bindings, routines, pairings] =
       await Promise.all([
         getJson('/health'),
         getJson('/v1/capabilities'),
@@ -1375,6 +1521,7 @@ async function refreshAll({ quiet = false } = {}) {
         getJson('/v1/runs?limit=50'),
         getJson('/v1/bindings?limit=100'),
         getJson(`/v1/routines?workspaceId=${encodeURIComponent(currentWorkspaceId())}`),
+        getJson(`/v1/pairing-invitations?workspaceId=${encodeURIComponent(currentWorkspaceId())}`),
       ]);
     state.health = health;
     state.capabilities = capabilities;
@@ -1383,6 +1530,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.runs = runs.runs || [];
     state.bindings = bindings.bindings || [];
     state.routines = routines;
+    state.pairings = pairings;
     const fallback = workspace.projects?.[0]?.projectId;
     state.selectedProjectId = projectById(state.selectedProjectId)?.projectId || fallback;
     state.memoryProjectId = projectById(state.memoryProjectId)?.projectId || fallback;
@@ -1412,6 +1560,8 @@ $('#test-form').addEventListener('submit', (event) => void runTest(event));
 $('#new-project').addEventListener('click', newProject);
 $('#project-form').addEventListener('submit', (event) => void saveProject(event));
 $('#save-binding').addEventListener('click', () => void saveBinding());
+$('#pairing-form').addEventListener('submit', (event) => void generatePairing(event));
+$('#copy-pairing').addEventListener('click', () => void copyPairingCommand());
 $('#new-routine').addEventListener('click', newRoutine);
 $('#routine-form').addEventListener('submit', (event) => void saveRoutine(event));
 $('#trigger-routine').addEventListener('click', () => void triggerRoutine());
@@ -1448,6 +1598,10 @@ $('#memory-project').addEventListener('change', (event) => {
 
 $('#test-project').addEventListener('change', (event) => {
   state.testProjectId = event.target.value;
+});
+
+$('#pairing-project').addEventListener('change', (event) => {
+  state.pairingProjectId = event.target.value;
 });
 
 for (const button of $$('#memory-scope button')) {

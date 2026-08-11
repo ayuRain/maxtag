@@ -772,6 +772,30 @@ export class FileDeliveryStore {
     );
   }
 
+  async removeThreadBinding(
+    id: string,
+    options: { cascadeChannel?: boolean } = {},
+  ): Promise<ThreadBinding[]> {
+    return this.mutate((state) => {
+      const target = state.threadBindings.find((item) => item.id === id);
+      if (!target) return [];
+      const cascadeChannel = options.cascadeChannel ?? true;
+      const removed = state.threadBindings.filter(
+        (item) =>
+          item.id === id ||
+          (cascadeChannel &&
+            Boolean(target.channelId) &&
+            item.platform === target.platform &&
+            item.channelId === target.channelId),
+      );
+      const removedIds = new Set(removed.map((item) => item.id));
+      state.threadBindings = state.threadBindings.filter(
+        (item) => !removedIds.has(item.id),
+      );
+      return removed.map(copyBinding);
+    });
+  }
+
   async upsertThreadBinding(
     input: UpsertThreadBindingInput,
   ): Promise<ThreadBinding> {

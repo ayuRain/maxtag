@@ -234,20 +234,69 @@
 
           <div class="section-heading">
             <div>
+              <span class="eyebrow">Workspace routing</span>
+              <h2>Connect a chat</h2>
+            </div>
+          </div>
+          <form class="pairing-editor" id="pairing-form">
+            <label class="field">
+              <span>Client</span>
+              <select id="pairing-platform">
+                <option value="lark">Lark</option>
+                <option value="telegram">Telegram</option>
+              </select>
+            </label>
+            <label class="field pairing-project-field">
+              <span>Project</span>
+              <select id="pairing-project"></select>
+            </label>
+            <label class="field">
+              <span>Activation</span>
+              <select id="pairing-activation-mode">
+                <option value="mention">Mention</option>
+                <option value="always">Always on</option>
+              </select>
+            </label>
+            <label class="toggle-field pairing-toggle">
+              <input id="pairing-require-mention" type="checkbox" checked />
+              <span>Require mention</span>
+            </label>
+            <button class="primary-button" id="generate-pairing" type="submit">Generate code</button>
+          </form>
+
+          <div class="pairing-result" id="pairing-result" hidden>
+            <div>
+              <span class="client-cell-label">Send in chat</span>
+              <code id="pairing-command"></code>
+              <small id="pairing-expiry"></small>
+            </div>
+            <button class="secondary-button" id="copy-pairing" type="button">Copy command</button>
+          </div>
+
+          <div class="section-heading connector-bindings-heading">
+            <div>
+              <span class="eyebrow">Recent access</span>
+              <h2>Invitations</h2>
+            </div>
+          </div>
+          <div class="pairing-invitation-list" id="pairing-invitations"></div>
+
+          <div class="section-heading connector-bindings-heading">
+            <div>
+              <span class="eyebrow">Project routing</span>
+              <h2>Bound chats</h2>
+            </div>
+            <button class="text-button" data-go-view="projects" type="button">Manage</button>
+          </div>
+          <div class="connector-binding-list" id="connector-bindings"></div>
+
+          <div class="section-heading connector-bindings-heading">
+            <div>
               <span class="eyebrow">Client runtime</span>
               <h2>Adapters</h2>
             </div>
           </div>
           <div class="client-table" id="client-table"></div>
-
-          <div class="section-heading connector-bindings-heading">
-            <div>
-              <span class="eyebrow">Project routing</span>
-              <h2>Bindings</h2>
-            </div>
-            <button class="text-button" data-go-view="projects" type="button">Manage</button>
-          </div>
-          <div class="connector-binding-list" id="connector-bindings"></div>
         </section>
 
         <section class="view" id="view-routines" data-view-panel="routines" hidden>

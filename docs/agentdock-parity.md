@@ -13,6 +13,7 @@ many clients.
 | Multiple clients | Native Lark and Telegram ingress/delivery plus generic `/v1/client/events` for adapters in development |
 | Scoped memory | Global, workspace, project, and thread file scopes; Lark groups route to project scope; remember/forget commands |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
+| Self-service pairing | Lark and Telegram `/pair` commands use expiring, single-use, platform-bound codes; salted hashes persist across restarts, successful pairing creates a configured project route, and operators can revoke invitations or unbind chats |
 | Topic continuation | Mention establishes a Lark or Telegram topic binding; later messages in that topic continue without repeating the mention |
 | Project agent policy | File-backed per-project identity, instructions, Codex/Claude choice, tool grants, network policy, and audit history |
 | Durable delivery skeleton | File-backed outbox, turn delivery records, scoped cancel, stale recovery, and bindings |
@@ -27,12 +28,12 @@ many clients.
 | AgentDock capability | OpenTag next step |
 | --- | --- |
 | More native clients | Add Slack, GitHub comment, QQ, and Web adapters behind the shared platform contract |
-| Telegram production depth | Download inbound files, add pairing/allowlists, and verify webhook/send/edit/file behavior against a live bot |
+| Telegram production depth | Download inbound files and verify webhook/send/edit/file behavior against a live bot |
 | Durable IM outbox | Replace file store with SQLite/Postgres claim/retry worker |
 | Async run execution | Add production supervisor/deployment manifests and cross-process cancellation heartbeat |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |
 | Real Lark smoke | Verify app scopes, bot-in-chat permissions, text replies, and card patching against a live app |
-| Binding governance | Add permission checks and import/export for configured bindings; project policy changes now have an audit ledger |
+| Pairing and binding governance | Put admin APIs behind authentication, move pairing plus binding consumption into one database transaction, and add permission checks, audit history, and import/export |
 | Encrypted Lark callbacks | Implement decrypt path before enabling encrypted events in production |
 | Memory governance | Add durable write queue, audit history, approval policy, and admin restore |
 | Routine production hardening | Move routine state and claims to the production database, run scheduler under a supervisor, and verify real Lark delivery and restart recovery |

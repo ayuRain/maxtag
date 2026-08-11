@@ -12,6 +12,9 @@
 - Explicit scoped memory commands and admin API for remember, forget, and show.
 - File-backed outbox, inbound event ledger, turn delivery tracker, and
   configured channel/project bindings.
+- File-backed Lark/Telegram pairing invitations with short-lived single-use
+  codes, hashed persistence, project route creation, revocation, and cascading
+  chat unbind.
 - Outbox recovery controls for stale `sending` records and scoped cancellation.
 - File-backed agent run ledger with status, cancel request, and timeline events.
 - Durable run queue with inline worker claim, startup stale recovery, and manual
@@ -35,6 +38,10 @@
 
 ## Phase 1: Lark Tag MVP
 
+- Put the Connectors console and pairing/binding mutation APIs behind operator
+  authentication before public deployment.
+- Move pairing consumption and binding creation into one transactional database
+  operation before running multiple server replicas.
 - Verify Lark callbacks with token/timestamp checks; add event decrypt before
   production encrypted callbacks.
 - Normalize group messages, mentions, files, images, and topic/thread metadata.
@@ -90,7 +97,7 @@
 ## Phase 5: Multi-Platform
 
 - Keep native platform webhooks thin by mapping them into `/v1/client/events`.
-- Harden Telegram with inbound file downloads, pairing/allowlists, and live bot
-  webhook/delivery smoke tests.
+- Harden Telegram with inbound file downloads and live bot webhook/delivery
+  smoke tests.
 - Slack adapter can map thread_ts to `SourceThread`.
 - GitHub issue/PR comments can become first-class work threads.

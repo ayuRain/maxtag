@@ -101,13 +101,17 @@ packages/ui-cards           Progress/checklist card models
   a real platform transport is wired.
 - Channel/project bindings can be configured through the admin API and console,
   including mention-only vs always-on activation.
+- Lark and Telegram chats can self-connect to a project with a short-lived,
+  single-use `/pair` command generated in the Connectors console. Only a salted
+  code hash is persisted, and unbinding a chat also clears its observed topic
+  routes.
 - Scoped memory can be viewed and updated through `/v1/memory`, the admin
   console, or chat commands such as `remember project ...` and
   `forget project ...`.
-- The admin console exposes Overview, Projects, Routines, Activity, and Memory
-  workspaces, with project policy editing, channel binding, scheduler controls,
-  routine execution history, run timelines, delivery ledgers, and a
-  project-aware Lark preview.
+- The admin console exposes Overview, Projects, Connectors, Routines, Activity,
+  and Memory workspaces, with project policy editing, self-service chat pairing,
+  channel unbinding, scheduler controls, routine execution history, run
+  timelines, delivery ledgers, and a project-aware client preview.
 
 ## MVP
 
@@ -217,6 +221,34 @@ Public generic clients require `mentionsAgent: true`, an `/opentag` or
 `topicId`. Chat-only events do not silently turn a whole group into an active
 session.
 
+## Chat Pairing
+
+Open **Connectors**, choose Lark or Telegram and a target project, then generate
+an invitation. Send the returned command in the chat that should serve that
+project:
+
+```text
+/pair ABCD-2345
+```
+
+Invitations expire after five minutes by default, are single-use, and are bound
+to the selected client. Consuming one creates a configured channel route with
+the chosen activation policy; the same workspace bot can therefore serve many
+projects without sharing project or thread memory. Configure the gate and TTL
+with:
+
+```bash
+OPENTAG_LARK_REQUIRE_BINDING=true
+OPENTAG_TELEGRAM_REQUIRE_BINDING=true
+OPENTAG_PAIRING_TTL_SECONDS=300
+```
+
+The file-backed pairing and binding stores are suitable for local development
+and a single process. The admin console and its mutation APIs currently assume
+localhost or an authenticated reverse proxy; add admin authentication and a
+transactional database store before exposing them publicly or running multiple
+replicas.
+
 ## Lark Delivery Mode
 
 Local development defaults to `OPENTAG_LARK_TRANSPORT=memory`, which records
@@ -248,8 +280,8 @@ OPENTAG_TELEGRAM_WORKSPACE_ID=dev-workspace
 
 Register `https://your-host/v1/telegram/events` as the bot webhook and pass the
 same secret as `secret_token` when calling Telegram `setWebhook`. Set
-`OPENTAG_TELEGRAM_REQUIRE_BINDING=true` when only chats explicitly configured in
-the OpenTag **Connectors** view should be accepted. Supergroup forum
+`OPENTAG_TELEGRAM_REQUIRE_BINDING=true` when only chats paired or explicitly
+configured in the OpenTag **Connectors** view should be accepted. Supergroup forum
 `message_thread_id` values become stable OpenTag threads; channel bindings map
 those topics to project-scoped identity, grants, and memory.
 

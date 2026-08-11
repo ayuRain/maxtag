@@ -384,10 +384,93 @@ h3 {
 }
 
 .client-table,
-.connector-binding-list {
+.connector-binding-list,
+.pairing-invitation-list {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   background: var(--surface);
+}
+
+.pairing-editor {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  padding: 16px;
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(180px, 1.25fr) minmax(130px, 0.75fr) auto auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.pairing-result {
+  min-width: 0;
+  min-height: 68px;
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-soft);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.pairing-result > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.pairing-result .client-cell-label {
+  display: block;
+}
+
+.pairing-result code {
+  color: var(--ink);
+  font: 700 15px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.pairing-result small,
+.pairing-invitation-copy small,
+.pairing-invitation-expiry {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.pairing-invitation-row {
+  min-height: 58px;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 16px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 220px) auto 54px;
+  align-items: center;
+  gap: 16px;
+}
+
+.pairing-invitation-row:last-child {
+  border-bottom: 0;
+}
+
+.pairing-invitation-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.pairing-invitation-copy strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.pairing-row-actions,
+.binding-actions {
+  min-width: 54px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.empty-state.compact-empty {
+  min-height: 70px;
 }
 
 .client-table-header,
@@ -464,7 +547,7 @@ h3 {
 .connector-binding-row {
   min-height: 58px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) auto 54px;
   align-items: center;
   gap: 18px;
   padding: 9px 16px;
@@ -1455,6 +1538,15 @@ pre {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .pairing-editor {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .pairing-toggle,
+  #generate-pairing {
+    align-self: end;
+  }
+
   .binding-id-field {
     grid-column: auto;
   }
@@ -1595,6 +1687,14 @@ pre {
   .client-ingress code {
     grid-column: 2;
   }
+
+  .pairing-editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pairing-project-field {
+    grid-column: auto;
+  }
 }
 
 @media (max-width: 680px) {
@@ -1654,13 +1754,44 @@ pre {
   }
 
   .connector-binding-row {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 8px 12px;
   }
 
   .binding-project {
     grid-column: 1 / -1;
     grid-template-columns: 80px minmax(0, 1fr);
+  }
+
+  .binding-actions {
+    min-width: 46px;
+  }
+
+  .pairing-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .pairing-result {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pairing-result .secondary-button {
+    align-self: flex-start;
+  }
+
+  .pairing-invitation-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 6px 10px;
+  }
+
+  .pairing-invitation-expiry {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .pairing-row-actions {
+    min-width: 46px;
   }
 
   .project-grid,
