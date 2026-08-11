@@ -58,6 +58,8 @@ packages/ui-cards           Progress/checklist card models
 - Memory is scoped into global, workspace, project, and thread files.
 - Dry-run Lark delivery now runs through a file-backed outbox, per-run delivery
   records, and thread-to-project bindings.
+- Delivery recovery can requeue stale `sending` records and cancel only the
+  selected run/thread/workspace/project scope.
 - Real Lark delivery can be enabled with `OPENTAG_LARK_TRANSPORT=http`,
   `OPENTAG_LARK_APP_ID`, and `OPENTAG_LARK_APP_SECRET`; use
   `OPENTAG_LARK_DOMAIN=lark` for international Lark.
@@ -82,7 +84,7 @@ packages/ui-cards           Progress/checklist card models
 3. Workspace/project/thread routing for one global workspace bot.
 4. Live checklist/progress card.
 5. Thread-level agent identity and access bundle.
-6. Durable outbound delivery and retry.
+6. Durable outbound delivery, retry, scoped cancel, and stale recovery.
 7. GitHub draft PR loop.
 8. Public scoped memory governance, audit log, and durable write queue.
 

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {
+  CancelOutboxOptions,
+  CancelOutboxResult,
   ClaimOutboundOptions,
   ConfigureThreadBindingInput,
   CreateOutboundInput,
@@ -9,10 +11,13 @@ import type {
   FileDeliveryState,
   InboundEventRecord,
   InboundEventStatus,
+  OutboxScopeFilter,
   OutboundEnvelope,
   OutboundStatus,
   RecordInboundEventInput,
   RecordInboundEventResult,
+  RecoverStaleOutboxOptions,
+  RecoverStaleOutboxResult,
   ThreadBinding,
   ThreadBindingScope,
   TurnDeliveryRecord,
@@ -75,6 +80,32 @@ function outboundTargetKey(record: OutboundEnvelope): string {
   );
 }
 
+function matchesOutboxScope(
+  record: OutboundEnvelope,
+  filter: OutboxScopeFilter,
+): boolean {
+  if (filter.runId && record.runId !== filter.runId) return false;
+  if (filter.threadId && record.threadId !== filter.threadId) return false;
+  if (filter.workspaceId && record.workspaceId !== filter.workspaceId) return false;
+  if (filter.projectId && record.projectId !== filter.projectId) return false;
+  if (filter.kind && record.kind !== filter.kind) return false;
+  if (filter.targetId && outboundTargetKey(record) !== filter.targetId) {
+    return false;
+  }
+  return true;
+}
+
+function hasOutboxScope(filter: OutboxScopeFilter): boolean {
+  return Boolean(
+    filter.runId ||
+      filter.threadId ||
+      filter.workspaceId ||
+      filter.projectId ||
+      filter.targetId ||
+      filter.kind,
+  );
+}
+
 function emptySummary(): DeliverySummary {
   return {
     outbox: {
@@ -82,12 +113,14 @@ function emptySummary(): DeliverySummary {
       sending: 0,
       delivered: 0,
       failed: 0,
+      cancelled: 0,
     },
     turnDeliveries: {
       queued: 0,
       accepted: 0,
       completed: 0,
       failed: 0,
+      cancelled: 0,
     },
     inboundEvents: {
       received: 0,
@@ -291,6 +324,85 @@ export class FileDeliveryStore {
       envelope.updatedAt = timestamp;
       this.updateTurnDelivery(state, id, 'queued');
       return true;
+    });
+  }
+
+  async recoverStaleOutbox(
+    options: RecoverStaleOutboxOptions = {},
+  ): Promise<RecoverStaleOutboxResult> {
+    return this.mutate((state) => {
+      const timestamp = options.now ?? new Date();
+      const cutoff = new Date(
+        timestamp.getTime() - (options.olderThanMs ?? 120_000),
+      ).toISOString();
+      const nowIso = timestamp.toISOString();
+      const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
+      const result: RecoverStaleOutboxResult = {
+        requeued: 0,
+        failed: 0,
+        records: [],
+      };
+
+      for (const envelope of state.outbox) {
+        if (result.records.length >= limit) break;
+        if (envelope.status !== 'sending') continue;
+        if (envelope.updatedAt > cutoff) continue;
+        if (!matchesOutboxScope(envelope, options)) continue;
+
+        const reason = options.reason ?? 'stale_sending_recovered';
+        envelope.lastError = reason;
+        envelope.updatedAt = nowIso;
+        if (envelope.attempts >= envelope.maxAttempts) {
+          envelope.status = 'failed';
+          envelope.nextAttemptAt = nowIso;
+          result.failed += 1;
+          this.updateTurnDelivery(state, envelope.id, 'failed', reason);
+        } else {
+          envelope.status = 'pending';
+          envelope.nextAttemptAt = nowIso;
+          result.requeued += 1;
+          this.updateTurnDelivery(state, envelope.id, 'queued', reason);
+        }
+        result.records.push({ ...envelope });
+      }
+
+      return result;
+    });
+  }
+
+  async cancelOutbox(
+    options: CancelOutboxOptions,
+  ): Promise<CancelOutboxResult> {
+    return this.mutate((state) => {
+      const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
+      const timestamp = now();
+      const result: CancelOutboxResult = {
+        cancelled: 0,
+        records: [],
+      };
+      if (!hasOutboxScope(options)) return result;
+
+      for (const envelope of state.outbox) {
+        if (result.records.length >= limit) break;
+        if (envelope.status !== 'pending' && envelope.status !== 'sending') {
+          continue;
+        }
+        if (!matchesOutboxScope(envelope, options)) continue;
+
+        envelope.status = 'cancelled';
+        envelope.lastError = options.reason ?? 'cancelled_by_operator';
+        envelope.updatedAt = timestamp;
+        result.cancelled += 1;
+        result.records.push({ ...envelope });
+        this.updateTurnDelivery(
+          state,
+          envelope.id,
+          'cancelled',
+          envelope.lastError,
+        );
+      }
+
+      return result;
     });
   }
 

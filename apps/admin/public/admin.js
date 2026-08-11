@@ -9,6 +9,8 @@ const memoryScopes = document.querySelector('#memory-scopes');
 const parity = document.querySelector('#parity');
 const routeLine = document.querySelector('#route-line');
 const delivery = document.querySelector('#delivery');
+const recoverDeliveryButton = document.querySelector('#recover-delivery');
+const cancelDeliveryButton = document.querySelector('#cancel-delivery');
 const bindings = document.querySelector('#bindings');
 const bindingForm = document.querySelector('#binding-form');
 const bindingExternalId = document.querySelector('#binding-external-id');
@@ -166,7 +168,7 @@ function renderDelivery(data) {
 
   appendText(delivery, 'subhead', 'Outbound');
   delivery.append(renderMetricStrip(
-    ['delivered', 'pending', 'sending', 'failed'],
+    ['delivered', 'pending', 'sending', 'failed', 'cancelled'],
     data?.summary?.outbox,
   ));
 
@@ -248,6 +250,51 @@ async function refreshDelivery() {
     renderDelivery(await getJson('/v1/deliveries?limit=4'));
   } catch (error) {
     delivery.textContent = error.message;
+  }
+}
+
+async function recoverDelivery() {
+  recoverDeliveryButton.disabled = true;
+  recoverDeliveryButton.textContent = 'Recovering';
+  try {
+    const data = await getJson('/v1/deliveries/recover-stale', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        olderThanMs: 120000,
+        reason: 'admin_recover_stale',
+      }),
+    });
+    renderDelivery(data.delivery);
+    routeLine.textContent = `requeued ${data.result?.requeued || 0}`;
+  } catch (error) {
+    routeLine.textContent = error.message;
+  } finally {
+    recoverDeliveryButton.disabled = false;
+    recoverDeliveryButton.textContent = 'Recover';
+  }
+}
+
+async function cancelProjectDelivery() {
+  cancelDeliveryButton.disabled = true;
+  cancelDeliveryButton.textContent = 'Cancelling';
+  try {
+    const data = await getJson('/v1/deliveries/cancel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: bindingWorkspaceId.value,
+        projectId: bindingProjectId.value,
+        reason: 'admin_cancel_project',
+      }),
+    });
+    renderDelivery(data.delivery);
+    routeLine.textContent = `cancelled ${data.result?.cancelled || 0}`;
+  } catch (error) {
+    routeLine.textContent = error.message;
+  } finally {
+    cancelDeliveryButton.disabled = false;
+    cancelDeliveryButton.textContent = 'Cancel project';
   }
 }
 
@@ -386,6 +433,14 @@ async function runDryRun() {
 
 runButton.addEventListener('click', () => {
   void runDryRun();
+});
+
+recoverDeliveryButton.addEventListener('click', () => {
+  void recoverDelivery();
+});
+
+cancelDeliveryButton.addEventListener('click', () => {
+  void cancelProjectDelivery();
 });
 
 bindingForm.addEventListener('submit', (event) => {

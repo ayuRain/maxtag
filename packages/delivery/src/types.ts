@@ -1,8 +1,18 @@
 import type { PlatformKind, SourceThread } from '@opentag/core';
 
-export type OutboundStatus = 'pending' | 'sending' | 'delivered' | 'failed';
+export type OutboundStatus =
+  | 'pending'
+  | 'sending'
+  | 'delivered'
+  | 'failed'
+  | 'cancelled';
 
-export type TurnDeliveryStatus = 'queued' | 'accepted' | 'completed' | 'failed';
+export type TurnDeliveryStatus =
+  | 'queued'
+  | 'accepted'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 export type ThreadActivationMode = 'mention' | 'always';
 
@@ -57,6 +67,38 @@ export interface CreateOutboundInput {
 export interface ClaimOutboundOptions {
   limit?: number;
   now?: Date;
+}
+
+export interface OutboxScopeFilter {
+  runId?: string;
+  threadId?: string;
+  workspaceId?: string;
+  projectId?: string;
+  targetId?: string;
+  kind?: string;
+}
+
+export interface RecoverStaleOutboxOptions extends OutboxScopeFilter {
+  olderThanMs?: number;
+  now?: Date;
+  limit?: number;
+  reason?: string;
+}
+
+export interface RecoverStaleOutboxResult {
+  requeued: number;
+  failed: number;
+  records: OutboundEnvelope[];
+}
+
+export interface CancelOutboxOptions extends OutboxScopeFilter {
+  reason?: string;
+  limit?: number;
+}
+
+export interface CancelOutboxResult {
+  cancelled: number;
+  records: OutboundEnvelope[];
 }
 
 export interface TurnDeliveryRecord {

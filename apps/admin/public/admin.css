@@ -261,6 +261,17 @@ select:focus {
   gap: 9px;
 }
 
+.delivery-actions {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  gap: 8px;
+}
+
+.delivery-actions button {
+  min-width: 0;
+}
+
 .subhead {
   color: var(--muted);
   font-size: 12px;
@@ -271,7 +282,7 @@ select:focus {
 
 .metric-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
   gap: 6px;
 }
 
@@ -408,6 +419,10 @@ select:focus {
 
 .state.failed {
   color: var(--red);
+}
+
+.state.cancelled {
+  color: var(--muted);
 }
 
 .state.rejected {
@@ -556,7 +571,8 @@ pre {
   }
 
   .binding-actions,
-  .memory-actions {
+  .memory-actions,
+  .delivery-actions {
     grid-template-columns: 1fr;
     justify-items: start;
   }

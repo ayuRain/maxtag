@@ -12,6 +12,7 @@
 - Explicit scoped memory commands and admin API for remember, forget, and show.
 - File-backed outbox, inbound event ledger, turn delivery tracker, and
   configured channel/project bindings.
+- Outbox recovery controls for stale `sending` records and scoped cancellation.
 - Memory and GitHub tool contracts.
 
 ## Phase 1: Lark Tag MVP
@@ -30,6 +31,8 @@
 - Short-circuit duplicate Lark events by `event_id` or message id.
 - Persist inbound event idempotency and upgrade outbound deliveries from the
   file-backed MVP to a worker-backed durable queue.
+- Keep operator recovery scoped to a run, thread, workspace, project, target, or
+  kind so one noisy topic can be stopped without disrupting other projects.
 - Keep the Lark implementation behind `PlatformAdapter`; do not let Lark field
   names leak into core tables or executor prompts.
 

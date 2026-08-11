@@ -15,7 +15,9 @@ import {
   FileDeliveryStore,
   TrackedLarkTransport,
   runDeliveryWorkerPass,
+  type CancelOutboxOptions,
   type ConfigureThreadBindingInput,
+  type RecoverStaleOutboxOptions,
   type ThreadActivationMode,
   type ThreadBinding,
   type ThreadBindingScope,
@@ -352,6 +354,42 @@ function booleanValue(
   if (value === 'true') return true;
   if (value === 'false') return false;
   return fallback;
+}
+
+function numberValue(
+  body: Record<string, unknown>,
+  key: string,
+  fallback?: number,
+): number | undefined {
+  const value = body[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function coerceOutboxFilter(
+  body: Record<string, unknown>,
+): CancelOutboxOptions {
+  return {
+    runId: stringValue(body, 'runId'),
+    threadId: stringValue(body, 'threadId'),
+    workspaceId: stringValue(body, 'workspaceId'),
+    projectId: stringValue(body, 'projectId'),
+    targetId: stringValue(body, 'targetId'),
+    kind: stringValue(body, 'kind'),
+    limit: numberValue(body, 'limit', 100),
+    reason: stringValue(body, 'reason'),
+  };
+}
+
+function coerceRecoverStaleInput(
+  body: Record<string, unknown>,
+): RecoverStaleOutboxOptions {
+  return {
+    ...coerceOutboxFilter(body),
+    olderThanMs: numberValue(body, 'olderThanMs', 120_000),
+  };
 }
 
 function activationModeValue(
@@ -815,6 +853,22 @@ const server = createServer(async (request, response) => {
       const result = await runDeliveryWorkerPass(deliveryStore, async (record) => {
         return record.externalId ?? record.target.cardId ?? record.target.chatId;
       });
+      sendJson(response, 200, { result, delivery: await deliverySnapshot(20) });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/deliveries/recover-stale') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const result = await deliveryStore.recoverStaleOutbox(
+        coerceRecoverStaleInput(body),
+      );
+      sendJson(response, 200, { result, delivery: await deliverySnapshot(20) });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/deliveries/cancel') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const result = await deliveryStore.cancelOutbox(coerceOutboxFilter(body));
       sendJson(response, 200, { result, delivery: await deliverySnapshot(20) });
       return;
     }
