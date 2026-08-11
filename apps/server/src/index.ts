@@ -167,6 +167,12 @@ const capabilityManifest = {
       status: 'partial',
     },
     {
+      capability: 'Topic continuation',
+      agentdock: 'mention starts a topic, follow-up messages continue the session',
+      opentag: 'observed thread binding lets established Lark topics continue without repeated mentions',
+      status: 'partial',
+    },
+    {
       capability: 'Reliable delivery',
       agentdock: 'SQLite outbox and turn delivery tracking',
       opentag: 'file-backed outbox and turn delivery tracker',
@@ -480,9 +486,21 @@ async function routeMessage(input: {
   thread: SourceThread;
   message: SourceMessage;
   binding?: ThreadBinding;
+  establishedThreadBinding?: ThreadBinding;
 }> {
-  const binding = await deliveryStore.getThreadBindingForThread(input.thread);
-  if (!binding) return input;
+  const [binding, establishedThreadBinding] = await Promise.all([
+    deliveryStore.getThreadBindingForThread(input.thread),
+    deliveryStore.getThreadBinding(input.thread.platform, input.thread.externalId),
+  ]);
+  if (!binding) {
+    return {
+      ...input,
+      establishedThreadBinding:
+        establishedThreadBinding?.scope === 'thread'
+          ? establishedThreadBinding
+          : undefined,
+    };
+  }
   const thread = applyBindingToThread(input.thread, binding);
   return {
     thread,
@@ -491,6 +509,10 @@ async function routeMessage(input: {
       threadId: thread.id,
     },
     binding,
+    establishedThreadBinding:
+      establishedThreadBinding?.scope === 'thread'
+        ? establishedThreadBinding
+        : undefined,
   };
 }
 
@@ -498,9 +520,16 @@ function shouldHandleMessage(input: {
   thread: SourceThread;
   message: SourceMessage;
   binding?: ThreadBinding;
+  establishedThreadBinding?: ThreadBinding;
 }): boolean {
   if (input.thread.visibility === 'direct') return true;
   if (input.binding?.activationMode === 'always') return true;
+  if (
+    input.establishedThreadBinding?.source === 'observed' ||
+    input.establishedThreadBinding?.source === 'configured'
+  ) {
+    return true;
+  }
   const requireMention =
     input.binding?.requireMention ?? Boolean(botOpenId);
   return !requireMention || input.message.mentionsAgent;
@@ -698,6 +727,7 @@ async function enqueueMessageRun(input: {
     bindingScope: routeBinding.scope,
     activationMode: routeBinding.activationMode,
     observedBindingId: observedBinding.id,
+    establishedThreadBindingId: routed.establishedThreadBinding?.id,
   };
   const memoryCommand = parseMemoryCommand(routed.message.text, {
     defaultScope: memoryCommandDefaultScope(routed.thread),
@@ -1358,6 +1388,7 @@ const server = createServer(async (request, response) => {
             threadId: routed.thread.id,
             platform: routed.thread.platform,
             bindingId: routed.binding?.id,
+            establishedThreadBindingId: routed.establishedThreadBinding?.id,
           },
         });
         return;

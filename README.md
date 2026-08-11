@@ -73,6 +73,8 @@ packages/ui-cards           Progress/checklist card models
 - Lark group `chat_id` maps into the project route, so one workspace bot can
   serve multiple group/project memories instead of collapsing into one global
   thread.
+- Lark topic continuation is supported: a mention can establish a thread binding,
+  then later messages in that topic continue without repeating the mention.
 - Channel/project bindings can be configured through the admin API and console,
   including mention-only vs always-on activation.
 - Scoped memory can be viewed and updated through `/v1/memory`, the admin

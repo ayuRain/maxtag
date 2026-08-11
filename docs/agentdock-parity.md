@@ -13,6 +13,7 @@ many clients.
 | Multiple future clients | Telegram stub plus Slack/GitHub entries in capability manifest |
 | Scoped memory | Global, workspace, project, and thread file scopes; Lark groups route to project scope; remember/forget commands |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
+| Topic continuation | Mention establishes a Lark topic binding; later messages in that topic continue without repeating the mention |
 | Durable delivery skeleton | File-backed outbox, turn delivery records, scoped cancel, stale recovery, and bindings |
 | Agent run queue | File-backed run status, timeline events, cancel requests, inline worker claim, and stale recovery |
 | Inbound callback ledger | Lark token/timestamp checks, event idempotency, and duplicate short-circuit |

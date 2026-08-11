@@ -25,6 +25,8 @@
 - Normalize group messages, mentions, files, images, and topic/thread metadata.
 - Create or bind `SourceThread` records from Lark group/topic events, with
   channel-level project assignment for group memory.
+- Require mention for the first handled group topic by default, then allow
+  follow-up messages in the established topic without repeating the mention.
 - Resolve workspace and project identity before every run.
 - Support `remember`/`forget` commands for global, workspace, project, and
   thread memory without invoking the full executor.
