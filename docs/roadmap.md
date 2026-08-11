@@ -6,6 +6,8 @@
 - Lark adapter shell.
 - Executor abstraction for Codex and Claude.
 - Progress card model that can render to Lark today and Slack/Telegram later.
+- Selectable Lark delivery transport: memory dry-run locally, HTTP OpenAPI for
+  real app bots.
 - Global/workspace/project/thread memory scopes.
 - Explicit scoped memory commands and admin API for remember, forget, and show.
 - File-backed outbox, inbound event ledger, turn delivery tracker, and
@@ -23,6 +25,8 @@
 - Support `remember`/`forget` commands for global, workspace, project, and
   thread memory without invoking the full executor.
 - Render live progress cards with checklist items, stop action, and final state.
+- Send text replies and interactive progress cards through a real Lark app bot
+  once credentials and scopes are configured.
 - Short-circuit duplicate Lark events by `event_id` or message id.
 - Persist inbound event idempotency and upgrade outbound deliveries from the
   file-backed MVP to a worker-backed durable queue.

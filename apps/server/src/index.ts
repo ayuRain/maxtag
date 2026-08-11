@@ -27,6 +27,7 @@ import {
   type ParsedMemoryCommand,
 } from '@opentag/memory';
 import {
+  HttpLarkTransport,
   LarkPlatformAdapter,
   MemoryLarkTransport,
   larkCallbackEventType,
@@ -34,6 +35,7 @@ import {
   normalizeLarkEvent,
   parseAndValidateLarkCallback,
   type LarkIncomingEvent,
+  type LarkOpenApiDomain,
   type LarkTransport,
 } from '@opentag/platform-lark';
 
@@ -42,6 +44,11 @@ const host = process.env.OPENTAG_HOST || '127.0.0.1';
 const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
 const adminDir = path.resolve('apps/admin/public');
 const botOpenId = process.env.OPENTAG_LARK_BOT_OPEN_ID;
+const larkTransportMode = process.env.OPENTAG_LARK_TRANSPORT || 'memory';
+const larkAppId = process.env.OPENTAG_LARK_APP_ID;
+const larkAppSecret = process.env.OPENTAG_LARK_APP_SECRET;
+const larkDomain = larkDomainValue(process.env.OPENTAG_LARK_DOMAIN);
+const larkBaseUrl = process.env.OPENTAG_LARK_BASE_URL;
 const larkVerificationToken = process.env.OPENTAG_LARK_VERIFICATION_TOKEN;
 const larkCallbackMaxSkewSeconds = Number(
   process.env.OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS || 300,
@@ -167,6 +174,26 @@ const capabilityManifest = {
   ],
 };
 
+function larkDomainValue(value: string | undefined): LarkOpenApiDomain {
+  return value === 'lark' ? 'lark' : 'feishu';
+}
+
+function larkTransportStatus(): Record<string, unknown> {
+  const requested = larkTransportMode;
+  const hasCredentials = Boolean(larkAppId && larkAppSecret);
+  const mode =
+    requested === 'http' || (requested === 'auto' && hasCredentials)
+      ? 'http'
+      : 'memory';
+  return {
+    requested,
+    mode,
+    hasCredentials,
+    domain: larkDomain,
+    baseUrl: larkBaseUrl || undefined,
+  };
+}
+
 async function readTextBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
@@ -205,6 +232,37 @@ function stripPayload<T extends { payload?: unknown }>(
 ): Omit<T, 'payload'> {
   const { payload: _payload, ...rest } = item;
   return rest;
+}
+
+function createLarkTransportForRun(): {
+  transport: LarkTransport;
+  dryRun?: MemoryLarkTransport;
+  mode: 'memory' | 'http';
+} {
+  const status = larkTransportStatus();
+  if (status.mode === 'http') {
+    if (!larkAppId || !larkAppSecret) {
+      throw new Error(
+        'OPENTAG_LARK_TRANSPORT=http requires OPENTAG_LARK_APP_ID and OPENTAG_LARK_APP_SECRET.',
+      );
+    }
+    return {
+      mode: 'http',
+      transport: new HttpLarkTransport({
+        appId: larkAppId,
+        appSecret: larkAppSecret,
+        domain: larkDomain,
+        baseUrl: larkBaseUrl,
+      }),
+    };
+  }
+
+  const dryRun = new MemoryLarkTransport();
+  return {
+    mode: 'memory',
+    transport: dryRun,
+    dryRun,
+  };
 }
 
 async function deliverySnapshot(limit = 50): Promise<Record<string, unknown>> {
@@ -508,8 +566,11 @@ async function runDryMessage(input: {
 }, options?: {
   inboundEventId?: string;
 }): Promise<Record<string, unknown>> {
-  const memoryTransport = new MemoryLarkTransport();
-  const trackedTransport = new TrackedLarkTransport(memoryTransport, deliveryStore);
+  const larkTransport = createLarkTransportForRun();
+  const trackedTransport = new TrackedLarkTransport(
+    larkTransport.transport,
+    deliveryStore,
+  );
   const runtime = createRuntimeForDryRun(trackedTransport);
   const runId = randomUUID();
   const routed = await routeMessage(input);
@@ -571,10 +632,13 @@ async function runDryMessage(input: {
           ...commandResult,
         },
         delivery: await deliverySnapshot(20),
-        larkDryRun: {
-          texts: memoryTransport.texts,
-          cards: memoryTransport.cards,
-        },
+        larkTransport: { mode: larkTransport.mode },
+        larkDryRun: larkTransport.dryRun
+          ? {
+              texts: larkTransport.dryRun.texts,
+              cards: larkTransport.dryRun.cards,
+            }
+          : undefined,
       };
     } catch (error) {
       if (options?.inboundEventId) {
@@ -615,10 +679,13 @@ async function runDryMessage(input: {
     result,
     route,
     delivery,
-    larkDryRun: {
-      texts: memoryTransport.texts,
-      cards: memoryTransport.cards,
-    },
+    larkTransport: { mode: larkTransport.mode },
+    larkDryRun: larkTransport.dryRun
+      ? {
+          texts: larkTransport.dryRun.texts,
+          cards: larkTransport.dryRun.cards,
+        }
+      : undefined,
   };
 }
 
@@ -647,7 +714,10 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
-      sendJson(response, 200, capabilityManifest);
+      sendJson(response, 200, {
+        ...capabilityManifest,
+        larkTransport: larkTransportStatus(),
+      });
       return;
     }
 

@@ -9,7 +9,7 @@ many clients.
 | Capability | OpenTag status |
 | --- | --- |
 | Client-neutral event model | `SourceThread`, `SourceMessage`, and `PlatformAdapter` |
-| Lark first client | Lark normalize path, progress cards, dry-run server route |
+| Lark first client | Lark normalize path, progress cards, dry-run server route, and HTTP OpenAPI transport |
 | Multiple future clients | Telegram stub plus Slack/GitHub entries in capability manifest |
 | Scoped memory | Global, workspace, project, and thread file scopes; Lark groups route to project scope; remember/forget commands |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
@@ -23,6 +23,7 @@ many clients.
 | --- | --- |
 | Durable IM outbox | Replace file store with SQLite/Postgres claim/retry worker |
 | Turn delivery tracking | Add recovery/reconciliation for stale card or reply delivery |
+| Real Lark smoke | Verify app scopes, bot-in-chat permissions, text replies, and card patching against a live app |
 | Binding governance | Add permission checks, audit history, and import/export for configured bindings |
 | Encrypted Lark callbacks | Implement decrypt path before enabling encrypted events in production |
 | Memory governance | Add durable write queue, audit history, approval policy, and admin restore |

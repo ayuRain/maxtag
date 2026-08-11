@@ -236,7 +236,8 @@ async function refreshCapabilities() {
   const lark = (data.clients || []).find((client) => client.id === 'lark');
   const activeClients = (data.clients || []).length;
   const activeScopes = (data.memoryScopes || []).length;
-  capabilityLine.textContent = `${lark?.label || 'Lark'} ${lark?.status || 'ready'} · ${activeClients} clients · ${activeScopes} memory scopes`;
+  const transport = data.larkTransport?.mode || 'memory';
+  capabilityLine.textContent = `${lark?.label || 'Lark'} ${lark?.status || 'ready'} · ${transport} transport · ${activeClients} clients · ${activeScopes} memory scopes`;
   renderClients(data.clients || []);
   renderMemoryScopes(data.memoryScopes || []);
   renderParity(data.parity || []);

@@ -51,12 +51,16 @@ packages/ui-cards           Progress/checklist card models
 
 ## Current Capability
 
-- Lark event ingestion path and dry-run progress card are wired.
+- Lark event ingestion path, progress card rendering, and selectable memory/http
+  Lark transport are wired.
 - The core model is client-neutral: Lark, Telegram, Slack, and GitHub comments
   are clients of the same runtime contract.
 - Memory is scoped into global, workspace, project, and thread files.
 - Dry-run Lark delivery now runs through a file-backed outbox, per-run delivery
   records, and thread-to-project bindings.
+- Real Lark delivery can be enabled with `OPENTAG_LARK_TRANSPORT=http`,
+  `OPENTAG_LARK_APP_ID`, and `OPENTAG_LARK_APP_SECRET`; use
+  `OPENTAG_LARK_DOMAIN=lark` for international Lark.
 - Lark callbacks are recorded in an inbound event ledger with verification-token
   checks, replay-window checks, duplicate short-circuiting, and processed/ignored
   states.
@@ -89,3 +93,19 @@ npm install
 npm run build
 node apps/server/dist/index.js
 ```
+
+## Lark Delivery Mode
+
+Local development defaults to `OPENTAG_LARK_TRANSPORT=memory`, which records
+messages and cards in the admin preview without calling Lark. To send through a
+real app bot:
+
+```bash
+OPENTAG_LARK_TRANSPORT=http
+OPENTAG_LARK_DOMAIN=feishu
+OPENTAG_LARK_APP_ID=cli_xxx
+OPENTAG_LARK_APP_SECRET=xxx
+```
+
+Use `OPENTAG_LARK_DOMAIN=lark` for `open.larksuite.com`, or
+`OPENTAG_LARK_BASE_URL=https://...` for a custom OpenAPI host.
