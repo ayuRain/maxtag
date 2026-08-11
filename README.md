@@ -58,12 +58,13 @@ packages/ui-cards           Progress/checklist card models
 
 ## Current Capability
 
-- Lark event ingestion path, progress card rendering, and selectable memory/http
-  Lark transport are wired.
+- Lark event ingestion, file/image/audio/video resource download, progress card
+  rendering, text replies, and native file/image upload are wired behind
+  selectable memory/http transports.
 - Telegram has native Bot API webhook ingestion, secret validation, update
   idempotency, chat/forum-topic normalization, editable progress messages,
-  long-message chunking, topic replies, outgoing files, and memory/http
-  transports.
+  long-message chunking, topic replies, managed inbound downloads, outgoing
+  files, and memory/http transports.
 - The core model is client-neutral: Lark, Telegram, Slack, and GitHub comments
   are clients of the same runtime contract.
 - Other clients can enter through `/v1/client/events`, which normalizes a
@@ -91,6 +92,12 @@ packages/ui-cards           Progress/checklist card models
   selected run/thread/workspace/project scope.
 - Agent runs are recorded in the durable run ledger with status, timeline
   events, and cancel requests.
+- Client attachments are copied into content-addressed paths isolated by
+  workspace, project, thread, and message before a run is queued. Generic
+  clients cannot inject host paths. Codex and Claude can declare output files;
+  OpenTag validates and copies them into a managed artifact root, records them
+  in the run timeline, sends them through Lark or Telegram, and exposes
+  authenticated Activity downloads with hash verification.
 - Authorized follow-ups in one active thread enter an atomic SQLite steering
   mailbox instead of starting concurrent runs. Live-capable executors can claim
   them in-place. Claude consumes follow-ups through its active stream; Codex
@@ -429,6 +436,9 @@ authenticated for the service account running OpenTag:
 OPENTAG_EXECUTOR_MODE=local-cli
 OPENTAG_EXECUTOR_WORKSPACE_ROOT=/srv/opentag/workspaces
 OPENTAG_EXECUTOR_TIMEOUT_MS=1200000
+OPENTAG_ARTIFACT_ROOT=/srv/opentag/data/artifacts
+OPENTAG_MAX_ARTIFACT_BYTES=31457280
+OPENTAG_MAX_ARTIFACTS=10
 OPENTAG_EXECUTOR_SESSION_MODE=provider
 OPENTAG_THREAD_CONTEXT_MAX_ENTRIES=40
 OPENTAG_THREAD_CONTEXT_MAX_CHARS=40000
@@ -441,6 +451,15 @@ kills the full child process group on cancellation or timeout, bounds retained
 stdout/stderr, and filters service secrets such as Lark credentials from the CLI
 environment. Additional variables must be named explicitly through
 `OPENTAG_EXECUTOR_INHERIT_ENV`.
+
+When a CLI creates a user-facing file, the executor asks it to declare the
+project-relative path in its final response. OpenTag strips that declaration,
+rejects traversal and symlink escapes, limits count and size, copies the bytes
+to `OPENTAG_ARTIFACT_ROOT`, and emits a durable artifact event. Server and
+standalone worker processes must use the same artifact root (the default is
+`<OPENTAG_DATA_DIR>/artifacts`). Activity never turns an arbitrary host path
+into a download; it serves only managed, hash-matching artifacts to an
+authorized operator.
 
 Provider session continuity is enabled by default. OpenTag records the Codex
 thread id or Claude session id against the platform/workspace/project/thread and
@@ -482,7 +501,14 @@ curl -X POST 'http://127.0.0.1:3077/v1/client/events' \
     "message": {
       "id": "chat-message-1",
       "text": "/opentag summarize this repo",
-      "actor": { "id": "user-1", "displayName": "Ada" }
+      "actor": { "id": "user-1", "displayName": "Ada" },
+      "attachments": [{
+        "id": "attachment-1",
+        "kind": "file",
+        "name": "notes.txt",
+        "mimeType": "text/plain",
+        "contentBase64": "bm90ZXMgZm9yIHRoZSBydW4K"
+      }]
     }
   }'
 ```
@@ -491,6 +517,10 @@ Public generic clients require `mentionsAgent: true`, an `/opentag` or
 `@opentag` trigger, or an already established thread with `rootMessageId` or
 `topicId`. Chat-only events do not silently turn a whole group into an active
 session.
+
+Binary generic-client attachments use `contentBase64`; `localPath` is rejected.
+HTTP(S) URLs can remain remote references. `OPENTAG_MAX_ATTACHMENT_BYTES`
+defaults to 30 MB and is checked before decoded bytes are written.
 
 ## Chat Pairing
 
@@ -521,8 +551,8 @@ replicas cannot consume the same code into different projects.
 ## Lark Delivery Mode
 
 Local development defaults to `OPENTAG_LARK_TRANSPORT=memory`, which records
-messages and cards in the admin preview without calling Lark. To send through a
-real app bot:
+messages, cards, and files in the admin preview without calling Lark. To send
+through a real app bot:
 
 ```bash
 OPENTAG_LARK_TRANSPORT=http
@@ -533,6 +563,11 @@ OPENTAG_LARK_APP_SECRET=xxx
 
 Use `OPENTAG_LARK_DOMAIN=lark` for `open.larksuite.com`, or
 `OPENTAG_LARK_BASE_URL=https://...` for a custom OpenAPI host.
+HTTP mode downloads resources from incoming file/image/audio/video messages
+before enqueueing work. Managed image artifacts use Lark image messages when
+the format and 10 MB image limit permit it; other artifacts use the 30 MB file
+upload path. The app must have the corresponding message and file/image
+resource permissions enabled.
 
 ## Telegram Delivery Mode
 
@@ -554,6 +589,6 @@ configured in the OpenTag **Connectors** view should be accepted. Supergroup for
 `message_thread_id` values become stable OpenTag threads; channel bindings map
 those topics to project-scoped identity, grants, and memory.
 
-Incoming Telegram file IDs are retained in attachment metadata. Automatic file
-download is still pending; local outbound artifacts are already uploaded with
-`sendDocument`.
+Incoming Telegram file IDs are resolved with `getFile`, downloaded through the
+Bot API, bounded, and copied into the same managed content store before work is
+queued. Local managed artifacts are uploaded with `sendDocument`.

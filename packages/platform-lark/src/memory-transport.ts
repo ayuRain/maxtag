@@ -1,9 +1,22 @@
-import type { LarkTransport } from './types.js';
-import type { LarkDeliveryMetadata } from './types.js';
+import type {
+  LarkDeliveryMetadata,
+  LarkDownloadedResource,
+  LarkFileInput,
+  LarkTransport,
+} from './types.js';
 
 export class MemoryLarkTransport implements LarkTransport {
   readonly texts: Array<Record<string, unknown>> = [];
   readonly cards: Array<{ id: string; card: Record<string, unknown> }> = [];
+  readonly files: Array<{
+    messageId: string;
+    chatId: string;
+    file: LarkFileInput;
+    rootId?: string;
+    replyToMessageId?: string;
+    metadata?: LarkDeliveryMetadata;
+  }> = [];
+  readonly resources = new Map<string, LarkDownloadedResource>();
 
   async sendText(input: {
     chatId: string;
@@ -38,5 +51,31 @@ export class MemoryLarkTransport implements LarkTransport {
       return;
     }
     this.cards.push({ id: input.cardId, card: input.card });
+  }
+
+  async sendFile(input: {
+    chatId: string;
+    file: LarkFileInput;
+    rootId?: string;
+    replyToMessageId?: string;
+    metadata?: LarkDeliveryMetadata;
+  }): Promise<{ messageId: string }> {
+    const messageId = `file_${this.files.length + 1}`;
+    this.files.push({ messageId, ...input });
+    return { messageId };
+  }
+
+  async downloadMessageResource(input: {
+    messageId: string;
+    fileKey: string;
+    type: 'file' | 'image';
+    maxBytes?: number;
+  }): Promise<LarkDownloadedResource> {
+    const resource = this.resources.get(`${input.messageId}:${input.fileKey}:${input.type}`);
+    if (!resource) throw new Error('lark_memory_resource_not_found');
+    if (input.maxBytes && resource.bytes.byteLength > input.maxBytes) {
+      throw new Error('lark_resource_too_large');
+    }
+    return { ...resource, bytes: new Uint8Array(resource.bytes) };
   }
 }

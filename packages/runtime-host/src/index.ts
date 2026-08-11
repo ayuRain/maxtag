@@ -65,6 +65,7 @@ export * from './routine-scheduler.js';
 export * from './run-control.js';
 export * from './conversation-context.js';
 export * from './workflow-coordinator.js';
+export * from './managed-content-store.js';
 
 export interface RuntimeHostLarkConfig {
   transportMode?: string;
@@ -95,6 +96,9 @@ export interface RuntimeHostExecutorConfig {
   sessionNamespace?: string;
   transcriptMaxEntries?: number;
   transcriptMaxChars?: number;
+  artifactRoot?: string;
+  maxArtifactBytes?: number;
+  maxArtifacts?: number;
 }
 
 export interface RuntimeHostRoutineConfig {
@@ -381,6 +385,11 @@ export class OpenTagWorkerHost {
         config.sessionNamespace || defaultProviderSessionNamespace(),
       transcriptMaxEntries: config.transcriptMaxEntries ?? 40,
       transcriptMaxChars: config.transcriptMaxChars ?? 40_000,
+      artifactRoot: path.resolve(
+        config.artifactRoot || path.join(this.config.dataDir, 'artifacts'),
+      ),
+      maxArtifactBytes: config.maxArtifactBytes ?? 30 * 1024 * 1024,
+      maxArtifacts: config.maxArtifacts ?? 10,
       codex: {
         command: config.codexCommand || 'codex',
         model: config.codexModel,
@@ -802,6 +811,10 @@ export class OpenTagWorkerHost {
       maxOutputBytes: config.maxOutputBytes,
       inheritEnv: config.inheritEnv,
       sessionMode: config.sessionMode,
+      artifactRoot:
+        config.artifactRoot || path.join(this.config.dataDir, 'artifacts'),
+      maxArtifactBytes: config.maxArtifactBytes,
+      maxArtifacts: config.maxArtifacts,
     } as const;
     const codex = createCodexExecutor({
       ...common,
@@ -931,6 +944,7 @@ export class OpenTagWorkerHost {
       ? {
           texts: dryRun.texts,
           cards: dryRun.cards,
+          files: dryRun.files,
         }
       : undefined;
   }

@@ -78,6 +78,12 @@ export interface TelegramDocumentInput {
   name?: string;
 }
 
+export interface TelegramDownloadedFile {
+  bytes: Uint8Array;
+  name?: string;
+  sizeBytes?: number;
+}
+
 export interface TelegramTransport {
   sendText(input: {
     chatId: string;
@@ -100,4 +106,8 @@ export interface TelegramTransport {
     replyToMessageId?: string;
     metadata?: TelegramDeliveryMetadata;
   }): Promise<{ messageId: string }>;
+  downloadFile(input: {
+    fileId: string;
+    maxBytes?: number;
+  }): Promise<TelegramDownloadedFile>;
 }

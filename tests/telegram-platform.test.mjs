@@ -188,6 +188,48 @@ test('HTTP Telegram transport sends topic replies and surfaces API retry metadat
   );
 });
 
+test('HTTP Telegram transport resolves and bounds native file downloads', async () => {
+  const requests = [];
+  const transport = new HttpTelegramTransport({
+    botToken: 'token',
+    baseUrl: 'https://telegram.example',
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith('/bottoken/getFile')) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            result: {
+              file_id: 'file-1',
+              file_size: 8,
+              file_path: 'documents/evidence 1.txt',
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (url.endsWith('/file/bottoken/documents/evidence%201.txt')) {
+        return new Response(new TextEncoder().encode('evidence'), {
+          status: 200,
+          headers: { 'content-length': '8' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+  });
+
+  const result = await transport.downloadFile({ fileId: 'file-1', maxBytes: 20 });
+  assert.equal(new TextDecoder().decode(result.bytes), 'evidence');
+  assert.equal(result.name, 'evidence 1.txt');
+  assert.equal(result.sizeBytes, 8);
+  assert.equal(requests.length, 2);
+
+  await assert.rejects(
+    transport.downloadFile({ fileId: 'file-1', maxBytes: 4 }),
+    (error) => error instanceof TelegramApiError && error.statusCode === 413,
+  );
+});
+
 test('Telegram adapter edits progress, chunks replies, sends files, and tracks delivery', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-telegram-'));
   try {

@@ -3,6 +3,7 @@ import path from 'node:path';
 import type {
   TelegramDeliveryMetadata,
   TelegramDocumentInput,
+  TelegramDownloadedFile,
   TelegramTransport,
 } from './types.js';
 
@@ -27,6 +28,13 @@ interface TelegramMessageResult {
   message_id?: number;
 }
 
+interface TelegramFileResult {
+  file_id?: string;
+  file_unique_id?: string;
+  file_size?: number;
+  file_path?: string;
+}
+
 function numericId(value: string | undefined): number | undefined {
   if (!value || !/^-?\d+$/u.test(value)) return undefined;
   return Number(value);
@@ -46,6 +54,40 @@ function messageIdFrom(result: TelegramMessageResult, method: string): string {
     });
   }
   return String(result.message_id);
+}
+
+async function boundedResponseBytes(
+  response: Response,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel('managed_content_limit_exceeded');
+        throw new TelegramApiError({
+          statusCode: 413,
+          message: `Telegram file exceeds the ${maxBytes} byte managed-content limit.`,
+        });
+      }
+      chunks.push(chunk.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }
 
 export class TelegramApiError extends Error {
@@ -132,6 +174,52 @@ export class HttpTelegramTransport implements TelegramTransport {
       reply_parameters: replyParameters(input.replyToMessageId),
     });
     return { messageId: messageIdFrom(result, 'sendDocument') };
+  }
+
+  async downloadFile(input: {
+    fileId: string;
+    maxBytes?: number;
+  }): Promise<TelegramDownloadedFile> {
+    const file = await this.request<TelegramFileResult>('getFile', {
+      file_id: input.fileId,
+    });
+    if (!file.file_path) {
+      throw new TelegramApiError({
+        message: 'Telegram getFile response did not include file_path.',
+      });
+    }
+    const maxBytes = Math.max(1, input.maxBytes ?? 30 * 1024 * 1024);
+    if (file.file_size && file.file_size > maxBytes) {
+      throw new TelegramApiError({
+        statusCode: 413,
+        message: `Telegram file exceeds the ${maxBytes} byte managed-content limit.`,
+      });
+    }
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/file/bot${this.botToken}/${file.file_path
+        .split('/')
+        .map((segment) => encodeURIComponent(segment))
+        .join('/')}`,
+    );
+    if (!response.ok) {
+      throw new TelegramApiError({
+        statusCode: response.status,
+        message: `Telegram file download failed with HTTP ${response.status}.`,
+      });
+    }
+    const declaredSize = Number(response.headers.get('content-length') || 0);
+    if (declaredSize > maxBytes) {
+      throw new TelegramApiError({
+        statusCode: 413,
+        message: `Telegram file exceeds the ${maxBytes} byte managed-content limit.`,
+      });
+    }
+    const bytes = await boundedResponseBytes(response, maxBytes);
+    return {
+      bytes,
+      name: path.basename(file.file_path),
+      sizeBytes: bytes.byteLength,
+    };
   }
 
   private async sendLocalDocument(input: {

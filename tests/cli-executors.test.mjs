@@ -274,6 +274,48 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10 }
   }
 });
 
+test('Codex publishes declared files as managed artifacts', async () => {
+  const files = await fixture();
+  const artifactRoot = path.join(files.root, 'managed-artifacts');
+  const fakeCli = await files.script(
+    'fake-codex-artifact.mjs',
+    `import fs from 'node:fs/promises';
+let prompt = '';
+process.stdin.setEncoding('utf8');
+for await (const chunk of process.stdin) prompt += chunk;
+await fs.writeFile('result.csv', 'name,value\\nlatency,42\\n');
+const text = ['Analysis complete.', 'OPENTAG_ARTIFACT: {"path":"result.csv","title":"Latency result","kind":"report"}'].join('\\n');
+console.log(JSON.stringify({ type: 'thread.started', thread_id: 'artifact-session' }));
+console.log(JSON.stringify({ type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text } }));
+console.log(JSON.stringify({ type: 'turn.completed' }));
+`,
+  );
+  const input = request();
+  const executor = createCodexExecutor({
+    mode: 'local-cli',
+    command: process.execPath,
+    commandPrefixArgs: [fakeCli],
+    workspaceRoot: files.root,
+    artifactRoot,
+    timeoutMs: 2_000,
+  });
+
+  const result = await executor.run(input.value);
+  assert.equal(result.summary, 'Analysis complete.');
+  assert.equal(result.artifacts.length, 1);
+  assert.equal(result.artifacts[0].title, 'Latency result');
+  assert.equal(
+    await fs.readFile(result.artifacts[0].path, 'utf8'),
+    'name,value\nlatency,42\n',
+  );
+  assert.ok(
+    input.events.some(
+      (event) =>
+        event.type === 'artifact' && event.artifact.id === result.artifacts[0].id,
+    ),
+  );
+});
+
 test('Codex resumes a persisted provider session without replaying transcript', async () => {
   const files = await fixture();
   const fakeCli = await files.script(

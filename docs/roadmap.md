@@ -34,7 +34,13 @@
 - Generic client ingress that maps non-Lark envelopes into the same run queue,
   memory scopes, and tracked text delivery.
 - Native Telegram Bot API webhook/send/edit adapter with forum-topic routing,
-  update idempotency, outgoing files, and tracked delivery.
+  update idempotency, managed inbound downloads, outgoing files, and tracked
+  delivery.
+- Content-addressed inbound attachment storage isolated by workspace, project,
+  thread, and message; generic base64 upload rejects host path injection.
+- Managed CLI artifact declarations with traversal/symlink/size validation,
+  durable run events, native Lark/Telegram delivery, and authenticated
+  integrity-checked Activity downloads.
 - Shared file-backed workspace/project agent policy with per-project identity,
   instructions, executor selection, tool grants, network policy, and audit.
 - Opt-in local Codex and Claude CLI execution with bounded output, process-group
@@ -63,7 +69,8 @@
   transactional pairing and binding operation.
 - Verify Lark callbacks with token/timestamp checks; add event decrypt before
   production encrypted callbacks.
-- Normalize group messages, mentions, files, images, and topic/thread metadata.
+- Extend rich-post extraction beyond the implemented text, file, image, audio,
+  video, mention, and topic/thread normalization.
 - Create or bind `SourceThread` records from Lark group/topic events, with
   channel-level project assignment for group memory.
 - Require mention for the first handled group topic by default, then allow
@@ -95,7 +102,8 @@
 - Add true mid-turn Codex steering when its provider exposes a stable streaming
   input API. Claude already accepts live `stream-json` follow-ups, and both CLI
   adapters resume provider sessions with durable transcript recovery.
-- Attach artifacts: final message, file, patch, hosted report, PR link.
+- Add hosted interactive reports and first-class PR/link artifact producers on
+  top of the implemented managed file/report/chart/patch path.
 - Add resumable execution checkpoints and lease heartbeats so a replacement
   worker can continue interrupted runs instead of restarting them from scratch.
 
@@ -125,7 +133,7 @@
 ## Phase 5: Multi-Platform
 
 - Keep native platform webhooks thin by mapping them into `/v1/client/events`.
-- Harden Telegram with inbound file downloads and live bot webhook/delivery
-  smoke tests.
+- Run live Telegram webhook/download/delivery smoke tests for the implemented
+  native file pipeline.
 - Slack adapter can map thread_ts to `SourceThread`.
 - GitHub issue/PR comments can become first-class work threads.

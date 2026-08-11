@@ -7,6 +7,7 @@ import type {
   SourceThread,
 } from '@opentag/core';
 import { buildLarkProgressCard } from '@opentag/ui-cards';
+import path from 'node:path';
 import type { LarkTransport } from './types.js';
 
 class LarkProgressSurface implements ProgressSurface {
@@ -90,5 +91,31 @@ export class LarkPlatformAdapter implements PlatformAdapter {
         stage: 'thread-reply',
       },
     });
+
+    for (const artifact of artifacts || []) {
+      if (!artifact.path) continue;
+      await this.transport.sendFile({
+        chatId: thread.channelId || thread.externalId,
+        rootId: thread.rootMessageId,
+        replyToMessageId: options?.replyToMessageId,
+        file: {
+          path: artifact.path,
+          name:
+            typeof artifact.metadata?.filename === 'string'
+              ? artifact.metadata.filename
+              : path.basename(artifact.path),
+          mimeType:
+            typeof artifact.metadata?.mimeType === 'string'
+              ? artifact.metadata.mimeType
+              : undefined,
+        },
+        metadata: {
+          runId: options?.runId,
+          thread,
+          stage: 'artifact',
+          artifactId: artifact.id,
+        },
+      });
+    }
   }
 }

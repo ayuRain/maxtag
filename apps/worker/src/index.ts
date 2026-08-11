@@ -120,6 +120,9 @@ async function main(): Promise<void> {
       transcriptMaxChars: optionalNumberEnv(
         'OPENTAG_THREAD_CONTEXT_MAX_CHARS',
       ),
+      artifactRoot: process.env.OPENTAG_ARTIFACT_ROOT,
+      maxArtifactBytes: optionalNumberEnv('OPENTAG_MAX_ARTIFACT_BYTES'),
+      maxArtifacts: optionalNumberEnv('OPENTAG_MAX_ARTIFACTS'),
     },
     routines: {
       defaultTimeZone:

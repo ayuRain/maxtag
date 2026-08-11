@@ -1,5 +1,7 @@
 import type {
   LarkDeliveryMetadata,
+  LarkDownloadedResource,
+  LarkFileInput,
   LarkTransport,
 } from '@opentag/platform-lark';
 import type { DeliveryStore } from './file-delivery-store.js';
@@ -129,5 +131,51 @@ export class TrackedLarkTransport implements LarkTransport {
       await this.store.markFailed(envelope.id, errorMessage(error));
       throw error;
     }
+  }
+
+  async sendFile(input: {
+    chatId: string;
+    file: LarkFileInput;
+    rootId?: string;
+    replyToMessageId?: string;
+    metadata?: LarkDeliveryMetadata;
+  }): Promise<{ messageId: string }> {
+    const envelope = await this.store.enqueue({
+      kind: 'lark.file',
+      target: metadataTarget(
+        {
+          platform: 'lark',
+          chatId: input.chatId,
+          rootId: input.rootId,
+          replyToMessageId: input.replyToMessageId,
+        },
+        input.metadata,
+      ),
+      payload: {
+        file: input.file,
+        stage: input.metadata?.stage,
+        artifactId: input.metadata?.artifactId,
+      },
+      runId: input.metadata?.runId,
+      thread: input.metadata?.thread,
+    });
+    await this.store.markSending(envelope.id);
+    try {
+      const result = await this.delegate.sendFile(input);
+      await this.store.markDelivered(envelope.id, result.messageId);
+      return result;
+    } catch (error) {
+      await this.store.markFailed(envelope.id, errorMessage(error));
+      throw error;
+    }
+  }
+
+  downloadMessageResource(input: {
+    messageId: string;
+    fileKey: string;
+    type: 'file' | 'image';
+    maxBytes?: number;
+  }): Promise<LarkDownloadedResource> {
+    return this.delegate.downloadMessageResource(input);
   }
 }

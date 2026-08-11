@@ -163,7 +163,13 @@ export class TelegramPlatformAdapter implements PlatformAdapter {
       if (!artifact.path) continue;
       await this.transport.sendDocument({
         chatId: targetChatId(thread),
-        document: { path: artifact.path, name: artifact.title },
+        document: {
+          path: artifact.path,
+          name:
+            typeof artifact.metadata?.filename === 'string'
+              ? artifact.metadata.filename
+              : artifact.title,
+        },
         caption: artifact.title.slice(0, 900),
         messageThreadId: topicId(thread),
         metadata: { runId: options?.runId, thread, stage: 'artifact' },

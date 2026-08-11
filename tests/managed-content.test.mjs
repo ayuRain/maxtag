@@ -1,0 +1,257 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { collectCliArtifacts } from '@opentag/executor-cli';
+import {
+  ManagedContentError,
+  ManagedContentStore,
+  pathIsWithin,
+} from '@opentag/runtime-host';
+
+function message(projectId = 'payments') {
+  const thread = {
+    id: `custom:room:${projectId}`,
+    platform: 'custom-chat',
+    externalId: `room:${projectId}`,
+    workspaceId: 'acme',
+    projectId,
+    visibility: 'public',
+  };
+  return {
+    thread,
+    message: {
+      id: `message:${projectId}`,
+      threadId: thread.id,
+      platform: 'custom-chat',
+      text: 'Inspect this file.',
+      actor: { id: 'user-1' },
+      createdAt: new Date().toISOString(),
+      mentionsAgent: true,
+    },
+  };
+}
+
+test('managed content materializes client bytes into isolated content-addressed paths', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-content-'));
+  try {
+    const store = new ManagedContentStore({ rootDir: root, maxBytes: 1024 });
+    const first = message('payments');
+    const attachment = {
+      id: 'client-file-1',
+      kind: 'file',
+      name: '../../report.txt',
+      mimeType: 'text/plain',
+      metadata: {
+        clientContentBase64: Buffer.from('managed report').toString('base64'),
+      },
+    };
+    const managed = await store.materializeClientAttachment({
+      ...first,
+      attachment,
+    });
+
+    assert.equal(managed.name, 'report.txt');
+    assert.equal(managed.sizeBytes, 14);
+    assert.equal(managed.metadata.managed, true);
+    assert.equal(managed.metadata.source, 'client');
+    assert.equal(managed.metadata.clientContentBase64, undefined);
+    assert.equal(pathIsWithin(root, managed.localPath), true);
+    assert.equal(await fs.readFile(managed.localPath, 'utf8'), 'managed report');
+
+    const other = message('ledger');
+    const isolated = await store.materializeClientAttachment({
+      ...other,
+      attachment,
+    });
+    assert.notEqual(path.dirname(isolated.localPath), path.dirname(managed.localPath));
+    assert.equal(isolated.metadata.projectId, 'ledger');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('managed content rejects host paths, invalid base64, empty files, and size overflow', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-content-errors-'));
+  const scoped = message();
+  const store = new ManagedContentStore({ rootDir: root, maxBytes: 4 });
+  try {
+    await assert.rejects(
+      store.materializeClientAttachment({
+        ...scoped,
+        attachment: {
+          id: 'path',
+          kind: 'file',
+          metadata: {
+            clientLocalPathRejected: true,
+            clientContentBase64: Buffer.from('data').toString('base64'),
+          },
+        },
+      }),
+      (error) =>
+        error instanceof ManagedContentError &&
+        error.code === 'attachment_local_path_not_allowed',
+    );
+    await assert.rejects(
+      store.materializeClientAttachment({
+        ...scoped,
+        attachment: {
+          id: 'bad',
+          kind: 'file',
+          metadata: { clientContentBase64: 'not base64!' },
+        },
+      }),
+      (error) =>
+        error instanceof ManagedContentError &&
+        error.code === 'attachment_base64_invalid',
+    );
+    await assert.rejects(
+      store.materializeClientAttachment({
+        ...scoped,
+        attachment: {
+          id: 'large',
+          kind: 'file',
+          metadata: {
+            clientContentBase64: Buffer.from('too large').toString('base64'),
+          },
+        },
+      }),
+      (error) =>
+        error instanceof ManagedContentError && error.code === 'attachment_too_large',
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('managed content refuses a scoped directory redirected outside its root', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-content-symlink-'));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-content-outside-'));
+  const scoped = message();
+  const store = new ManagedContentStore({ rootDir: root, maxBytes: 1024 });
+  const attachment = {
+    id: 'redirected',
+    kind: 'file',
+    name: 'report.txt',
+    metadata: {
+      clientContentBase64: Buffer.from('managed report').toString('base64'),
+    },
+  };
+  try {
+    const first = await store.materializeClientAttachment({
+      ...scoped,
+      attachment,
+    });
+    const messageDirectory = path.dirname(first.localPath);
+    await fs.rm(messageDirectory, { recursive: true, force: true });
+    await fs.symlink(outside, messageDirectory, 'dir');
+
+    await assert.rejects(
+      store.materializeClientAttachment({ ...scoped, attachment }),
+      (error) =>
+        error instanceof ManagedContentError &&
+        error.code === 'attachment_path_invalid',
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('managed content does not create scopes through a redirected inputs directory', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-content-root-link-'));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-content-root-outside-'));
+  const scoped = message();
+  const store = new ManagedContentStore({ rootDir: root, maxBytes: 1024 });
+  try {
+    await fs.symlink(outside, path.join(root, 'inputs'), 'dir');
+    await assert.rejects(
+      store.materializeClientAttachment({
+        ...scoped,
+        attachment: {
+          id: 'redirected-root',
+          kind: 'file',
+          name: 'report.txt',
+          metadata: {
+            clientContentBase64: Buffer.from('managed report').toString('base64'),
+          },
+        },
+      }),
+      (error) =>
+        error instanceof ManagedContentError &&
+        error.code === 'attachment_path_invalid',
+    );
+    assert.deepEqual(await fs.readdir(outside), []);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('CLI artifact collection strips declarations and rejects traversal and symlinks', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-artifacts-'));
+  const cwd = path.join(root, 'project');
+  const artifactRoot = path.join(root, 'managed');
+  try {
+    await fs.mkdir(cwd);
+    await fs.writeFile(path.join(cwd, 'report.csv'), 'metric,value\nlatency,42\n');
+    await fs.writeFile(path.join(root, 'outside.txt'), 'secret');
+    await fs.symlink(path.join(root, 'outside.txt'), path.join(cwd, 'outside-link.txt'));
+
+    const result = await collectCliArtifacts({
+      finalMessage: [
+        'Report complete.',
+        'OPENTAG_ARTIFACT: {"path":"report.csv","title":"Latency report","kind":"report"}',
+        'OPENTAG_ARTIFACT: {"path":"../outside.txt","title":"Outside"}',
+        'OPENTAG_ARTIFACT: {"path":"outside-link.txt","title":"Symlink"}',
+      ].join('\n'),
+      cwd,
+      artifactRoot,
+      runId: 'run-artifact-1',
+    });
+
+    assert.equal(result.summary, 'Report complete.');
+    assert.equal(result.artifacts.length, 1);
+    assert.equal(result.artifacts[0].title, 'Latency report');
+    assert.equal(result.artifacts[0].metadata.managed, true);
+    assert.equal(pathIsWithin(artifactRoot, result.artifacts[0].path), true);
+    assert.equal(
+      await fs.readFile(result.artifacts[0].path, 'utf8'),
+      'metric,value\nlatency,42\n',
+    );
+    assert.equal(result.warnings.length, 2);
+    assert.ok(result.warnings.some((warning) => warning.includes('escaped')));
+    assert.ok(result.warnings.some((warning) => warning.includes('outside')));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('CLI artifact collection refuses a redirected managed runs directory', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-artifact-root-link-'));
+  const cwd = path.join(root, 'project');
+  const artifactRoot = path.join(root, 'managed');
+  const outside = path.join(root, 'outside');
+  try {
+    await fs.mkdir(cwd);
+    await fs.mkdir(artifactRoot);
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(cwd, 'report.txt'), 'managed report');
+    await fs.symlink(outside, path.join(artifactRoot, 'runs'), 'dir');
+
+    await assert.rejects(
+      collectCliArtifacts({
+        finalMessage:
+          'OPENTAG_ARTIFACT: {"path":"report.txt","title":"Report"}',
+        cwd,
+        artifactRoot,
+        runId: 'redirected-run',
+      }),
+      /managed_artifact_directory_escape/u,
+    );
+    assert.deepEqual(await fs.readdir(outside), []);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

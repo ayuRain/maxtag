@@ -1,8 +1,9 @@
 import type { AgentRunRequest, AgentRunResult, Executor } from '@opentag/core';
 import {
+  artifactInstructions,
   buildAgentPrompt,
+  collectCliArtifacts,
   createCliEnvironment,
-  finalResponse,
   isMissingCliSession,
   resolveProjectWorkingDirectory,
   runCliCommand,
@@ -224,7 +225,12 @@ export class CodexExecutor implements Executor {
         command: this.options.command || 'codex',
         args,
         cwd,
-        input: buildAgentPrompt(request),
+        input: [
+          buildAgentPrompt(request),
+          artifactInstructions(Boolean(this.options.artifactRoot)),
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
         env: createCliEnvironment({
           provider: 'codex',
           request,
@@ -283,9 +289,23 @@ export class CodexExecutor implements Executor {
         detail: runningItems.size ? `${runningItems.size} item(s)` : 'completed',
       },
     });
+    const collected = await collectCliArtifacts({
+      finalMessage,
+      cwd,
+      artifactRoot: this.options.artifactRoot,
+      runId: request.runId,
+      maxArtifactBytes: this.options.maxArtifactBytes,
+      maxArtifacts: this.options.maxArtifacts,
+    });
+    for (const warning of collected.warnings) {
+      await request.onEvent?.({ type: 'log', level: 'warn', message: warning });
+    }
+    for (const artifact of collected.artifacts) {
+      await request.onEvent?.({ type: 'artifact', artifact });
+    }
     return {
-      summary: finalResponse(finalMessage),
-      artifacts: [],
+      summary: collected.summary,
+      artifacts: collected.artifacts,
     };
   }
 

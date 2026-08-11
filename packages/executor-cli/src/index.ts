@@ -1,7 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { AgentRunRequest } from '@opentag/core';
+import type { AgentRunRequest, Artifact, ArtifactKind } from '@opentag/core';
 
 export type CliExecutorMode = 'dry-run' | 'local-cli';
 
@@ -15,6 +17,15 @@ export interface CliExecutorOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   inheritEnv?: string[];
+  artifactRoot?: string;
+  maxArtifactBytes?: number;
+  maxArtifacts?: number;
+}
+
+export interface CollectedCliArtifacts {
+  summary: string;
+  artifacts: Artifact[];
+  warnings: string[];
 }
 
 export interface CliStdinWriter {
@@ -461,6 +472,17 @@ export function buildAgentSystemPrompt(request: AgentRunRequest): string {
     .join('\n\n');
 }
 
+export function artifactInstructions(enabled: boolean): string {
+  if (!enabled) return '';
+  return [
+    'When you create a user-facing file that should be returned to the work thread, keep it inside the current project directory.',
+    'For each such file, add exactly one final-response line in this form:',
+    'OPENTAG_ARTIFACT: {"path":"relative/path.ext","title":"Human title","kind":"file"}',
+    'The path must be relative to the current project directory. Valid kinds are file, report, chart, and patch.',
+    'OpenTag removes these declaration lines from the visible reply, validates the files, and publishes managed copies.',
+  ].join('\n');
+}
+
 export function buildThreadTranscript(request: AgentRunRequest): string {
   if (request.providerSession?.sessionId) return '';
   const transcript = request.transcript;
@@ -595,4 +617,265 @@ export function createCliEnvironment(input: {
 export function finalResponse(value: string, limit = 12_000): string {
   const text = value.trim();
   return text.length <= limit ? text : `${text.slice(0, limit)}\n[truncated]`;
+}
+
+const DEFAULT_MAX_ARTIFACT_BYTES = 30 * 1024 * 1024;
+const DEFAULT_MAX_ARTIFACTS = 10;
+const ARTIFACT_PREFIX = 'OPENTAG_ARTIFACT:';
+const ARTIFACT_KINDS = new Set<ArtifactKind>([
+  'file',
+  'report',
+  'chart',
+  'patch',
+]);
+
+function artifactSegment(value: string): string {
+  const readable = value.replace(/[^a-zA-Z0-9_.-]/gu, '_').slice(0, 60) || 'run';
+  return `${readable}-${createHash('sha256').update(value).digest('hex').slice(0, 10)}`;
+}
+
+function artifactFilename(value: string): string {
+  const cleaned = path
+    .basename(value)
+    .replace(/[\u0000-\u001f\u007f/\\]/gu, '_')
+    .replace(/^\.+/u, '')
+    .trim()
+    .slice(0, 180);
+  return cleaned || 'artifact';
+}
+
+function pathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function artifactMimeType(filename: string): string {
+  const extension = path.extname(filename).toLowerCase();
+  return (
+    {
+      '.csv': 'text/csv',
+      '.html': 'text/html',
+      '.jpeg': 'image/jpeg',
+      '.jpg': 'image/jpeg',
+      '.json': 'application/json',
+      '.md': 'text/markdown',
+      '.pdf': 'application/pdf',
+      '.png': 'image/png',
+      '.svg': 'image/svg+xml',
+      '.txt': 'text/plain',
+      '.webp': 'image/webp',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.zip': 'application/zip',
+    } as Record<string, string>
+  )[extension] || 'application/octet-stream';
+}
+
+function declarationJson(line: string): string | undefined {
+  const trimmed = line.trim().replace(/^`|`$/gu, '').trim();
+  if (!trimmed.startsWith(ARTIFACT_PREFIX)) return undefined;
+  return trimmed.slice(ARTIFACT_PREFIX.length).trim();
+}
+
+async function readArtifactFile(
+  source: string,
+  maxBytes: number,
+): Promise<Buffer> {
+  const handle = await fs.open(
+    source,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0),
+  );
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error('not_regular_file');
+    if (!stat.size || stat.size > maxBytes) {
+      throw new Error(`invalid_size:${stat.size}`);
+    }
+    const bytes = await handle.readFile();
+    if (bytes.byteLength !== stat.size || bytes.byteLength > maxBytes) {
+      throw new Error('file_changed_during_collection');
+    }
+    return bytes;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function writeArtifactImmutable(
+  target: string,
+  bytes: Buffer,
+  digest: string,
+): Promise<void> {
+  try {
+    await fs.writeFile(target, bytes, { flag: 'wx', mode: 0o600 });
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  const existing = await readArtifactFile(target, bytes.byteLength);
+  if (createHash('sha256').update(existing).digest('hex') !== digest) {
+    throw new Error('managed_artifact_integrity_error');
+  }
+}
+
+export async function collectCliArtifacts(input: {
+  finalMessage: string;
+  cwd: string;
+  artifactRoot?: string;
+  runId: string;
+  maxArtifactBytes?: number;
+  maxArtifacts?: number;
+}): Promise<CollectedCliArtifacts> {
+  const declarations: string[] = [];
+  const visibleLines: string[] = [];
+  for (const line of input.finalMessage.split(/\r?\n/u)) {
+    const declaration = declarationJson(line);
+    if (declaration === undefined) visibleLines.push(line);
+    else declarations.push(declaration);
+  }
+
+  if (!declarations.length) {
+    return { summary: finalResponse(input.finalMessage), artifacts: [], warnings: [] };
+  }
+  if (!input.artifactRoot) {
+    return {
+      summary: finalResponse(visibleLines.join('\n')),
+      artifacts: [],
+      warnings: ['Artifact declarations were ignored because no managed artifact root is configured.'],
+    };
+  }
+
+  const warnings: string[] = [];
+  const artifacts: Artifact[] = [];
+  const maxArtifacts = Math.max(1, input.maxArtifacts ?? DEFAULT_MAX_ARTIFACTS);
+  const maxBytes = Math.max(1, input.maxArtifactBytes ?? DEFAULT_MAX_ARTIFACT_BYTES);
+  const cwdReal = await fs.realpath(input.cwd);
+  const artifactRoot = path.resolve(input.artifactRoot);
+  const runSegment = artifactSegment(input.runId);
+  const runDirectory = path.join(
+    artifactRoot,
+    'runs',
+    runSegment,
+  );
+  await fs.mkdir(artifactRoot, { recursive: true, mode: 0o700 });
+  const artifactRootReal = await fs.realpath(artifactRoot);
+  const runsDirectory = path.join(artifactRootReal, 'runs');
+  await fs.mkdir(runsDirectory, { recursive: true, mode: 0o700 });
+  const runsDirectoryReal = await fs.realpath(runsDirectory);
+  if (!pathWithin(artifactRootReal, runsDirectoryReal)) {
+    throw new Error('managed_artifact_directory_escape');
+  }
+  const runCandidate = path.join(runsDirectoryReal, runSegment);
+  await fs.mkdir(runCandidate, { recursive: true, mode: 0o700 });
+  const runDirectoryReal = await fs.realpath(runCandidate);
+  if (!pathWithin(artifactRootReal, runDirectoryReal)) {
+    throw new Error('managed_artifact_directory_escape');
+  }
+
+  for (const [index, raw] of declarations.slice(0, maxArtifacts).entries()) {
+    let parsed: Record<string, unknown>;
+    try {
+      const value = JSON.parse(raw) as unknown;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('declaration must be an object');
+      }
+      parsed = value as Record<string, unknown>;
+    } catch (error) {
+      warnings.push(
+        `Artifact declaration ${index + 1} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      continue;
+    }
+
+    const relativePath = typeof parsed.path === 'string' ? parsed.path.trim() : '';
+    if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes('\0')) {
+      warnings.push(`Artifact declaration ${index + 1} must use a relative path.`);
+      continue;
+    }
+    const sourceCandidate = path.resolve(cwdReal, relativePath);
+    if (!pathWithin(cwdReal, sourceCandidate)) {
+      warnings.push(`Artifact declaration ${index + 1} escaped the project directory.`);
+      continue;
+    }
+
+    let source: string;
+    try {
+      source = await fs.realpath(sourceCandidate);
+    } catch {
+      warnings.push(`Artifact declaration ${index + 1} points to a missing file: ${relativePath}`);
+      continue;
+    }
+    if (!pathWithin(cwdReal, source)) {
+      warnings.push(`Artifact declaration ${index + 1} resolves outside the project directory.`);
+      continue;
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await readArtifactFile(source, maxBytes);
+    } catch (error) {
+      warnings.push(
+        `Artifact declaration ${index + 1} could not be collected safely: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      continue;
+    }
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const filename = artifactFilename(relativePath);
+    const managedName = `${String(index + 1).padStart(2, '0')}-${digest.slice(0, 16)}-${filename}`;
+    const managedPath = path.join(runDirectory, managedName);
+    const managedRealPath = path.join(runDirectoryReal, managedName);
+    await writeArtifactImmutable(managedRealPath, bytes, digest);
+
+    const declaredKind = typeof parsed.kind === 'string' ? parsed.kind : 'file';
+    const kind = ARTIFACT_KINDS.has(declaredKind as ArtifactKind)
+      ? (declaredKind as ArtifactKind)
+      : 'file';
+    const title =
+      typeof parsed.title === 'string' && parsed.title.trim()
+        ? parsed.title.trim().slice(0, 200)
+        : filename;
+    artifacts.push({
+      id: `artifact:${digest.slice(0, 24)}:${index + 1}`,
+      kind,
+      title,
+      path: managedPath,
+      metadata: {
+        managed: true,
+        runId: input.runId,
+        sha256: digest,
+        sizeBytes: bytes.byteLength,
+        mimeType: artifactMimeType(filename),
+        filename,
+        sourceRelativePath: path.relative(cwdReal, source),
+        collectedAt: new Date().toISOString(),
+      },
+    });
+  }
+  if (declarations.length > maxArtifacts) {
+    warnings.push(
+      `${declarations.length - maxArtifacts} artifact declaration(s) exceeded the ${maxArtifacts} file limit.`,
+    );
+  }
+
+  const manifest = {
+    runId: input.runId,
+    generatedAt: new Date().toISOString(),
+    artifacts,
+    warnings,
+  };
+  await fs.writeFile(
+    path.join(runDirectoryReal, `manifest-${randomUUID()}.json`),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    { flag: 'wx', mode: 0o600 },
+  );
+  const visible = visibleLines.join('\n').trim();
+  return {
+    summary: finalResponse(
+      visible ||
+        (artifacts.length
+          ? `Created ${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'}.`
+          : 'No valid artifacts were produced.'),
+    ),
+    artifacts,
+    warnings,
+  };
 }

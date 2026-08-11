@@ -228,6 +228,29 @@ function formatTime(value, includeDate = false) {
   }).format(date);
 }
 
+function formatBytes(value) {
+  if (!Number.isFinite(value) || value < 0) return 'Size unknown';
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let amount = value / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && amount >= 1024; index += 1) {
+    amount /= 1024;
+    unit = units[index];
+  }
+  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`;
+}
+
+function safeHttpUrl(value) {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value, window.location.origin);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function shortId(value) {
   if (!value) return 'unknown';
   if (value.startsWith('routine:')) return `routine:${value.slice(-6)}`;
@@ -2183,6 +2206,7 @@ async function openRun(runId) {
       data.events || [],
       data.steering || [],
       data.sessions || [],
+      data.artifacts || [],
     );
   } catch (error) {
     detail.replaceChildren(element('div', 'empty-state', error.message));
@@ -2199,7 +2223,7 @@ function runContextItem(label, value, detail) {
   return item;
 }
 
-function renderRunDetail(run, events, steering = [], sessions = []) {
+function renderRunDetail(run, events, steering = [], sessions = [], artifacts = []) {
   const detail = $('#run-detail');
   detail.replaceChildren();
   const head = element('div', 'run-detail-head');
@@ -2266,6 +2290,54 @@ function renderRunDetail(run, events, steering = [], sessions = []) {
   );
   detail.append(contextStrip);
   if (run.summary) detail.append(element('div', 'run-summary', run.summary));
+
+  const inputs = run.message?.attachments || [];
+  if (inputs.length || artifacts.length) {
+    const files = element('div', 'run-files');
+    files.append(element('h3', '', 'Files'));
+    for (const attachment of inputs) {
+      const row = element('div', 'run-file-row');
+      const copy = element('div');
+      copy.append(
+        element('strong', '', attachment.name || statusLabel(attachment.kind)),
+        element(
+          'small',
+          '',
+          `Input / ${statusLabel(attachment.kind)} / ${formatBytes(attachment.sizeBytes)}`,
+        ),
+      );
+      row.append(copy, statePill(attachment.metadata?.managed ? 'ready' : 'pending'));
+      files.append(row);
+    }
+    for (const artifact of artifacts) {
+      const row = element('div', 'run-file-row');
+      const copy = element('div');
+      const externalUrl = safeHttpUrl(artifact.url);
+      copy.append(
+        element('strong', '', artifact.title),
+        element(
+          'small',
+          '',
+          `Output / ${statusLabel(artifact.kind)} / ${formatBytes(artifact.sizeBytes)}`,
+        ),
+      );
+      row.append(copy);
+      if (artifact.downloadUrl) {
+        const download = element('a', 'run-file-download', 'Download');
+        download.href = artifact.downloadUrl;
+        download.title = `Download ${artifact.title}`;
+        row.append(download);
+      } else if (externalUrl) {
+        const open = element('a', 'run-file-download', 'Open');
+        open.href = externalUrl;
+        open.target = '_blank';
+        open.rel = 'noreferrer';
+        row.append(open);
+      }
+      files.append(row);
+    }
+    detail.append(files);
+  }
 
   if (['queued', 'running', 'cancel_requested'].includes(run.status)) {
     const controls = element('div', 'run-controls');

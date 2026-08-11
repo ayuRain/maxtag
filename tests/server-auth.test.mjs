@@ -74,6 +74,7 @@ async function launchServer(context, prefix, environment) {
   const baseUrl = `http://127.0.0.1:${port}`;
   return {
     baseUrl,
+    dataDir,
     health: await waitForHealth(`${baseUrl}/health`, child, logs),
   };
 }
@@ -215,11 +216,12 @@ test(
   { timeout: 20_000 },
   async (context) => {
     const ingressToken = 'integration-client-ingress-token-12345';
-    const { baseUrl, health } = await launchServer(
+    const adminToken = 'integration-operator-token-987654321';
+    const { baseUrl, dataDir, health } = await launchServer(
       context,
       'opentag-client-auth-',
       {
-        OPENTAG_ADMIN_TOKEN: 'integration-operator-token-987654321',
+        OPENTAG_ADMIN_TOKEN: adminToken,
         OPENTAG_CLIENT_INGRESS_TOKEN: ingressToken,
       },
     );
@@ -240,6 +242,15 @@ test(
         text: '/opentag summarize this project',
         actor: { id: 'custom-user', displayName: 'Custom user' },
         mentionsAgent: true,
+        attachments: [
+          {
+            id: 'client-report',
+            kind: 'file',
+            name: '../../client-report.txt',
+            mimeType: 'text/plain',
+            contentBase64: Buffer.from('client attachment').toString('base64'),
+          },
+        ],
       },
     };
     const unauthorized = await fetch(`${baseUrl}/v1/client/events`, {
@@ -266,6 +277,52 @@ test(
     assert.equal(result.accepted, true);
     assert.equal(result.queued, true);
     assert.equal(result.route.projectId, 'opentag');
+    const attachment = result.run.message.attachments[0];
+    assert.equal(attachment.name, 'client-report.txt');
+    assert.equal(attachment.metadata.managed, true);
+    assert.equal(
+      result.run.message.metadata.clientMessage.attachments[0].contentBase64,
+      undefined,
+    );
+    assert.equal(
+      result.run.message.metadata.clientMessage.attachments[0].localPath,
+      undefined,
+    );
+    assert.equal(
+      path.relative(path.join(dataDir, 'content'), attachment.localPath).startsWith('..'),
+      false,
+    );
+    assert.equal(await fs.readFile(attachment.localPath, 'utf8'), 'client attachment');
+
+    const detailResponse = await fetch(
+      `${baseUrl}/v1/runs/${encodeURIComponent(result.run.id)}/events`,
+      { headers: { authorization: `Bearer ${adminToken}` } },
+    );
+    assert.equal(detailResponse.status, 200);
+    const detail = await detailResponse.json();
+    assert.equal(detail.run.message.attachments[0].metadata.sha256.length, 64);
+
+    const invalidUrlEnvelope = structuredClone(envelope);
+    invalidUrlEnvelope.eventId = 'invalid-client-attachment-url';
+    invalidUrlEnvelope.message.id = 'invalid-client-attachment-url-message';
+    invalidUrlEnvelope.message.attachments = [
+      {
+        id: 'host-file',
+        kind: 'file',
+        name: 'passwd',
+        url: 'file:///etc/passwd',
+      },
+    ];
+    const invalidUrl = await fetch(`${baseUrl}/v1/client/events`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ingressToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(invalidUrlEnvelope),
+    });
+    assert.equal(invalidUrl.status, 400);
+    assert.equal((await invalidUrl.json()).error, 'attachment_url_not_allowed');
   },
 );
 

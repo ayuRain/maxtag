@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
-import type { LarkDeliveryMetadata, LarkTransport } from './types.js';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import type {
+  LarkDeliveryMetadata,
+  LarkDownloadedResource,
+  LarkFileInput,
+  LarkTransport,
+} from './types.js';
 
 export type LarkOpenApiDomain = 'feishu' | 'lark';
 
@@ -24,6 +31,14 @@ interface LarkMessageData {
   message_id?: string;
 }
 
+interface LarkFileData {
+  file_key?: string;
+}
+
+interface LarkImageData {
+  image_key?: string;
+}
+
 interface TenantTokenCache {
   token: string;
   expiresAt: number;
@@ -39,20 +54,98 @@ function baseUrlFor(input: {
     : 'https://open.feishu.cn';
 }
 
-function contentFor(msgType: 'text' | 'interactive', value: unknown): string {
+type LarkMessageType = 'text' | 'interactive' | 'file' | 'image';
+
+function contentFor(msgType: LarkMessageType, value: unknown): string {
   if (msgType === 'text') return JSON.stringify({ text: String(value) });
   return JSON.stringify(value);
 }
 
 function uuidFor(
   metadata: LarkDeliveryMetadata | undefined,
-  kind: 'text' | 'card',
+  kind: 'text' | 'card' | 'artifact',
 ): string | undefined {
   if (!metadata?.runId) return undefined;
   return createHash('sha256')
-    .update(`${metadata.runId}:${kind}:${metadata.stage ?? 'message'}`)
+    .update(
+      `${metadata.runId}:${kind}:${metadata.stage ?? 'message'}:${metadata.artifactId ?? ''}`,
+    )
     .digest('hex')
     .slice(0, 50);
+}
+
+function larkFileType(filename: string): string {
+  const extension = path.extname(filename).toLowerCase();
+  return (
+    {
+      '.doc': 'doc',
+      '.docx': 'doc',
+      '.mp4': 'mp4',
+      '.opus': 'opus',
+      '.pdf': 'pdf',
+      '.ppt': 'ppt',
+      '.pptx': 'ppt',
+      '.xls': 'xls',
+      '.xlsx': 'xls',
+    } as Record<string, string>
+  )[extension] || 'stream';
+}
+
+function supportsNativeImage(filename: string, mimeType?: string): boolean {
+  const extension = path.extname(filename).toLowerCase();
+  return (
+    Boolean(mimeType?.startsWith('image/')) &&
+    ['.bmp', '.gif', '.heic', '.ico', '.jpeg', '.jpg', '.png', '.tiff', '.webp'].includes(
+      extension,
+    )
+  );
+}
+
+function responseFilename(value: string | null): string | undefined {
+  if (!value) return undefined;
+  const encoded = /filename\*=UTF-8''([^;]+)/iu.exec(value)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+  return /filename="?([^";]+)"?/iu.exec(value)?.[1];
+}
+
+async function boundedResponseBytes(
+  response: Response,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel('managed_content_limit_exceeded');
+        throw new LarkApiError({
+          statusCode: 413,
+          message: `Lark resource exceeds the ${maxBytes} byte managed-content limit.`,
+        });
+      }
+      chunks.push(chunk.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }
 
 export class LarkApiError extends Error {
@@ -146,9 +239,133 @@ export class HttpLarkTransport implements LarkTransport {
     );
   }
 
+  async sendFile(input: {
+    chatId: string;
+    file: LarkFileInput;
+    rootId?: string;
+    replyToMessageId?: string;
+    metadata?: LarkDeliveryMetadata;
+  }): Promise<{ messageId: string }> {
+    const bytes = await readFile(input.file.path);
+    if (!bytes.byteLength) throw new LarkApiError({ message: 'Lark file cannot be empty.' });
+    if (bytes.byteLength > 30 * 1024 * 1024) {
+      throw new LarkApiError({ message: 'Lark file exceeds the 30 MB upload limit.' });
+    }
+    const filename = input.file.name || path.basename(input.file.path);
+    let msgType: 'file' | 'image';
+    let content: Record<string, string>;
+    if (
+      bytes.byteLength <= 10 * 1024 * 1024 &&
+      supportsNativeImage(filename, input.file.mimeType)
+    ) {
+      const form = new FormData();
+      form.set('image_type', 'message');
+      form.set(
+        'image',
+        new Blob([new Uint8Array(bytes)], {
+          type: input.file.mimeType || 'application/octet-stream',
+        }),
+        filename,
+      );
+      const uploaded = await this.multipartRequest<LarkImageData>(
+        '/open-apis/im/v1/images',
+        form,
+      );
+      if (!uploaded.image_key) {
+        throw new LarkApiError({ message: 'Lark image upload response did not include image_key.' });
+      }
+      msgType = 'image';
+      content = { image_key: uploaded.image_key };
+    } else {
+      const form = new FormData();
+      form.set('file_type', larkFileType(filename));
+      form.set('file_name', filename);
+      form.set(
+        'file',
+        new Blob([new Uint8Array(bytes)], {
+          type: input.file.mimeType || 'application/octet-stream',
+        }),
+        filename,
+      );
+      const uploaded = await this.multipartRequest<LarkFileData>(
+        '/open-apis/im/v1/files',
+        form,
+      );
+      if (!uploaded.file_key) {
+        throw new LarkApiError({ message: 'Lark file upload response did not include file_key.' });
+      }
+      msgType = 'file';
+      content = { file_key: uploaded.file_key };
+    }
+
+    const message = await this.sendMessage({
+      chatId: input.chatId,
+      msgType,
+      content,
+      rootId: input.rootId,
+      replyToMessageId: input.replyToMessageId,
+      uuid: uuidFor(input.metadata, 'artifact'),
+    });
+    if (!message.message_id) {
+      throw new LarkApiError({ message: 'Lark file message response did not include message_id.' });
+    }
+    return { messageId: message.message_id };
+  }
+
+  async downloadMessageResource(input: {
+    messageId: string;
+    fileKey: string;
+    type: 'file' | 'image';
+    maxBytes?: number;
+  }): Promise<LarkDownloadedResource> {
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/open-apis/im/v1/messages/${encodeURIComponent(
+        input.messageId,
+      )}/resources/${encodeURIComponent(input.fileKey)}?type=${input.type}`,
+      {
+        method: 'GET',
+        headers: { authorization: `Bearer ${await this.tenantAccessToken()}` },
+      },
+    );
+    const requestId =
+      response.headers.get('x-request-id') ||
+      response.headers.get('x-tt-logid') ||
+      undefined;
+    if (!response.ok) {
+      const body = await response.text();
+      let envelope: LarkApiEnvelope<unknown> | undefined;
+      try {
+        envelope = body ? (JSON.parse(body) as LarkApiEnvelope<unknown>) : undefined;
+      } catch {
+        envelope = undefined;
+      }
+      throw new LarkApiError({
+        statusCode: response.status,
+        code: envelope?.code,
+        requestId,
+        message: envelope?.msg || body || `Lark resource download failed with HTTP ${response.status}.`,
+      });
+    }
+    const maxBytes = Math.max(1, input.maxBytes ?? 30 * 1024 * 1024);
+    const declaredSize = Number(response.headers.get('content-length') || 0);
+    if (declaredSize > maxBytes) {
+      throw new LarkApiError({
+        statusCode: 413,
+        requestId,
+        message: `Lark resource exceeds the ${maxBytes} byte managed-content limit.`,
+      });
+    }
+    const bytes = await boundedResponseBytes(response, maxBytes);
+    return {
+      bytes,
+      name: responseFilename(response.headers.get('content-disposition')),
+      mimeType: response.headers.get('content-type') || undefined,
+    };
+  }
+
   private async sendMessage(input: {
     chatId: string;
-    msgType: 'text' | 'interactive';
+    msgType: LarkMessageType;
     content: unknown;
     rootId?: string;
     replyToMessageId?: string;
@@ -227,6 +444,43 @@ export class HttpLarkTransport implements LarkTransport {
     });
   }
 
+  private async multipartRequest<T>(pathname: string, form: FormData): Promise<T> {
+    const response = await this.fetchImpl(`${this.baseUrl}${pathname}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${await this.tenantAccessToken()}` },
+      body: form,
+    });
+    return this.parseJsonResponse<T>(response);
+  }
+
+  private async parseJsonResponse<T>(response: Response): Promise<T> {
+    const requestId =
+      response.headers.get('x-request-id') ||
+      response.headers.get('x-tt-logid') ||
+      undefined;
+    const value = await response.text();
+    let parsed: LarkApiEnvelope<T>;
+    try {
+      parsed = (value ? JSON.parse(value) : {}) as LarkApiEnvelope<T>;
+    } catch {
+      throw new LarkApiError({
+        statusCode: response.status,
+        requestId,
+        message:
+          value || `Lark API request returned invalid JSON with HTTP ${response.status}.`,
+      });
+    }
+    if (!response.ok || parsed.code !== 0) {
+      throw new LarkApiError({
+        statusCode: response.status,
+        code: parsed.code,
+        requestId,
+        message: parsed.msg || `Lark API request failed with HTTP ${response.status}.`,
+      });
+    }
+    return (parsed.data ?? parsed) as T;
+  }
+
   private async rawRequest<T>(
     pathname: string,
     options: {
@@ -247,30 +501,6 @@ export class HttpLarkTransport implements LarkTransport {
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
-    const requestId = response.headers.get('x-request-id') ?? undefined;
-    const text = await response.text();
-    let parsed: LarkApiEnvelope<T>;
-    try {
-      parsed = (text ? JSON.parse(text) : {}) as LarkApiEnvelope<T>;
-    } catch {
-      throw new LarkApiError({
-        statusCode: response.status,
-        requestId,
-        message:
-          text ||
-          `Lark API request returned invalid JSON with HTTP ${response.status}.`,
-      });
-    }
-    if (!response.ok || parsed.code !== 0) {
-      throw new LarkApiError({
-        statusCode: response.status,
-        code: parsed.code,
-        requestId,
-        message:
-          parsed.msg ||
-          `Lark API request failed with HTTP ${response.status}.`,
-      });
-    }
-    return (parsed.data ?? parsed) as T;
+    return this.parseJsonResponse<T>(response);
   }
 }

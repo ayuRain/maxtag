@@ -1,10 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, realpath } from 'node:fs/promises';
 import {
   OpenTagRuntime,
   type AgentRunEvent,
+  type Artifact,
   type MemoryScopeKind,
   type PlatformAdapter,
   type PlatformCapabilities,
@@ -93,6 +94,9 @@ import {
   monitorDurableRunCancellation,
   RoutineSchedulerService,
   WorkflowCoordinatorService,
+  ManagedContentError,
+  ManagedContentStore,
+  pathIsWithin,
   type RoutineTickResult,
   type WorkflowCoordinatorTickResult,
 } from '@opentag/runtime-host';
@@ -165,6 +169,28 @@ const executorMaxOutputBytes = numberEnvironmentValue(
   'OPENTAG_EXECUTOR_MAX_OUTPUT_BYTES',
   2_000_000,
 );
+const executorArtifactRoot =
+  process.env.OPENTAG_ARTIFACT_ROOT || path.join(dataDir, 'artifacts');
+const executorMaxArtifactBytes = numberEnvironmentValue(
+  'OPENTAG_MAX_ARTIFACT_BYTES',
+  30 * 1024 * 1024,
+);
+const executorMaxArtifacts = numberEnvironmentValue(
+  'OPENTAG_MAX_ARTIFACTS',
+  10,
+);
+const maxAttachmentBytes = numberEnvironmentValue(
+  'OPENTAG_MAX_ATTACHMENT_BYTES',
+  30 * 1024 * 1024,
+);
+const clientIngressBodyMaxBytes =
+  Math.ceil(maxAttachmentBytes / 3) * 4 + 256 * 1024;
+const managedContentStore = new ManagedContentStore({
+  rootDir: path.join(dataDir, 'content'),
+  maxBytes: maxAttachmentBytes,
+});
+let inboundLarkTransport: HttpLarkTransport | undefined;
+let inboundTelegramTransport: HttpTelegramTransport | undefined;
 const executorInheritEnv = listEnvironmentValue('OPENTAG_EXECUTOR_INHERIT_ENV');
 const executorSessionMode =
   process.env.OPENTAG_EXECUTOR_SESSION_MODE === 'transcript'
@@ -497,6 +523,12 @@ const capabilityManifest = {
       status: 'partial',
     },
     {
+      capability: 'Files and artifacts',
+      agentdock: 'inbound workspace files and outgoing file/image tools',
+      opentag: 'isolated managed inputs, native Lark/Telegram transfer, durable artifact events, and authenticated downloads',
+      status: 'ready',
+    },
+    {
       capability: 'Inbound idempotency',
       agentdock: 'message cursor and turn delivery recovery',
       opentag: 'event ledger with duplicate short-circuit',
@@ -591,6 +623,9 @@ function executorStatus(): Record<string, unknown> {
     workspaceRoot: path.resolve(executorWorkspaceRoot),
     timeoutMs: executorTimeoutMs,
     maxOutputBytes: executorMaxOutputBytes,
+    artifactRoot: path.resolve(executorArtifactRoot),
+    maxArtifactBytes: executorMaxArtifactBytes,
+    maxArtifacts: executorMaxArtifacts,
     sessionMode: executorSessionMode,
     sessionNamespace: executorSessionNamespace,
     transcriptMaxEntries,
@@ -655,16 +690,33 @@ function telegramTransportStatus(): {
   };
 }
 
-async function readTextBody(request: IncomingMessage): Promise<string> {
+async function readTextBody(
+  request: IncomingMessage,
+  maxBytes = Number.POSITIVE_INFINITY,
+): Promise<string> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += bytes.byteLength;
+    if (total > maxBytes) {
+      request.resume();
+      throw new ManagedContentError(
+        'request_body_too_large',
+        `Request body exceeds the ${maxBytes} byte limit.`,
+        413,
+      );
+    }
+    chunks.push(bytes);
   }
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
-  const text = await readTextBody(request);
+async function readJsonBody(
+  request: IncomingMessage,
+  maxBytes?: number,
+): Promise<unknown> {
+  const text = await readTextBody(request, maxBytes);
   if (!text.trim()) return {};
   return JSON.parse(text) as unknown;
 }
@@ -1080,6 +1132,9 @@ function createRuntimeForPlatform(platform: PlatformAdapter): OpenTagRuntime {
     maxOutputBytes: executorMaxOutputBytes,
     inheritEnv: executorInheritEnv,
     sessionMode: executorSessionMode,
+    artifactRoot: executorArtifactRoot,
+    maxArtifactBytes: executorMaxArtifactBytes,
+    maxArtifacts: executorMaxArtifacts,
   } as const;
   const codex = createCodexExecutor({
     ...common,
@@ -1441,6 +1496,35 @@ function attachmentKindValue(value: unknown): SourceAttachment['kind'] {
     : 'file';
 }
 
+function httpAttachmentUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+      ? parsed.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizedClientMessage(
+  message: Record<string, unknown>,
+  fallbackAttachments: unknown,
+): Record<string, unknown> {
+  const result = { ...message };
+  const attachments = message.attachments ?? fallbackAttachments;
+  if (!Array.isArray(attachments)) return result;
+  result.attachments = attachments.map((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const attachment = { ...(value as Record<string, unknown>) };
+    delete attachment.contentBase64;
+    delete attachment.localPath;
+    return attachment;
+  });
+  return result;
+}
+
 function coerceAttachments(value: unknown): SourceAttachment[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const attachments = value
@@ -1454,21 +1538,158 @@ function coerceAttachments(value: unknown): SourceAttachment[] | undefined {
         stringValue(body, 'fileKey') ||
         stringValue(body, 'url') ||
         `attachment-${index + 1}`;
+      const requestedUrl = stringValue(body, 'url');
+      const url = httpAttachmentUrl(requestedUrl);
       return {
         id,
         kind: attachmentKindValue(body.kind),
         name: stringValue(body, 'name'),
         mimeType: stringValue(body, 'mimeType'),
         sizeBytes: numberValue(body, 'sizeBytes'),
-        url: stringValue(body, 'url'),
-        localPath: stringValue(body, 'localPath'),
+        url,
         metadata: {
-          clientPayload: body,
+          clientIngress: true,
+          clientContentBase64: stringValue(body, 'contentBase64'),
+          clientLocalPathRejected: Boolean(stringValue(body, 'localPath')),
+          clientUrlRejected: Boolean(requestedUrl && !url),
+          clientAttachmentId: stringValue(body, 'id'),
         },
       };
     })
     .filter((item): item is SourceAttachment => Boolean(item));
   return attachments.length ? attachments : undefined;
+}
+
+function larkResourceTransport(): HttpLarkTransport {
+  if (!larkAppId || !larkAppSecret || larkTransportStatus().mode !== 'http') {
+    throw new ManagedContentError(
+      'lark_attachment_download_unavailable',
+      'Lark attachments require OPENTAG_LARK_TRANSPORT=http and app credentials.',
+      503,
+    );
+  }
+  inboundLarkTransport ??= new HttpLarkTransport({
+    appId: larkAppId,
+    appSecret: larkAppSecret,
+    domain: larkDomain,
+    baseUrl: larkBaseUrl,
+  });
+  return inboundLarkTransport;
+}
+
+function telegramResourceTransport(): HttpTelegramTransport {
+  if (!telegramBotToken || telegramTransportStatus().mode !== 'http') {
+    throw new ManagedContentError(
+      'telegram_attachment_download_unavailable',
+      'Telegram attachments require OPENTAG_TELEGRAM_TRANSPORT=http and a bot token.',
+      503,
+    );
+  }
+  inboundTelegramTransport ??= new HttpTelegramTransport({
+    botToken: telegramBotToken,
+    baseUrl: telegramBaseUrl,
+  });
+  return inboundTelegramTransport;
+}
+
+async function materializeMessageAttachments(input: {
+  thread: SourceThread;
+  message: SourceMessage;
+}): Promise<SourceMessage> {
+  if (!input.message.attachments?.length) return input.message;
+  const attachments: SourceAttachment[] = [];
+  for (const attachment of input.message.attachments) {
+    if (attachment.localPath) {
+      throw new ManagedContentError(
+        'attachment_local_path_not_allowed',
+        'Inbound clients cannot submit host local paths.',
+        400,
+      );
+    }
+    if (
+      typeof attachment.metadata?.clientContentBase64 === 'string' ||
+      attachment.metadata?.clientLocalPathRejected
+    ) {
+      attachments.push(
+        await managedContentStore.materializeClientAttachment({
+          thread: input.thread,
+          message: input.message,
+          attachment,
+        }),
+      );
+      continue;
+    }
+
+    if (attachment.metadata?.clientIngress === true) {
+      if (attachment.metadata.clientUrlRejected) {
+        throw new ManagedContentError(
+          'attachment_url_not_allowed',
+          'Generic attachment URLs must use HTTP or HTTPS.',
+          400,
+        );
+      }
+      if (attachment.url) {
+        attachments.push(attachment);
+        continue;
+      }
+      throw new ManagedContentError(
+        'attachment_content_required',
+        'Generic file attachments require contentBase64 or a URL.',
+        400,
+      );
+    }
+
+    const larkMessageId = attachment.metadata?.larkMessageId;
+    const larkFileKey = attachment.metadata?.larkFileKey;
+    const larkResourceType = attachment.metadata?.larkResourceType;
+    if (
+      input.thread.platform === 'lark' &&
+      typeof larkMessageId === 'string' &&
+      typeof larkFileKey === 'string' &&
+      (larkResourceType === 'file' || larkResourceType === 'image')
+    ) {
+      const resource = await larkResourceTransport().downloadMessageResource({
+        messageId: larkMessageId,
+        fileKey: larkFileKey,
+        type: larkResourceType,
+        maxBytes: maxAttachmentBytes,
+      });
+      attachments.push(
+        await managedContentStore.materializeAttachment({
+          thread: input.thread,
+          message: input.message,
+          attachment,
+          bytes: resource.bytes,
+          name: resource.name || attachment.name,
+          mimeType: resource.mimeType || attachment.mimeType,
+          source: 'lark',
+        }),
+      );
+      continue;
+    }
+
+    const telegramFileId = attachment.metadata?.telegramFileId;
+    if (input.thread.platform === 'telegram' && typeof telegramFileId === 'string') {
+      const resource = await telegramResourceTransport().downloadFile({
+        fileId: telegramFileId,
+        maxBytes: maxAttachmentBytes,
+      });
+      attachments.push(
+        await managedContentStore.materializeAttachment({
+          thread: input.thread,
+          message: input.message,
+          attachment,
+          bytes: resource.bytes,
+          name: attachment.name || resource.name,
+          mimeType: attachment.mimeType,
+          source: 'telegram',
+        }),
+      );
+      continue;
+    }
+    attachments.push(attachment);
+  }
+  return { ...input.message, attachments };
 }
 
 function inferredAgentMention(text: string, visibility: SourceThread['visibility']): boolean {
@@ -1613,7 +1834,10 @@ function coerceClientEvent(
       metadata: {
         eventId,
         eventType,
-        clientMessage: messageBody,
+        clientMessage: sanitizedClientMessage(
+          messageBody,
+          body.attachments,
+        ),
       },
     },
   };
@@ -2277,6 +2501,111 @@ function agentRunEventSummary(event: AgentRunEvent): {
   };
 }
 
+function recordedArtifact(value: unknown): Artifact | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const artifact = value as Record<string, unknown>;
+  if (
+    typeof artifact.id !== 'string' ||
+    typeof artifact.kind !== 'string' ||
+    typeof artifact.title !== 'string'
+  ) {
+    return undefined;
+  }
+  return {
+    id: artifact.id,
+    kind: artifact.kind,
+    title: artifact.title,
+    path: typeof artifact.path === 'string' ? artifact.path : undefined,
+    url: typeof artifact.url === 'string' ? artifact.url : undefined,
+    metadata:
+      artifact.metadata &&
+      typeof artifact.metadata === 'object' &&
+      !Array.isArray(artifact.metadata)
+        ? (artifact.metadata as Record<string, unknown>)
+        : undefined,
+  };
+}
+
+async function runArtifacts(runId: string): Promise<Array<Artifact & {
+  downloadUrl?: string;
+  sizeBytes?: number;
+  mimeType?: string;
+}>> {
+  const events = await deliveryStore.listAgentRunEvents(runId, 500);
+  const byId = new Map<string, Artifact>();
+  for (const event of events) {
+    if (event.type !== 'artifact') continue;
+    const artifact = recordedArtifact(event.metadata?.artifact);
+    if (artifact) byId.set(artifact.id, artifact);
+  }
+  return [...byId.values()].map((artifact) => ({
+    ...artifact,
+    path: undefined,
+    downloadUrl:
+      artifact.path && artifact.metadata?.managed === true
+        ? `/v1/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifact.id)}`
+        : undefined,
+    sizeBytes:
+      typeof artifact.metadata?.sizeBytes === 'number'
+        ? artifact.metadata.sizeBytes
+        : undefined,
+    mimeType:
+      typeof artifact.metadata?.mimeType === 'string'
+        ? artifact.metadata.mimeType
+        : undefined,
+  }));
+}
+
+async function managedArtifactBytes(input: {
+  runId: string;
+  artifactId: string;
+}): Promise<{
+  bytes: Buffer;
+  filename: string;
+  mimeType: string;
+} | undefined> {
+  const events = await deliveryStore.listAgentRunEvents(input.runId, 500);
+  const artifact = events
+    .filter((event) => event.type === 'artifact')
+    .map((event) => recordedArtifact(event.metadata?.artifact))
+    .find((candidate) => candidate?.id === input.artifactId);
+  if (!artifact?.path || artifact.metadata?.managed !== true) return undefined;
+  const root = path.resolve(executorArtifactRoot);
+  if (!pathIsWithin(root, artifact.path)) return undefined;
+  let resolved: string;
+  let resolvedRoot: string;
+  try {
+    resolvedRoot = await realpath(root);
+    resolved = await realpath(artifact.path);
+  } catch {
+    return undefined;
+  }
+  if (!pathIsWithin(resolvedRoot, resolved)) return undefined;
+  const bytes = await readFile(resolved);
+  if (!bytes.byteLength || bytes.byteLength > executorMaxArtifactBytes) {
+    return undefined;
+  }
+  const expectedHash = artifact.metadata.sha256;
+  if (
+    typeof expectedHash === 'string' &&
+    createHash('sha256').update(bytes).digest('hex') !== expectedHash
+  ) {
+    return undefined;
+  }
+  return {
+    bytes,
+    filename:
+      typeof artifact.metadata.filename === 'string'
+        ? path.basename(artifact.metadata.filename)
+        : path.basename(resolved),
+    mimeType:
+      typeof artifact.metadata.mimeType === 'string' &&
+      /^[\w.+-]+\/[\w.+-]+$/u.test(artifact.metadata.mimeType)
+        ? artifact.metadata.mimeType
+        : 'application/octet-stream',
+  };
+}
+
 async function applyMemoryCommand(input: {
   command: ParsedMemoryCommand;
   thread: SourceThread;
@@ -2380,7 +2709,23 @@ async function enqueueMessageRun(input: {
   authorization?: ActorAuthorizationDecision;
 }): Promise<QueuedMessageRun> {
   const runId = options?.runId ?? randomUUID();
-  const routed = await routeMessage(input);
+  const routedBase = await routeMessage(input);
+  let materializedMessage: SourceMessage;
+  try {
+    materializedMessage = await materializeMessageAttachments({
+      thread: routedBase.thread,
+      message: routedBase.message,
+    });
+  } catch (error) {
+    if (options?.inboundEventId) {
+      await deliveryStore.markInboundEventFailed(
+        options.inboundEventId,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    throw error;
+  }
+  const routed = { ...routedBase, message: materializedMessage };
   const observedBinding = await deliveryStore.upsertThreadBinding({
     thread: routed.thread,
     workspaceId: routed.thread.workspaceId ?? 'default-workspace',
@@ -2657,6 +3002,7 @@ async function executeAgentRun(
           ? {
               texts: runPlatform.larkDryRun.texts,
               cards: runPlatform.larkDryRun.cards,
+              files: runPlatform.larkDryRun.files,
             }
           : undefined,
         telegramTransport: runPlatform.telegramTransport,
@@ -2731,6 +3077,7 @@ async function executeAgentRun(
           ? {
               texts: runPlatform.larkDryRun.texts,
               cards: runPlatform.larkDryRun.cards,
+              files: runPlatform.larkDryRun.files,
             }
           : undefined,
         telegramTransport: runPlatform.telegramTransport,
@@ -2816,6 +3163,7 @@ async function executeAgentRun(
         ? {
             texts: runPlatform.larkDryRun.texts,
             cards: runPlatform.larkDryRun.cards,
+            files: runPlatform.larkDryRun.files,
           }
         : undefined,
       telegramTransport: runPlatform.telegramTransport,
@@ -4334,6 +4682,42 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    const artifactDownloadMatch =
+      request.method === 'GET'
+        ? /^\/v1\/runs\/([^/]+)\/artifacts\/([^/]+)$/u.exec(url.pathname)
+        : null;
+    if (artifactDownloadMatch) {
+      const runId = decodeURIComponent(artifactDownloadMatch[1]);
+      const artifactId = decodeURIComponent(artifactDownloadMatch[2]);
+      const run = await deliveryStore.getAgentRun(runId);
+      if (!run) {
+        sendJson(response, 404, { error: 'run_not_found' });
+        return;
+      }
+      const runAllowed = run.workspaceId
+        ? requireOperatorWorkspace(
+            response,
+            operatorAuthentication!,
+            run.workspaceId,
+          )
+        : requireInstallationOperator(response, operatorAuthentication!);
+      if (!runAllowed) return;
+      const file = await managedArtifactBytes({ runId, artifactId });
+      if (!file) {
+        sendJson(response, 404, { error: 'artifact_not_found_or_invalid' });
+        return;
+      }
+      response.writeHead(200, {
+        'cache-control': 'private, no-store',
+        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+        'content-length': String(file.bytes.byteLength),
+        'content-type': file.mimeType,
+        'x-content-type-options': 'nosniff',
+      });
+      response.end(file.bytes);
+      return;
+    }
+
     if (
       request.method === 'GET' &&
       url.pathname.startsWith('/v1/runs/') &&
@@ -4371,6 +4755,7 @@ const server = createServer(async (request, response) => {
           threadId: run.threadId,
           limit: 20,
         }),
+        artifacts: await runArtifacts(id),
       });
       return;
     }
@@ -4622,7 +5007,10 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/client/events') {
-      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const body = (await readJsonBody(
+        request,
+        clientIngressBodyMaxBytes,
+      )) as Record<string, unknown>;
       const normalized = coerceClientEvent(body);
       if ('error' in normalized) {
         sendJson(response, 400, {
@@ -5056,6 +5444,14 @@ const server = createServer(async (request, response) => {
 
     sendJson(response, 404, { error: 'not_found' });
   } catch (error) {
+    if (error instanceof ManagedContentError) {
+      sendJson(response, error.statusCode, {
+        accepted: false,
+        error: error.code,
+        message: error.message,
+      });
+      return;
+    }
     sendJson(response, 500, {
       error: 'internal_error',
       message: error instanceof Error ? error.message : String(error),

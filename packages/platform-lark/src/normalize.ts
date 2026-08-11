@@ -1,14 +1,99 @@
-import type { SourceMessage, SourceThread } from '@opentag/core';
+import type {
+  SourceAttachment,
+  SourceMessage,
+  SourceThread,
+} from '@opentag/core';
 import type { LarkIncomingEvent } from './types.js';
 
-function parseTextContent(raw: string | undefined): string {
+function parsedContent(raw: string | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseTextContent(raw: string | undefined, messageType: string | undefined): string {
   if (!raw) return '';
+  if (messageType && messageType !== 'text') return '';
   try {
     const parsed = JSON.parse(raw) as { text?: unknown };
     return typeof parsed.text === 'string' ? parsed.text : raw;
   } catch {
     return raw;
   }
+}
+
+function contentString(
+  content: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = content[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function attachmentFor(
+  messageId: string,
+  messageType: string | undefined,
+  raw: string | undefined,
+): SourceAttachment[] | undefined {
+  const content = parsedContent(raw);
+  const fileKey = contentString(content, 'file_key');
+  const imageKey = contentString(content, 'image_key');
+  let attachment: SourceAttachment | undefined;
+  if (messageType === 'image' && imageKey) {
+    attachment = {
+      id: `lark:image:${imageKey}`,
+      kind: 'image',
+      name: 'image',
+      metadata: {
+        larkMessageId: messageId,
+        larkFileKey: imageKey,
+        larkResourceType: 'image',
+      },
+    };
+  } else if (messageType === 'file' && fileKey) {
+    attachment = {
+      id: `lark:file:${fileKey}`,
+      kind: 'file',
+      name: contentString(content, 'file_name'),
+      metadata: {
+        larkMessageId: messageId,
+        larkFileKey: fileKey,
+        larkResourceType: 'file',
+      },
+    };
+  } else if (messageType === 'audio' && fileKey) {
+    attachment = {
+      id: `lark:audio:${fileKey}`,
+      kind: 'audio',
+      name: contentString(content, 'file_name') || 'audio.opus',
+      metadata: {
+        larkMessageId: messageId,
+        larkFileKey: fileKey,
+        larkResourceType: 'file',
+        durationMs: content.duration,
+      },
+    };
+  } else if (messageType === 'media' && fileKey) {
+    attachment = {
+      id: `lark:video:${fileKey}`,
+      kind: 'video',
+      name: contentString(content, 'file_name') || 'video.mp4',
+      metadata: {
+        larkMessageId: messageId,
+        larkFileKey: fileKey,
+        larkResourceType: 'file',
+        durationMs: content.duration,
+        previewImageKey: imageKey,
+      },
+    };
+  }
+  return attachment ? [attachment] : undefined;
 }
 
 export function normalizeLarkEvent(
@@ -51,7 +136,7 @@ export function normalizeLarkEvent(
       id: message.message_id,
       threadId: thread.id,
       platform: 'lark',
-      text: parseTextContent(message.content),
+      text: parseTextContent(message.content, message.message_type),
       actor: {
         id: senderId,
         platformUserId: senderId,
@@ -61,6 +146,11 @@ export function normalizeLarkEvent(
         : new Date().toISOString(),
       mentionsAgent,
       replyToMessageId: message.parent_id,
+      attachments: attachmentFor(
+        message.message_id,
+        message.message_type,
+        message.content,
+      ),
       metadata: {
         messageType: message.message_type,
         eventId: body.event_id,

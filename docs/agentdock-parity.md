@@ -9,7 +9,7 @@ many clients.
 | Capability | OpenTag status |
 | --- | --- |
 | Client-neutral event model | `SourceThread`, `SourceMessage`, and `PlatformAdapter` |
-| Lark first client | Lark normalize path, progress cards, dry-run server route, and HTTP OpenAPI transport |
+| Lark first client | Lark normalization, progress cards, HTTP OpenAPI transport, managed resource download, and native file/image replies |
 | Multiple clients | Native Lark and Telegram ingress/delivery plus generic `/v1/client/events` for adapters in development |
 | Scoped memory | SQLite-backed global, workspace, project, and thread documents; transactional cross-process writes; immutable remember/forget/import/restore revisions with trusted actor provenance; Lark groups route to project scope |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
@@ -24,6 +24,7 @@ many clients.
 | Dynamic workflows | SQLite WAL-backed saved DAGs with immutable execution snapshots, manual and typed-event triggers, event-id deduplication, atomic node claims, stale reclaim, dependency failure propagation, and deterministic bridging of every node into the shared run queue; sink nodes publish to a real client destination |
 | Inbound callback ledger | Lark token/timestamp and Telegram webhook-secret checks, event idempotency, and duplicate short-circuit |
 | Native Telegram client | Bot API webhook normalization, forum topics, send/edit progress, reply chunking, outgoing files, and tracked delivery |
+| Files and artifacts | Isolated content-addressed input storage; generic base64 upload; Lark/Telegram native download and upload; CLI artifact validation, durable timeline provenance, Activity downloads, and hash checks |
 | Executor boundary | Project-selectable Codex and Claude dry-run/local CLI modes with bounded output, cancellation, timeout, and filtered child environments |
 | Operator console authentication | Optional local-open mode plus configured Bearer automation and signed, expiring HttpOnly browser sessions; mutation requests carry per-session CSRF tokens |
 
@@ -32,13 +33,13 @@ many clients.
 | AgentDock capability | OpenTag next step |
 | --- | --- |
 | More native clients | Add Slack, GitHub comment, QQ, and Web adapters behind the shared platform contract |
-| Telegram production depth | Download inbound files and verify webhook/send/edit/file behavior against a live bot |
+| Telegram production depth | Verify webhook, download, send, edit, and file behavior against a live bot; local HTTP contract and end-to-end managed storage tests pass |
 | High-volume storage | Normalize the current transactional SQLite state documents or add Postgres before high-volume multi-replica deployment; add retention and compaction metrics |
 | Async run execution | Add production supervisor/deployment manifests; durable cross-process cancellation polling is implemented |
 | Provider-level live steering | Claude local CLI consumes active `stream-json` follow-ups; add true mid-turn steering for Codex when its provider exposes a stable streaming input API |
 | Distributed provider sessions | Back provider sessions with shared provider state or sticky worker routing before using multiple executor hosts; host-scoped namespaces and transcript recovery prevent accidental cross-host resume today |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |
-| Real Lark smoke | Verify app scopes, bot-in-chat permissions, text replies, and card patching against a live app |
+| Real Lark smoke | Verify app scopes, bot-in-chat permissions, resource download, text/file/image replies, and card patching against a live app |
 | Pairing and binding governance | Add binding audit/import/export and optional actor-restricted pairing invitations; project role enforcement already applies after a chat is routed, and pairing consumption plus binding creation are one SQLite transaction |
 | Operator credential lifecycle | Add in-product credential creation, revocation, rotation, finer-grained operator capabilities, and optional SSO/OIDC; environment-configured named principals and workspace enforcement are implemented |
 | Encrypted Lark callbacks | Implement decrypt path before enabling encrypted events in production |

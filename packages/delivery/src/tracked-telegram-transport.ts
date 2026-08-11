@@ -1,6 +1,7 @@
 import type {
   TelegramDeliveryMetadata,
   TelegramDocumentInput,
+  TelegramDownloadedFile,
   TelegramTransport,
 } from '@opentag/platform-telegram';
 import type { DeliveryStore } from './file-delivery-store.js';
@@ -124,5 +125,12 @@ export class TrackedTelegramTransport implements TelegramTransport {
       await this.store.markFailed(envelope.id, errorMessage(error));
       throw error;
     }
+  }
+
+  downloadFile(input: {
+    fileId: string;
+    maxBytes?: number;
+  }): Promise<TelegramDownloadedFile> {
+    return this.delegate.downloadFile(input);
   }
 }

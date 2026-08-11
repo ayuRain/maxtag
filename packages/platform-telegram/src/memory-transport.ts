@@ -1,6 +1,7 @@
 import type {
   TelegramDeliveryMetadata,
   TelegramDocumentInput,
+  TelegramDownloadedFile,
   TelegramTransport,
 } from './types.js';
 
@@ -29,6 +30,7 @@ export class MemoryTelegramTransport implements TelegramTransport {
     metadata?: TelegramDeliveryMetadata;
   }> = [];
   private nextMessageId = 1;
+  readonly resources = new Map<string, TelegramDownloadedFile>();
 
   async sendText(input: {
     chatId: string;
@@ -62,5 +64,17 @@ export class MemoryTelegramTransport implements TelegramTransport {
     const messageId = String(this.nextMessageId++);
     this.documents.push({ messageId, ...input });
     return { messageId };
+  }
+
+  async downloadFile(input: {
+    fileId: string;
+    maxBytes?: number;
+  }): Promise<TelegramDownloadedFile> {
+    const resource = this.resources.get(input.fileId);
+    if (!resource) throw new Error('telegram_memory_resource_not_found');
+    if (input.maxBytes && resource.bytes.byteLength > input.maxBytes) {
+      throw new Error('telegram_resource_too_large');
+    }
+    return { ...resource, bytes: new Uint8Array(resource.bytes) };
   }
 }
