@@ -38,9 +38,19 @@ export class CodexExecutor implements Executor {
       },
     });
 
+    const scopeCount = request.memorySnapshot?.scopes.length ?? 0;
+    const route = [request.workspace?.name, request.project?.name]
+      .filter(Boolean)
+      .join(' / ');
+
     return {
-      summary:
+      summary: [
         `Dry-run Codex executor received: ${request.message.text || '(empty message)'}`,
+        route ? `Route: ${route}` : '',
+        `Memory scopes loaded: ${scopeCount}`,
+      ]
+        .filter(Boolean)
+        .join('\n'),
       artifacts: [],
     };
   }
@@ -49,4 +59,3 @@ export class CodexExecutor implements Executor {
 export function createCodexExecutor(options?: CodexExecutorOptions): Executor {
   return new CodexExecutor(options);
 }
-

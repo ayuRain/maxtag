@@ -9,7 +9,7 @@ import {
   type SourceThread,
 } from '@opentag/core';
 import { createCodexExecutor } from '@opentag/executor-codex';
-import { FileMemoryStore } from '@opentag/memory';
+import { ScopedFileMemoryStore } from '@opentag/memory';
 import {
   LarkPlatformAdapter,
   MemoryLarkTransport,
@@ -22,6 +22,99 @@ const host = process.env.OPENTAG_HOST || '127.0.0.1';
 const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
 const adminDir = path.resolve('apps/admin/public');
 const botOpenId = process.env.OPENTAG_LARK_BOT_OPEN_ID;
+
+const capabilityManifest = {
+  product: 'OpenTag',
+  principle: 'Lark first, not Lark only',
+  workspaceBot: {
+    status: 'partial',
+    model: 'one workspace bot routes every client event into the same thread-agent runtime',
+  },
+  platforms: ['lark', 'telegram-placeholder', 'slack-planned', 'github-planned'],
+  executors: ['codex-dry-run', 'claude-placeholder'],
+  clients: [
+    {
+      id: 'lark',
+      label: 'Lark / Feishu',
+      status: 'ready',
+      inbound: 'event callback',
+      surface: 'progress card + thread reply',
+    },
+    {
+      id: 'telegram',
+      label: 'Telegram',
+      status: 'partial',
+      inbound: 'adapter stub',
+      surface: 'text receipt',
+    },
+    {
+      id: 'slack',
+      label: 'Slack',
+      status: 'planned',
+      inbound: 'not wired',
+      surface: 'planned',
+    },
+    {
+      id: 'github',
+      label: 'GitHub comments',
+      status: 'planned',
+      inbound: 'not wired',
+      surface: 'planned',
+    },
+  ],
+  memoryScopes: [
+    {
+      id: 'global',
+      label: 'Global',
+      status: 'ready',
+      description: 'shared across the whole OpenTag installation',
+    },
+    {
+      id: 'workspace',
+      label: 'Workspace',
+      status: 'ready',
+      description: 'shared by every project under one workspace bot',
+    },
+    {
+      id: 'project',
+      label: 'Project',
+      status: 'ready',
+      description: 'separate group/project memory for a channel or repo',
+    },
+    {
+      id: 'thread',
+      label: 'Thread',
+      status: 'ready',
+      description: 'local context for one conversation root',
+    },
+  ],
+  parity: [
+    {
+      capability: 'Multi-client routing',
+      agentdock: 'Feishu, Telegram, QQ, Web adapters',
+      opentag: 'shared client model, Lark ready, Telegram stub',
+      status: 'partial',
+    },
+    {
+      capability: 'Scoped memory',
+      agentdock: 'session memory with async write queue',
+      opentag: 'global/workspace/project/thread file scopes',
+      status: 'partial',
+    },
+    {
+      capability: 'Reliable delivery',
+      agentdock: 'SQLite outbox and turn delivery tracking',
+      opentag: 'direct dry-run transport only',
+      status: 'planned',
+    },
+    {
+      capability: 'Long-running work',
+      agentdock: 'scheduled tasks and dynamic workflows',
+      opentag: 'executor interface only',
+      status: 'planned',
+    },
+  ],
+};
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -57,12 +150,19 @@ function createRuntimeForDryRun(transport: MemoryLarkTransport): OpenTagRuntime 
   return new OpenTagRuntime({
     platform,
     executor: createCodexExecutor({ mode: 'dry-run' }),
-    memory: new FileMemoryStore(path.join(dataDir, 'memory')),
+    memory: new ScopedFileMemoryStore(path.join(dataDir, 'memory')),
     threadConfig: new StaticThreadConfigStore({
-      displayName: 'OpenTag',
-      instructions:
-        'You are OpenTag in a shared work thread. Keep progress visible and publish durable artifacts.',
-      defaultExecutorId: 'codex',
+      identity: {
+        displayName: 'OpenTag',
+        instructions:
+          'You are OpenTag in a shared work thread. Keep progress visible and publish durable artifacts.',
+        defaultExecutorId: 'codex',
+      },
+      workspace: {
+        id: 'dev-workspace',
+        name: 'Development Workspace',
+        defaultProjectId: 'opentag',
+      },
     }),
   });
 }
@@ -76,11 +176,16 @@ function coerceDevMessage(body: Record<string, unknown>): {
     id: 'lark:dev-chat:root',
     platform: 'lark',
     externalId: 'dev-chat:root',
+    workspaceId: 'dev-workspace',
+    projectId: 'opentag',
     channelId: 'dev-chat',
     rootMessageId: 'root',
     topicId: 'root',
-    title: 'Development Thread',
+    title: 'OpenTag Demo Project',
     visibility: 'public',
+    metadata: {
+      projectId: 'opentag',
+    },
   };
   return {
     thread,
@@ -112,6 +217,12 @@ async function runDryMessage(input: {
   });
   return {
     result,
+    route: {
+      workspaceId: input.thread.workspaceId,
+      projectId: input.thread.projectId,
+      threadId: input.thread.id,
+      platform: input.thread.platform,
+    },
     larkDryRun: {
       texts: transport.texts,
       cards: transport.cards,
@@ -144,12 +255,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
-      sendJson(response, 200, {
-        product: 'OpenTag',
-        principle: 'Lark first, not Lark only',
-        platforms: ['lark', 'telegram-placeholder'],
-        executors: ['codex-dry-run', 'claude-placeholder'],
-      });
+      sendJson(response, 200, capabilityManifest);
       return;
     }
 

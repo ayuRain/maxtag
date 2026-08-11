@@ -6,6 +6,7 @@
 - Lark adapter shell.
 - Executor abstraction for Codex and Claude.
 - Progress card model that can render to Lark today and Slack/Telegram later.
+- Global/workspace/project/thread memory scopes.
 - Memory and GitHub tool contracts.
 
 ## Phase 1: Lark Tag MVP
@@ -13,6 +14,7 @@
 - Verify Lark callbacks and event decrypt.
 - Normalize group messages, mentions, files, images, and topic/thread metadata.
 - Create or bind `SourceThread` records from Lark group/topic events.
+- Resolve workspace and project identity before every run.
 - Render live progress cards with checklist items, stop action, and final state.
 - Persist inbound event idempotency and outbound deliveries.
 - Keep the Lark implementation behind `PlatformAdapter`; do not let Lark field

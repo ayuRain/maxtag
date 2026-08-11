@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,69 +7,52 @@
     <link rel="stylesheet" href="/admin.css" />
   </head>
   <body>
-    <header class="shell-header">
-      <div class="brand">
-        <span class="mark">OpenTag</span>
-        <span class="muted">thread agent runtime</span>
+    <header class="topbar">
+      <div class="identity">
+        <strong>OpenTag</strong>
+        <span id="capability-line">loading</span>
       </div>
-      <div class="header-actions">
+      <div class="actions">
         <span class="status" id="health">offline</span>
         <button id="run">Run</button>
       </div>
     </header>
 
-    <main class="shell">
-      <section class="primary">
-        <div class="section-head">
-          <div>
-            <h1>Thread Console</h1>
-            <span id="capability-line">loading</span>
-          </div>
+    <main class="workspace">
+      <section class="compose-panel">
+        <div class="panel-heading">
+          <h1>Thread Console</h1>
+          <span>workspace bot / scoped memory</span>
         </div>
 
         <label class="field">
-          <span>Message</span>
+          <span>Incoming message</span>
           <textarea id="prompt" spellcheck="false">@OpenTag 帮我看看这个 repo 怎么接飞书</textarea>
         </label>
 
-        <div class="client-grid" id="clients">
-          <article data-state="ready">
-            <span>Lark</span>
-            <strong>ready</strong>
-          </article>
-          <article data-state="planned">
-            <span>Telegram</span>
-            <strong>planned</strong>
-          </article>
-          <article data-state="planned">
-            <span>Slack</span>
-            <strong>planned</strong>
-          </article>
-          <article data-state="planned">
-            <span>GitHub</span>
-            <strong>planned</strong>
-          </article>
-        </div>
+        <div class="section-label">Clients</div>
+        <div class="client-list" id="clients"></div>
+
+        <div class="section-label">Memory</div>
+        <div class="scope-list" id="memory-scopes"></div>
       </section>
 
-      <section class="preview">
-        <div class="section-head">
-          <div>
-            <h2>Lark Preview</h2>
-            <span>progress card</span>
-          </div>
+      <section class="run-panel">
+        <div class="panel-heading">
+          <h2>Lark Preview</h2>
+          <span id="route-line">no run</span>
         </div>
-        <div id="card" class="card-preview empty">No run yet.</div>
-      </section>
 
-      <section class="output">
-        <div class="section-head">
-          <div>
-            <h2>Outbound</h2>
-            <span>thread reply</span>
-          </div>
+        <div id="card" class="lark-card empty">No run yet.</div>
+
+        <div class="outbound-header">
+          <span>Outbound</span>
+          <span>thread reply</span>
         </div>
         <pre id="output">No message yet.</pre>
+
+        <div class="section-label">AgentDock parity</div>
+        <div class="parity-list" id="parity"></div>
       </section>
     </main>
 

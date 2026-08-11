@@ -2,6 +2,7 @@ import type {
   AgentRunEvent,
   AgentRunResult,
   ChecklistItem,
+  ScopedMemorySnapshot,
   ProgressState,
   RuntimeDependencies,
   SourceMessage,
@@ -10,9 +11,10 @@ import type {
 
 function createDefaultChecklist(): ChecklistItem[] {
   return [
-    { id: 'understand', label: 'Understand request', status: 'running' },
-    { id: 'work', label: 'Run agent work', status: 'pending' },
-    { id: 'publish', label: 'Publish result', status: 'pending' },
+    { id: 'route', label: 'Resolve workspace/project', status: 'running' },
+    { id: 'memory', label: 'Load scoped memory', status: 'pending' },
+    { id: 'work', label: 'Run executor', status: 'pending' },
+    { id: 'publish', label: 'Publish thread reply', status: 'pending' },
   ];
 }
 
@@ -50,16 +52,52 @@ export class OpenTagRuntime {
     const progress = this.deps.platform.createProgressSurface(input.thread);
     const { surfaceId } = await progress.create(state);
 
+    const workspace =
+      (await this.deps.threadConfig.getWorkspace?.(input.thread)) ??
+      (input.thread.workspaceId
+        ? { id: input.thread.workspaceId, name: input.thread.workspaceId }
+        : undefined);
+    const project = await this.deps.threadConfig.getProject?.(
+      input.thread,
+      workspace,
+    );
     const identity = await this.deps.threadConfig.getIdentity(input.thread);
-    const access = await this.deps.threadConfig.getAccessBundle(input.thread);
-    const memory = await this.deps.memory.loadThreadMemory(input.thread);
+    const access = await this.deps.threadConfig.getAccessBundle(input.thread, {
+      workspace,
+      project,
+    });
 
     state = {
       ...state,
       checklist: updateChecklist(state.checklist, {
-        id: 'understand',
-        label: 'Understand request',
+        id: 'route',
+        label: 'Resolve workspace/project',
         status: 'done',
+        detail: [workspace?.name, project?.name].filter(Boolean).join(' / '),
+      }),
+      updatedAt: now(),
+    };
+    await progress.update(surfaceId, state);
+
+    const memorySnapshot: ScopedMemorySnapshot | undefined =
+      await this.deps.memory.loadMemory?.({
+        thread: input.thread,
+        workspace,
+        project,
+      });
+    const memory =
+      memorySnapshot?.text ??
+      (await this.deps.memory.loadThreadMemory(input.thread));
+
+    state = {
+      ...state,
+      checklist: updateChecklist(state.checklist, {
+        id: 'memory',
+        label: 'Load scoped memory',
+        status: 'done',
+        detail: memorySnapshot
+          ? `${memorySnapshot.scopes.length} scope(s)`
+          : 'thread scope',
       }),
       updatedAt: now(),
     };
@@ -82,7 +120,7 @@ export class OpenTagRuntime {
         ...state,
         checklist: updateChecklist(state.checklist, {
           id: 'work',
-          label: 'Run agent work',
+          label: 'Run executor',
           status: 'running',
         }),
         updatedAt: now(),
@@ -91,11 +129,14 @@ export class OpenTagRuntime {
 
       const result = await this.deps.executor.run({
         runId: input.runId,
+        workspace,
+        project,
         thread: input.thread,
         message: input.message,
         identity,
         access,
         memory,
+        memorySnapshot,
         abortSignal: input.abortSignal,
         onEvent,
       });
@@ -107,12 +148,12 @@ export class OpenTagRuntime {
         checklist: updateChecklist(
           updateChecklist(state.checklist, {
             id: 'work',
-            label: 'Run agent work',
+            label: 'Run executor',
             status: 'done',
           }),
           {
             id: 'publish',
-            label: 'Publish result',
+            label: 'Publish thread reply',
             status: 'running',
           },
         ),
@@ -129,7 +170,7 @@ export class OpenTagRuntime {
         ...state,
         checklist: updateChecklist(state.checklist, {
           id: 'publish',
-          label: 'Publish result',
+          label: 'Publish thread reply',
           status: 'done',
         }),
         updatedAt: now(),
@@ -144,7 +185,7 @@ export class OpenTagRuntime {
         summary: message,
         checklist: updateChecklist(state.checklist, {
           id: 'work',
-          label: 'Run agent work',
+          label: 'Run executor',
           status: 'failed',
           detail: message,
         }),
@@ -155,4 +196,3 @@ export class OpenTagRuntime {
     }
   }
 }
-

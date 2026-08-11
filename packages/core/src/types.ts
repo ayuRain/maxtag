@@ -8,11 +8,72 @@ export type PlatformKind =
 
 export type ThreadVisibility = 'public' | 'private' | 'direct';
 
+export type ClientStatus = 'ready' | 'partial' | 'planned';
+
+export type MemoryScopeKind = 'global' | 'workspace' | 'project' | 'thread';
+
+export interface Workspace {
+  id: string;
+  name: string;
+  defaultProjectId?: string;
+  platformTenantIds?: Partial<Record<PlatformKind, string>>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface Project {
+  id: string;
+  workspaceId: string;
+  key: string;
+  name: string;
+  description?: string;
+  platformBindings?: Array<{
+    platform: PlatformKind;
+    externalId: string;
+    channelId?: string;
+  }>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MemoryScope {
+  kind: MemoryScopeKind;
+  workspaceId?: string;
+  projectId?: string;
+  threadId?: string;
+  label: string;
+}
+
+export interface ScopedMemorySnapshot {
+  loadedAt: string;
+  scopes: Array<{
+    scope: MemoryScope;
+    content: string;
+  }>;
+  text: string;
+}
+
+export interface MemoryQuery {
+  thread: SourceThread;
+  workspace?: Workspace;
+  project?: Project;
+  scopes?: MemoryScopeKind[];
+}
+
+export interface MemoryWriteRequest extends MemoryQuery {
+  scope: MemoryScopeKind;
+  text: string;
+}
+
+export interface MemoryForgetRequest extends MemoryQuery {
+  scope: MemoryScopeKind;
+  selector: string;
+}
+
 export interface SourceThread {
   id: string;
   platform: PlatformKind;
   externalId: string;
   workspaceId?: string;
+  projectId?: string;
   channelId?: string;
   rootMessageId?: string;
   topicId?: string;
@@ -74,7 +135,7 @@ export type ToolGrantKind =
 export interface ToolGrant {
   id: string;
   kind: ToolGrantKind;
-  scope: 'thread' | 'channel' | 'workspace' | 'global';
+  scope: 'thread' | 'channel' | 'workspace' | 'project' | 'global';
   label: string;
   constraints?: Record<string, unknown>;
 }
@@ -82,6 +143,8 @@ export interface ToolGrant {
 export interface AccessBundle {
   id: string;
   threadId: string;
+  workspaceId?: string;
+  projectId?: string;
   grants: ToolGrant[];
   networkPolicy: {
     mode: 'deny-by-default' | 'allow-all' | 'restricted';
@@ -138,11 +201,14 @@ export type AgentRunEvent =
 
 export interface AgentRunRequest {
   runId: string;
+  workspace?: Workspace;
+  project?: Project;
   thread: SourceThread;
   message: SourceMessage;
   identity: AgentIdentity;
   access: AccessBundle;
   memory: string;
+  memorySnapshot?: ScopedMemorySnapshot;
   abortSignal?: AbortSignal;
   onEvent?: (event: AgentRunEvent) => void | Promise<void>;
 }
@@ -175,13 +241,26 @@ export interface PlatformAdapter {
 
 export interface MemoryStore {
   loadThreadMemory(thread: SourceThread): Promise<string>;
+  loadMemory?(query: MemoryQuery): Promise<ScopedMemorySnapshot>;
   remember(thread: SourceThread, text: string): Promise<void>;
+  rememberScoped?(request: MemoryWriteRequest): Promise<void>;
   forget(thread: SourceThread, selector: string): Promise<void>;
+  forgetScoped?(request: MemoryForgetRequest): Promise<void>;
+}
+
+export interface ThreadConfigContext {
+  workspace?: Workspace;
+  project?: Project;
 }
 
 export interface ThreadConfigStore {
+  getWorkspace?(thread: SourceThread): Promise<Workspace>;
+  getProject?(thread: SourceThread, workspace?: Workspace): Promise<Project>;
   getIdentity(thread: SourceThread): Promise<AgentIdentity>;
-  getAccessBundle(thread: SourceThread): Promise<AccessBundle>;
+  getAccessBundle(
+    thread: SourceThread,
+    context?: ThreadConfigContext,
+  ): Promise<AccessBundle>;
 }
 
 export interface RuntimeDependencies {
@@ -191,4 +270,3 @@ export interface RuntimeDependencies {
   threadConfig: ThreadConfigStore;
   clock?: () => Date;
 }
-
