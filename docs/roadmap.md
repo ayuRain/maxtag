@@ -15,6 +15,8 @@
 - Create or bind `SourceThread` records from Lark group/topic events.
 - Render live progress cards with checklist items, stop action, and final state.
 - Persist inbound event idempotency and outbound deliveries.
+- Keep the Lark implementation behind `PlatformAdapter`; do not let Lark field
+  names leak into core tables or executor prompts.
 
 ## Phase 2: Agent Runs
 
@@ -42,4 +44,3 @@
 - Telegram adapter reaches parity for messages, files, and progress receipts.
 - Slack adapter can map thread_ts to `SourceThread`.
 - GitHub issue/PR comments can become first-class work threads.
-
