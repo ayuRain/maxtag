@@ -70,6 +70,8 @@ import {
 } from '@opentag/platform-telegram';
 import {
   FileRoutineStore,
+  RoutineCommandService,
+  type ParsedRoutineCommand,
   type Routine,
   type RoutineClaim,
   type RoutineExecution,
@@ -150,6 +152,9 @@ const routineSchedulerId = `opentag-routines-${process.pid}`;
 const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
 const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
 const routineStore = new FileRoutineStore(path.join(dataDir, 'routines'));
+const routineCommandService = new RoutineCommandService(routineStore, {
+  defaultTimeZone: defaultRoutineTimeZone,
+});
 const pairingStore = new FilePairingStore(path.join(dataDir, 'pairing'), {
   ttlMs: pairingTtlSeconds * 1000,
 });
@@ -291,7 +296,7 @@ const capabilityManifest = {
     {
       capability: 'Long-running work',
       agentdock: 'scheduled tasks and dynamic workflows',
-      opentag: 'durable run queue plus interval/daily workspace routines with manual triggers',
+      opentag: 'durable run queue plus chat-native, scoped interval/daily standing work',
       status: 'partial',
     },
   ],
@@ -1539,6 +1544,9 @@ interface QueuedMessageRun {
     kind: ParsedMemoryCommand['kind'];
     scope: MemoryScopeKind;
   };
+  routineCommand?: {
+    kind: ParsedRoutineCommand['kind'];
+  };
   transport: {
     platform: PlatformKind;
     mode: string;
@@ -1612,6 +1620,7 @@ async function enqueueMessageRun(input: {
   const memoryCommand = parseMemoryCommand(routed.message.text, {
     defaultScope: memoryCommandDefaultScope(routed.thread),
   });
+  const routineCommand = routineCommandService.parse(routed.message.text);
   const resolvedPolicy = await threadConfigStore.resolveThreadPolicy(routed.thread);
   const run = await deliveryStore.createAgentRun({
     runId,
@@ -1619,14 +1628,19 @@ async function enqueueMessageRun(input: {
     message: routed.message,
     inboundEventId: options?.inboundEventId,
     bindingId: routeBinding.id,
-    executorId: memoryCommand
-      ? 'memory-command'
-      : resolvedPolicy.identity.defaultExecutorId,
+    executorId: routineCommand
+      ? 'routine-command'
+      : memoryCommand
+        ? 'memory-command'
+        : resolvedPolicy.identity.defaultExecutorId,
     transportMode,
     metadata: {
       ...options?.metadata,
       memoryCommand: memoryCommand
         ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
+        : undefined,
+      routineCommand: routineCommand
+        ? { kind: routineCommand.kind }
         : undefined,
       agentId: resolvedPolicy.identity.id,
       agentDisplayName: resolvedPolicy.identity.displayName,
@@ -1640,6 +1654,9 @@ async function enqueueMessageRun(input: {
     route,
     memoryCommand: memoryCommand
       ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
+      : undefined,
+    routineCommand: routineCommand
+      ? { kind: routineCommand.kind }
       : undefined,
     transport: {
       platform: routed.thread.platform,
@@ -1907,6 +1924,69 @@ async function executeAgentRun(
     await markRunInboundFailed(initialRun, message);
     throw error;
   }
+  const routineCommand = routineCommandService.parse(initialRun.message.text);
+  if (routineCommand) {
+    try {
+      const commandResult = await routineCommandService.execute(
+        routineCommand,
+        initialRun.thread,
+        initialRun.message.actor.id,
+      );
+      await deliveryStore.appendAgentRunEvent(runId, 'routine_command', {
+        message: commandResult.summary,
+        metadata: {
+          action: commandResult.action,
+          routineId: commandResult.routine?.id,
+        },
+      });
+      await runPlatform.platform.sendMessage(
+        initialRun.thread,
+        commandResult.summary,
+        [],
+        { runId, replyToMessageId: initialRun.message.id },
+      );
+      await markRunInboundProcessed(initialRun);
+      await deliveryStore.markAgentRunCompleted(runId, commandResult.summary);
+      return {
+        result: {
+          summary: commandResult.summary,
+          artifacts: [],
+        },
+        run: await deliveryStore.getAgentRun(runId),
+        route: runRoute(initialRun),
+        routineCommand: {
+          kind: routineCommand.kind,
+          ...commandResult,
+        },
+        delivery: await deliverySnapshot(20),
+        transport: {
+          platform: runPlatform.platform.kind,
+          mode: runPlatform.transportMode,
+        },
+        larkTransport: runPlatform.larkTransport,
+        larkDryRun: runPlatform.larkDryRun
+          ? {
+              texts: runPlatform.larkDryRun.texts,
+              cards: runPlatform.larkDryRun.cards,
+            }
+          : undefined,
+        telegramTransport: runPlatform.telegramTransport,
+        telegramDryRun: runPlatform.telegramDryRun
+          ? {
+              texts: runPlatform.telegramDryRun.texts,
+              edits: runPlatform.telegramDryRun.edits,
+              documents: runPlatform.telegramDryRun.documents,
+            }
+          : undefined,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await deliveryStore.markAgentRunFailed(runId, message);
+      await markRunInboundFailed(initialRun, message);
+      throw error;
+    }
+  }
+
   const memoryCommand = parseMemoryCommand(initialRun.message.text, {
     defaultScope: memoryCommandDefaultScope(initialRun.thread),
   });

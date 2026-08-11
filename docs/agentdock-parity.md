@@ -18,7 +18,7 @@ many clients.
 | Project agent policy | File-backed per-project identity, instructions, Codex/Claude choice, tool grants, network policy, and audit history |
 | Durable delivery skeleton | File-backed outbox, turn delivery records, scoped cancel, stale recovery, and bindings |
 | Agent run queue | File-backed run status, timeline events, cancel requests, inline or standalone worker claim, and stale recovery |
-| Scheduled tasks | File-backed workspace/project routines with interval or daily schedules, IANA time zones, manual trigger, deduped execution claims, stale reclaim, audit history, and shared run-queue execution |
+| Scheduled tasks | File-backed workspace/project routines with interval or daily schedules, IANA time zones, manual trigger, deduped execution claims, stale reclaim, and shared run-queue execution; Lark and Telegram topics support bilingual create/list/pause/resume/delete commands with requester audit |
 | Inbound callback ledger | Lark token/timestamp and Telegram webhook-secret checks, event idempotency, and duplicate short-circuit |
 | Native Telegram client | Bot API webhook normalization, forum topics, send/edit progress, reply chunking, outgoing files, and tracked delivery |
 | Executor boundary | Project-selectable Codex and Claude dry-run/local CLI modes with bounded output, cancellation, timeout, and filtered child environments |

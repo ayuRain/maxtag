@@ -39,7 +39,8 @@ export type AgentRunEventType =
   | 'failed'
   | 'cancel_requested'
   | 'cancelled'
-  | 'memory_command';
+  | 'memory_command'
+  | 'routine_command';
 
 export type InboundEventStatus =
   | 'received'

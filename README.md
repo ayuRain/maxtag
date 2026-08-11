@@ -86,6 +86,9 @@ packages/ui-cards           Progress/checklist card models
   schedules, client-neutral destinations, manual triggers, deterministic run
   bridging, deduplication, and stale execution reclaim. Routine work enters the
   same run queue, executor policy, memory scopes, and delivery path as messages.
+- Lark and Telegram users can create, list, pause, resume, or delete standing
+  work in the current project/topic. Each change is scoped to that conversation
+  and records the requesting user for audit.
 - Real Lark delivery can be enabled with `OPENTAG_LARK_TRANSPORT=http`,
   `OPENTAG_LARK_APP_ID`, and `OPENTAG_LARK_APP_SECRET`; use
   `OPENTAG_LARK_DOMAIN=lark` for international Lark.
@@ -165,6 +168,21 @@ and client destination, trigger a manual run, and open the corresponding run
 timeline. `POST /v1/routines/tick` is available for an operator or external
 supervisor. Local development still uses the configured dry-run executor and
 memory Lark transport unless those modes are explicitly changed.
+
+Standing work can also be managed directly in a bound Lark or Telegram topic:
+
+```text
+schedule every 30m: Check CI failures
+schedule daily 09:00 Asia/Shanghai: Summarize open work
+routines
+pause routine <id>
+resume routine <id>
+delete routine <id>
+```
+
+Chinese interval and daily forms such as `每 30 分钟：检查 CI` and
+`每天 09:00：汇总项目进展` are supported as well. Commands only see routines
+for the current project and conversation destination.
 
 ## Local CLI Executors
 

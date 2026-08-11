@@ -54,6 +54,39 @@ test('standalone worker host keeps Telegram runs on the native transport', async
     assert.ok(outbox.some((item) => item.kind === 'telegram.progress.create'));
     assert.ok(outbox.some((item) => item.kind === 'telegram.progress.update'));
     assert.ok(outbox.some((item) => item.kind === 'telegram.text'));
+
+    await host.deliveryStore.createAgentRun({
+      runId: 'telegram-standing-work-run',
+      thread,
+      message: {
+        id: '42',
+        threadId: thread.id,
+        platform: 'telegram',
+        text: '/opentag schedule every 20m: Check worker queues',
+        actor: { id: 'user-2', displayName: 'Grace' },
+        createdAt: new Date().toISOString(),
+        mentionsAgent: true,
+      },
+      transportMode: 'telegram-memory',
+    });
+    const commandPass = await host.runAgentWorkerPass(1);
+    assert.equal(commandPass.claimed, 1);
+    assert.equal(commandPass.completed, 1);
+    assert.match(commandPass.runs[0].summary, /Standing work created/);
+    const routines = await host.routineStore.listRoutines({
+      workspaceId: 'dev-workspace',
+      projectId: 'opentag',
+    });
+    assert.equal(routines.length, 1);
+    assert.equal(routines[0].createdBy, 'user-2');
+    assert.equal(routines[0].destination.topicId, '77');
+    assert.ok(
+      (
+        await host.deliveryStore.listAgentRunEvents(
+          'telegram-standing-work-run',
+        )
+      ).some((event) => event.type === 'routine_command'),
+    );
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

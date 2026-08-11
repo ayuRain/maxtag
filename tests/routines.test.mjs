@@ -3,7 +3,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { FileRoutineStore, nextRoutineRunAt } from '@opentag/routines';
+import {
+  FileRoutineStore,
+  RoutineCommandService,
+  nextRoutineRunAt,
+  parseRoutineCommand,
+} from '@opentag/routines';
 
 function routineInput(overrides = {}) {
   return {
@@ -38,6 +43,107 @@ test('daily schedules honor the configured IANA time zone', () => {
   assert.equal(
     nextRoutineRunAt(schedule, new Date('2026-08-11T02:00:00.000Z')).toISOString(),
     '2026-08-12T01:00:00.000Z',
+  );
+});
+
+test('standing-work commands parse English, Chinese, and client addressing', () => {
+  assert.deepEqual(
+    parseRoutineCommand(
+      '/opentag@OpenTagBot schedule every 2h: Check failed pipelines',
+    ),
+    {
+      kind: 'create',
+      instructions: 'Check failed pipelines',
+      schedule: { kind: 'interval', everyMinutes: 120 },
+    },
+  );
+  assert.deepEqual(
+    parseRoutineCommand('@OpenTag 每天 09:30：汇总项目进展', {
+      defaultTimeZone: 'Asia/Shanghai',
+    }),
+    {
+      kind: 'create',
+      instructions: '汇总项目进展',
+      schedule: {
+        kind: 'daily',
+        time: '09:30',
+        timeZone: 'Asia/Shanghai',
+      },
+    },
+  );
+  assert.deepEqual(parseRoutineCommand('/opentag routines'), { kind: 'list' });
+  assert.deepEqual(parseRoutineCommand('暂停定时任务 ab12cd34'), {
+    kind: 'pause',
+    selector: 'ab12cd34',
+  });
+  assert.equal(parseRoutineCommand('summarize this project'), null);
+});
+
+test('standing-work service scopes lifecycle commands to their source thread', async () => {
+  const fixture = await storeFixture();
+  const service = new RoutineCommandService(fixture.store, {
+    defaultTimeZone: 'Asia/Shanghai',
+  });
+  const thread = {
+    id: 'lark:oc_payments:om_root',
+    platform: 'lark',
+    externalId: 'oc_payments:om_root',
+    workspaceId: 'acme',
+    projectId: 'payments',
+    channelId: 'oc_payments',
+    rootMessageId: 'om_root',
+    topicId: 'om_root',
+    visibility: 'public',
+    title: 'Payments',
+  };
+  const command = service.parse('schedule every 15m: Check payment alerts');
+  assert.ok(command);
+  const created = await service.execute(command, thread, 'user-ada');
+  assert.equal(created.action, 'create');
+  assert.equal(created.routine.createdBy, 'user-ada');
+  assert.equal(created.routine.destination.externalId, thread.externalId);
+
+  const listed = await service.execute({ kind: 'list' }, thread, 'user-bob');
+  assert.equal(listed.routines.length, 1);
+  assert.match(listed.summary, /Check payment alerts/);
+  const anotherThread = {
+    ...thread,
+    id: 'lark:oc_payments:om_other',
+    externalId: 'oc_payments:om_other',
+    rootMessageId: 'om_other',
+    topicId: 'om_other',
+  };
+  assert.match(
+    (await service.execute({ kind: 'list' }, anotherThread, 'user-bob')).summary,
+    /No standing work/,
+  );
+
+  const selector = created.routine.id.slice(0, 8);
+  const paused = await service.execute(
+    { kind: 'pause', selector },
+    thread,
+    'user-bob',
+  );
+  assert.equal(paused.routine.enabled, false);
+  assert.equal(paused.routine.updatedBy, 'user-bob');
+  const resumed = await service.execute(
+    { kind: 'resume', selector },
+    thread,
+    'user-carol',
+  );
+  assert.equal(resumed.routine.enabled, true);
+  assert.ok(resumed.routine.nextRunAt);
+  const removed = await service.execute(
+    { kind: 'delete', selector },
+    thread,
+    'user-dan',
+  );
+  assert.equal(removed.routine.deletedAt !== undefined, true);
+  assert.equal((await fixture.store.listRoutines({ workspaceId: 'acme' })).length, 0);
+  assert.ok(
+    (await fixture.store.listAudit({ workspaceId: 'acme' })).some(
+      (entry) => entry.actor === 'user-dan' && entry.action === 'routine.deleted',
+    ),
   );
 });
 

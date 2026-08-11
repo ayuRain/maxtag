@@ -35,6 +35,8 @@ export interface Routine {
   lastScheduledAt?: string;
   createdAt: string;
   updatedAt: string;
+  createdBy?: string;
+  updatedBy?: string;
   deletedAt?: string;
 }
 

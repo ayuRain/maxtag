@@ -50,6 +50,10 @@ Lark groups/topics and Telegram chats/forum topics now share this route. Slack
 threads and GitHub comments should only add adapters; they should not add new
 executor or memory concepts.
 
+Standing work follows the same rule. A routine created in a Lark topic or
+Telegram forum topic retains the resolved workspace, project, destination, and
+requesting user, then re-enters the shared run queue when its schedule is due.
+
 Before a native adapter exists, a client can submit the normalized envelope to
 `/v1/client/events`. The server records inbound idempotency, resolves bindings,
 loads scoped memory, enqueues an agent run, and writes generic progress/text

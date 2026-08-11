@@ -159,6 +159,7 @@ export class FileRoutineStore {
         : undefined;
       if (input.id && !existing) throw new Error('routine_not_found');
       const enabled = input.enabled ?? existing?.enabled ?? true;
+      const actor = input.actor?.trim() || 'admin';
       const routine: Routine = {
         id: existing?.id ?? input.id ?? randomUUID(),
         workspaceId: input.workspaceId.trim(),
@@ -188,6 +189,8 @@ export class FileRoutineStore {
         lastScheduledAt: existing?.lastScheduledAt,
         createdAt: existing?.createdAt ?? timestamp,
         updatedAt: timestamp,
+        createdBy: existing?.createdBy ?? actor,
+        updatedBy: actor,
       };
       if (existing) {
         state.routines.splice(state.routines.indexOf(existing), 1, routine);
@@ -208,11 +211,52 @@ export class FileRoutineStore {
         routineId: routine.id,
         workspaceId: routine.workspaceId,
         projectId: routine.projectId,
-        actor: input.actor?.trim() || 'admin',
+        actor,
         at: timestamp,
         snapshot: clone(routine),
       };
       state.audit.push(audit);
+      return clone(routine);
+    });
+  }
+
+  async setRoutineEnabled(
+    id: string,
+    enabled: boolean,
+    actor = 'admin',
+    at = new Date(),
+  ): Promise<Routine | undefined> {
+    return this.mutate((state) => {
+      const routine = state.routines.find(
+        (item) => item.id === id && !item.deletedAt,
+      );
+      if (!routine) return undefined;
+      if (routine.enabled === enabled) return clone(routine);
+      const timestamp = iso(at);
+      routine.enabled = enabled;
+      routine.nextRunAt = enabled
+        ? iso(nextRoutineRunAt(routine.schedule, at))
+        : undefined;
+      routine.updatedAt = timestamp;
+      routine.updatedBy = actor.trim() || 'admin';
+      if (!enabled) {
+        cancelPendingExecutions(
+          state,
+          routine.id,
+          'routine_disabled',
+          timestamp,
+        );
+      }
+      state.audit.push({
+        id: randomUUID(),
+        action: 'routine.updated',
+        routineId: routine.id,
+        workspaceId: routine.workspaceId,
+        projectId: routine.projectId,
+        actor: routine.updatedBy,
+        at: timestamp,
+        snapshot: clone(routine),
+      });
       return clone(routine);
     });
   }
@@ -229,6 +273,7 @@ export class FileRoutineStore {
       routine.enabled = false;
       routine.nextRunAt = undefined;
       routine.updatedAt = timestamp;
+      routine.updatedBy = actor.trim() || 'admin';
       routine.deletedAt = timestamp;
       cancelPendingExecutions(state, id, 'routine_deleted', timestamp);
       state.audit.push({

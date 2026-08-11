@@ -104,6 +104,10 @@ async function main(): Promise<void> {
       claudeModel: process.env.OPENTAG_CLAUDE_MODEL,
       claudeMaxBudgetUsd: optionalNumberEnv('OPENTAG_CLAUDE_MAX_BUDGET_USD'),
     },
+    routines: {
+      defaultTimeZone:
+        process.env.OPENTAG_DEFAULT_TIME_ZONE || 'Asia/Shanghai',
+    },
   });
 
   let stopping = false;

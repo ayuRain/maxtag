@@ -39,6 +39,10 @@ import {
   TelegramPlatformAdapter,
   type TelegramTransport,
 } from '@opentag/platform-telegram';
+import {
+  FileRoutineStore,
+  RoutineCommandService,
+} from '@opentag/routines';
 
 export interface RuntimeHostLarkConfig {
   transportMode?: string;
@@ -67,12 +71,17 @@ export interface RuntimeHostExecutorConfig {
   claudeMaxBudgetUsd?: number;
 }
 
+export interface RuntimeHostRoutineConfig {
+  defaultTimeZone?: string;
+}
+
 export interface RuntimeHostConfig {
   dataDir: string;
   workerId?: string;
   lark?: RuntimeHostLarkConfig;
   telegram?: RuntimeHostTelegramConfig;
   executors?: RuntimeHostExecutorConfig;
+  routines?: RuntimeHostRoutineConfig;
 }
 
 export interface AgentWorkerPassResult {
@@ -178,8 +187,10 @@ function agentRunEventSummary(event: AgentRunEvent): {
 export class OpenTagWorkerHost {
   readonly deliveryStore: FileDeliveryStore;
   readonly memoryStore: ScopedFileMemoryStore;
+  readonly routineStore: FileRoutineStore;
   private readonly config: RuntimeHostConfig;
   readonly threadConfigStore: FileThreadConfigStore;
+  private readonly routineCommandService: RoutineCommandService;
   private readonly activeRuns = new Map<string, AbortController>();
   private workerPass: Promise<AgentWorkerPassResult> | undefined;
 
@@ -191,6 +202,12 @@ export class OpenTagWorkerHost {
     this.memoryStore = new ScopedFileMemoryStore(
       path.join(config.dataDir, 'memory'),
     );
+    this.routineStore = new FileRoutineStore(
+      path.join(config.dataDir, 'routines'),
+    );
+    this.routineCommandService = new RoutineCommandService(this.routineStore, {
+      defaultTimeZone: config.routines?.defaultTimeZone || 'Asia/Shanghai',
+    });
     this.threadConfigStore = new FileThreadConfigStore(
       path.join(config.dataDir, 'config'),
       {
@@ -341,6 +358,65 @@ export class OpenTagWorkerHost {
       await this.deliveryStore.markAgentRunFailed(runId, message);
       await this.markRunInboundFailed(initialRun, message);
       throw error;
+    }
+
+    const routineCommand = this.routineCommandService.parse(
+      initialRun.message.text,
+    );
+    if (routineCommand) {
+      try {
+        const commandResult = await this.routineCommandService.execute(
+          routineCommand,
+          initialRun.thread,
+          initialRun.message.actor.id,
+        );
+        await this.deliveryStore.appendAgentRunEvent(runId, 'routine_command', {
+          message: commandResult.summary,
+          metadata: {
+            action: commandResult.action,
+            routineId: commandResult.routine?.id,
+          },
+        });
+        await runPlatform.platform.sendMessage(
+          initialRun.thread,
+          commandResult.summary,
+          [],
+          { runId, replyToMessageId: initialRun.message.id },
+        );
+        await this.markRunInboundProcessed(initialRun);
+        await this.deliveryStore.markAgentRunCompleted(
+          runId,
+          commandResult.summary,
+        );
+        return {
+          result: {
+            summary: commandResult.summary,
+            artifacts: [],
+          },
+          run: await this.deliveryStore.getAgentRun(runId),
+          route: this.runRoute(initialRun),
+          routineCommand: {
+            kind: routineCommand.kind,
+            ...commandResult,
+          },
+          delivery: await this.deliverySnapshot(20),
+          transport: {
+            platform: runPlatform.platform.kind,
+            mode: runPlatform.transportMode,
+          },
+          larkTransport: runPlatform.larkTransport,
+          larkDryRun: this.larkDryRunPayload(runPlatform.larkDryRun),
+          telegramTransport: runPlatform.telegramTransport,
+          telegramDryRun: this.telegramDryRunPayload(
+            runPlatform.telegramDryRun,
+          ),
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.deliveryStore.markAgentRunFailed(runId, message);
+        await this.markRunInboundFailed(initialRun, message);
+        throw error;
+      }
     }
 
     const memoryCommand = parseMemoryCommand(initialRun.message.text, {

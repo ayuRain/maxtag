@@ -42,9 +42,38 @@ async function waitForJson(url, predicate, child, logs, timeoutMs = 8_000) {
   throw new Error(`timed out waiting for ${url}: ${lastError?.message}\n${logs.join('')}`);
 }
 
+function larkEvent(eventId, messageId, text, rootId = 'om_standing_root') {
+  return {
+    event_id: eventId,
+    event: {
+      message: {
+        message_id: messageId,
+        root_id: rootId,
+        parent_id: rootId,
+        chat_id: 'oc_standing_work',
+        chat_type: 'group',
+        message_type: 'text',
+        content: JSON.stringify({ text: `@OpenTag ${text}` }),
+        mentions: [
+          {
+            key: '@OpenTag',
+            id: { open_id: 'ou_opentag_bot' },
+            name: 'OpenTag',
+          },
+        ],
+        create_time: String(Date.now()),
+      },
+      sender: {
+        sender_id: { open_id: 'ou_channel_operator' },
+        tenant_key: 'dev-workspace',
+      },
+    },
+  };
+}
+
 test(
   'routine API bridges a manual trigger into a completed agent run',
-  { timeout: 15_000 },
+  { timeout: 25_000 },
   async (context) => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-routine-api-'));
     const port = await freePort();
@@ -58,6 +87,7 @@ test(
         OPENTAG_DATA_DIR: dataDir,
         OPENTAG_EXECUTOR_MODE: 'dry-run',
         OPENTAG_LARK_TRANSPORT: 'memory',
+        OPENTAG_LARK_BOT_OPEN_ID: 'ou_opentag_bot',
         OPENTAG_AGENT_WORKER: 'inline',
         OPENTAG_AGENT_WORKER_INTERVAL_MS: '50',
         OPENTAG_ROUTINE_TICK_INTERVAL_MS: '600000',
@@ -137,5 +167,130 @@ test(
     assert.equal(run.status, 'completed');
     assert.equal(run.metadata.source, 'routine');
     assert.equal(run.metadata.routineName, 'Integration digest');
+
+    const bindingResponse = await fetch(`${baseUrl}/v1/bindings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        platform: 'lark',
+        externalId: 'oc_standing_work',
+        channelId: 'oc_standing_work',
+        workspaceId: 'dev-workspace',
+        projectId: 'opentag',
+        activationMode: 'mention',
+        requireMention: true,
+      }),
+    });
+    assert.equal(bindingResponse.status, 200);
+
+    const createCommandResponse = await fetch(`${baseUrl}/v1/lark/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(
+        larkEvent(
+          'standing-create-event',
+          'om_standing_create',
+          'schedule every 15m: Summarize channel incidents',
+        ),
+      ),
+    });
+    assert.equal(createCommandResponse.status, 202);
+    const createCommand = await createCommandResponse.json();
+    assert.equal(createCommand.accepted, true);
+    assert.equal(createCommand.run.executorId, 'routine-command');
+
+    const commandCompleted = await waitForJson(
+      `${baseUrl}/v1/runs?limit=20`,
+      (data) =>
+        data.runs.some(
+          (item) =>
+            item.id === createCommand.run.id &&
+            item.status === 'completed' &&
+            item.summary?.includes('Standing work created'),
+        ),
+      child,
+      logs,
+    );
+    assert.match(
+      commandCompleted.runs.find((item) => item.id === createCommand.run.id)
+        .summary,
+      /Standing work created/,
+    );
+
+    const standingSnapshot = await waitForJson(
+      `${baseUrl}/v1/routines?workspaceId=dev-workspace&projectId=opentag`,
+      (data) =>
+        data.routines.some(
+          (routine) => routine.name === 'Summarize channel incidents',
+        ),
+      child,
+      logs,
+    );
+    const standing = standingSnapshot.routines.find(
+      (routine) => routine.name === 'Summarize channel incidents',
+    );
+    assert.equal(standing.createdBy, 'ou_channel_operator');
+    assert.equal(standing.destination.externalId, 'oc_standing_work:om_standing_root');
+    assert.equal(standing.destination.rootMessageId, 'om_standing_root');
+
+    const listCommandResponse = await fetch(`${baseUrl}/v1/lark/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(
+        larkEvent('standing-list-event', 'om_standing_list', 'routines'),
+      ),
+    });
+    assert.equal(listCommandResponse.status, 202);
+    const listCommand = await listCommandResponse.json();
+    const listCompleted = await waitForJson(
+      `${baseUrl}/v1/runs?limit=20`,
+      (data) =>
+        data.runs.some(
+          (item) =>
+            item.id === listCommand.run.id &&
+            item.status === 'completed' &&
+            item.summary?.includes('Standing work in this thread'),
+        ),
+      child,
+      logs,
+    );
+    assert.match(
+      listCompleted.runs.find((item) => item.id === listCommand.run.id).summary,
+      /Summarize channel incidents/,
+    );
+
+    const pauseCommandResponse = await fetch(`${baseUrl}/v1/lark/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(
+        larkEvent(
+          'standing-pause-event',
+          'om_standing_pause',
+          `pause routine ${standing.id.slice(0, 8)}`,
+        ),
+      ),
+    });
+    assert.equal(pauseCommandResponse.status, 202);
+    const pauseCommand = await pauseCommandResponse.json();
+    await waitForJson(
+      `${baseUrl}/v1/runs?limit=20`,
+      (data) =>
+        data.runs.some(
+          (item) =>
+            item.id === pauseCommand.run.id &&
+            item.status === 'completed' &&
+            item.summary?.includes('Standing work paused'),
+        ),
+      child,
+      logs,
+    );
+    const pausedSnapshot = await fetch(
+      `${baseUrl}/v1/routines?workspaceId=dev-workspace&projectId=opentag`,
+    ).then((response) => response.json());
+    assert.equal(
+      pausedSnapshot.routines.find((routine) => routine.id === standing.id)
+        .enabled,
+      false,
+    );
   },
 );
