@@ -6,6 +6,13 @@ export type TurnDeliveryStatus = 'queued' | 'accepted' | 'completed' | 'failed';
 
 export type ThreadActivationMode = 'mention' | 'always';
 
+export type InboundEventStatus =
+  | 'received'
+  | 'processed'
+  | 'ignored'
+  | 'failed'
+  | 'rejected';
+
 export interface OutboundTarget {
   platform: PlatformKind;
   chatId?: string;
@@ -43,6 +50,11 @@ export interface CreateOutboundInput {
   maxAttempts?: number;
 }
 
+export interface ClaimOutboundOptions {
+  limit?: number;
+  now?: Date;
+}
+
 export interface TurnDeliveryRecord {
   id: string;
   runId: string;
@@ -76,6 +88,44 @@ export interface ThreadBinding {
   metadata?: Record<string, unknown>;
 }
 
+export interface InboundEventRecord {
+  id: string;
+  platform: PlatformKind;
+  externalId: string;
+  status: InboundEventStatus;
+  duplicateCount: number;
+  eventType?: string;
+  workspaceId?: string;
+  projectId?: string;
+  threadId?: string;
+  messageId?: string;
+  receivedAt: string;
+  processedAt?: string;
+  ignoredAt?: string;
+  failedAt?: string;
+  rejectedAt?: string;
+  reason?: string;
+  lastError?: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RecordInboundEventInput {
+  platform: PlatformKind;
+  externalId: string;
+  eventType?: string;
+  workspaceId?: string;
+  projectId?: string;
+  threadId?: string;
+  messageId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RecordInboundEventResult {
+  record: InboundEventRecord;
+  duplicate: boolean;
+}
+
 export interface UpsertThreadBindingInput {
   thread: SourceThread;
   workspaceId: string;
@@ -87,6 +137,7 @@ export interface UpsertThreadBindingInput {
 export interface DeliverySummary {
   outbox: Record<OutboundStatus, number>;
   turnDeliveries: Record<TurnDeliveryStatus, number>;
+  inboundEvents: Record<InboundEventStatus, number> & { duplicates: number };
   bindings: number;
 }
 
@@ -95,4 +146,5 @@ export interface FileDeliveryState {
   outbox: OutboundEnvelope[];
   turnDeliveries: TurnDeliveryRecord[];
   threadBindings: ThreadBinding[];
+  inboundEvents: InboundEventRecord[];
 }

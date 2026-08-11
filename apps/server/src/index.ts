@@ -8,13 +8,20 @@ import {
   type SourceMessage,
   type SourceThread,
 } from '@opentag/core';
-import { FileDeliveryStore, TrackedLarkTransport } from '@opentag/delivery';
+import {
+  FileDeliveryStore,
+  TrackedLarkTransport,
+  runDeliveryWorkerPass,
+} from '@opentag/delivery';
 import { createCodexExecutor } from '@opentag/executor-codex';
 import { ScopedFileMemoryStore } from '@opentag/memory';
 import {
   LarkPlatformAdapter,
   MemoryLarkTransport,
+  larkCallbackEventType,
+  larkCallbackExternalId,
   normalizeLarkEvent,
+  parseAndValidateLarkCallback,
   type LarkIncomingEvent,
   type LarkTransport,
 } from '@opentag/platform-lark';
@@ -24,6 +31,10 @@ const host = process.env.OPENTAG_HOST || '127.0.0.1';
 const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
 const adminDir = path.resolve('apps/admin/public');
 const botOpenId = process.env.OPENTAG_LARK_BOT_OPEN_ID;
+const larkVerificationToken = process.env.OPENTAG_LARK_VERIFICATION_TOKEN;
+const larkCallbackMaxSkewSeconds = Number(
+  process.env.OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS || 300,
+);
 const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
 
 const capabilityManifest = {
@@ -111,6 +122,12 @@ const capabilityManifest = {
       status: 'partial',
     },
     {
+      capability: 'Inbound idempotency',
+      agentdock: 'message cursor and turn delivery recovery',
+      opentag: 'event ledger with duplicate short-circuit',
+      status: 'partial',
+    },
+    {
       capability: 'Long-running work',
       agentdock: 'scheduled tasks and dynamic workflows',
       opentag: 'executor interface only',
@@ -119,12 +136,16 @@ const capabilityManifest = {
   ],
 };
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+async function readTextBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  const text = Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  const text = await readTextBody(request);
   if (!text.trim()) return {};
   return JSON.parse(text) as unknown;
 }
@@ -146,6 +167,31 @@ async function sendFileResponse(
   const content = await readFile(filePath);
   response.writeHead(200, { 'content-type': contentType });
   response.end(content);
+}
+
+function stripPayload<T extends { payload?: unknown }>(
+  item: T,
+): Omit<T, 'payload'> {
+  const { payload: _payload, ...rest } = item;
+  return rest;
+}
+
+async function deliverySnapshot(limit = 50): Promise<Record<string, unknown>> {
+  const [summary, outbox, turnDeliveries, bindings, inboundEvents] =
+    await Promise.all([
+      deliveryStore.summarize(),
+      deliveryStore.listOutbox({ limit }),
+      deliveryStore.listTurnDeliveries({ limit }),
+      deliveryStore.listThreadBindings(limit),
+      deliveryStore.listInboundEvents({ limit }),
+    ]);
+  return {
+    summary,
+    outbox: outbox.map(stripPayload),
+    turnDeliveries,
+    bindings,
+    inboundEvents,
+  };
 }
 
 function createRuntimeForDryRun(transport: LarkTransport): OpenTagRuntime {
@@ -210,27 +256,43 @@ function coerceDevMessage(body: Record<string, unknown>): {
 async function runDryMessage(input: {
   thread: SourceThread;
   message: SourceMessage;
+}, options?: {
+  inboundEventId?: string;
 }): Promise<Record<string, unknown>> {
   const memoryTransport = new MemoryLarkTransport();
   const trackedTransport = new TrackedLarkTransport(memoryTransport, deliveryStore);
   const runtime = createRuntimeForDryRun(trackedTransport);
   const runId = randomUUID();
-  await deliveryStore.upsertThreadBinding({
+  const binding = await deliveryStore.upsertThreadBinding({
     thread: input.thread,
     workspaceId: input.thread.workspaceId ?? 'default-workspace',
     projectId: input.thread.projectId ?? 'general',
   });
-  const result = await runtime.handleMessage({
-    runId,
-    thread: input.thread,
-    message: input.message,
-  });
-  const [summary, outbox, turnDeliveries, bindings] = await Promise.all([
-    deliveryStore.summarize(),
-    deliveryStore.listOutbox({ runId, limit: 20 }),
-    deliveryStore.listTurnDeliveries({ runId, limit: 20 }),
-    deliveryStore.listThreadBindings(20),
-  ]);
+  let result;
+  try {
+    result = await runtime.handleMessage({
+      runId,
+      thread: input.thread,
+      message: input.message,
+    });
+    if (options?.inboundEventId) {
+      await deliveryStore.markInboundEventProcessed(options.inboundEventId, {
+        workspaceId: binding.workspaceId,
+        projectId: binding.projectId,
+        threadId: input.thread.id,
+        messageId: input.message.id,
+      });
+    }
+  } catch (error) {
+    if (options?.inboundEventId) {
+      await deliveryStore.markInboundEventFailed(
+        options.inboundEventId,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    throw error;
+  }
+  const delivery = await deliverySnapshot(20);
   return {
     result,
     route: {
@@ -239,12 +301,7 @@ async function runDryMessage(input: {
       threadId: input.thread.id,
       platform: input.thread.platform,
     },
-    delivery: {
-      summary,
-      outbox: outbox.map(({ payload: _payload, ...item }) => item),
-      turnDeliveries,
-      bindings,
-    },
+    delivery,
     larkDryRun: {
       texts: memoryTransport.texts,
       cards: memoryTransport.cards,
@@ -282,39 +339,124 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/v1/deliveries') {
-      const [summary, outbox, turnDeliveries, bindings] = await Promise.all([
-        deliveryStore.summarize(),
-        deliveryStore.listOutbox({ limit: 50 }),
-        deliveryStore.listTurnDeliveries({ limit: 50 }),
-        deliveryStore.listThreadBindings(50),
-      ]);
+      const limit = Number(url.searchParams.get('limit') || 20);
+      sendJson(response, 200, await deliverySnapshot(limit));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/deliveries/worker-pass') {
+      const result = await runDeliveryWorkerPass(deliveryStore, async (record) => {
+        return record.externalId ?? record.target.cardId ?? record.target.chatId;
+      });
+      sendJson(response, 200, { result, delivery: await deliverySnapshot(20) });
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      url.pathname.startsWith('/v1/deliveries/') &&
+      url.pathname.endsWith('/retry')
+    ) {
+      const id = decodeURIComponent(
+        url.pathname.slice('/v1/deliveries/'.length, -'/retry'.length),
+      );
       sendJson(response, 200, {
-        summary,
-        outbox: outbox.map(({ payload: _payload, ...item }) => item),
-        turnDeliveries,
-        bindings,
+        retried: await deliveryStore.retryFailedOutbox(id),
+        delivery: await deliverySnapshot(20),
       });
       return;
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/dev/messages') {
       const body = (await readJsonBody(request)) as Record<string, unknown>;
-      sendJson(response, 200, await runDryMessage(coerceDevMessage(body)));
+      const normalized = coerceDevMessage(body);
+      const inbound = await deliveryStore.recordInboundEvent({
+        platform: 'lark',
+        externalId: normalized.message.id,
+        eventType: 'dev.message',
+        workspaceId: normalized.thread.workspaceId,
+        projectId: normalized.thread.projectId,
+        threadId: normalized.thread.id,
+        messageId: normalized.message.id,
+      });
+      sendJson(
+        response,
+        200,
+        await runDryMessage(normalized, { inboundEventId: inbound.record.id }),
+      );
       return;
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/lark/events') {
-      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const rawBody = await readTextBody(request);
+      const parsed = parseAndValidateLarkCallback(rawBody, request.headers, {
+        verificationToken: larkVerificationToken,
+        maxTimestampSkewSeconds: larkCallbackMaxSkewSeconds,
+      });
+      const body = parsed.body;
+      const externalId = larkCallbackExternalId(body);
+      const eventType = larkCallbackEventType(body);
+      if (!parsed.validation.ok) {
+        const rejected = await deliveryStore.recordInboundEvent({
+          platform: 'lark',
+          externalId: `rejected:${externalId}:${randomUUID()}`,
+          eventType,
+          metadata: {
+            originalExternalId: externalId,
+            reason: parsed.validation.reason,
+            requestId: request.headers['x-lark-request-id'],
+          },
+        });
+        await deliveryStore.markInboundEventRejected(
+          rejected.record.id,
+          parsed.validation.reason,
+        );
+        sendJson(response, parsed.validation.statusCode, {
+          accepted: false,
+          reason: parsed.validation.reason,
+        });
+        return;
+      }
+      const inbound = await deliveryStore.recordInboundEvent({
+        platform: 'lark',
+        externalId,
+        eventType,
+        metadata: {
+          requestId: request.headers['x-lark-request-id'],
+        },
+      });
+      if (inbound.duplicate) {
+        sendJson(response, 200, {
+          accepted: true,
+          duplicate: true,
+          inbound: inbound.record,
+        });
+        return;
+      }
       if (typeof body.challenge === 'string') {
+        await deliveryStore.markInboundEventProcessed(inbound.record.id);
         sendJson(response, 200, { challenge: body.challenge });
         return;
       }
       const normalized = normalizeLarkEvent(body as LarkIncomingEvent, { botOpenId });
       if (!normalized) {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'unsupported_lark_event',
+        );
         sendJson(response, 202, { accepted: false, reason: 'unsupported_lark_event' });
         return;
       }
-      sendJson(response, 200, { accepted: true, ...(await runDryMessage(normalized)) });
+      sendJson(
+        response,
+        200,
+        {
+          accepted: true,
+          ...(await runDryMessage(normalized, {
+            inboundEventId: inbound.record.id,
+          })),
+        },
+      );
       return;
     }
 

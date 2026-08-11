@@ -1,11 +1,11 @@
 :root {
   color-scheme: light;
-  --bg: #ffffff;
-  --panel: #fbfcfd;
+  --bg: #f7f8fa;
+  --panel: #ffffff;
   --ink: #15171a;
   --muted: #68707d;
-  --line: #dde2e8;
-  --soft: #f4f6f8;
+  --line: #e1e5eb;
+  --soft: #f2f4f7;
   --accent: #2457c5;
   --green: #137a4b;
   --amber: #9b6100;
@@ -21,6 +21,7 @@ body {
   min-height: 100vh;
   background: var(--bg);
   color: var(--ink);
+  -webkit-font-smoothing: antialiased;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
@@ -29,6 +30,7 @@ body {
 .topbar {
   min-height: 60px;
   border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -111,9 +113,11 @@ button:disabled {
 }
 
 .workspace {
+  width: min(100%, 1440px);
+  margin: 0 auto;
   min-height: calc(100vh - 61px);
   display: grid;
-  grid-template-columns: minmax(340px, 430px) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 390px) minmax(0, 1fr);
 }
 
 .compose-panel,
@@ -128,8 +132,21 @@ button:disabled {
 
 .run-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
   align-content: start;
-  gap: 18px;
+  gap: 24px;
+}
+
+.preview-column,
+.status-column {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.status-column .section-label:first-child {
+  margin-top: 0;
 }
 
 .panel-heading {
@@ -221,20 +238,28 @@ textarea:focus {
 
 .delivery-panel {
   display: grid;
-  gap: 10px;
+  gap: 9px;
+}
+
+.subhead {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .metric-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .metric {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
-  padding: 10px;
+  padding: 8px;
 }
 
 .metric strong,
@@ -243,7 +268,8 @@ textarea:focus {
 }
 
 .metric strong {
-  font-size: 18px;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
 }
 
 .metric span {
@@ -253,7 +279,7 @@ textarea:focus {
 
 .delivery-row {
   grid-template-columns: minmax(120px, 0.8fr) 92px minmax(220px, 1.5fr);
-  padding: 9px 0;
+  padding: 8px 0;
 }
 
 .row-main {
@@ -287,7 +313,8 @@ textarea:focus {
 }
 
 .state.delivered,
-.state.completed {
+.state.completed,
+.state.processed {
   color: var(--green);
 }
 
@@ -306,6 +333,14 @@ textarea:focus {
   color: var(--red);
 }
 
+.state.rejected {
+  color: var(--red);
+}
+
+.state.ignored {
+  color: var(--muted);
+}
+
 .state.planned {
   color: var(--muted);
 }
@@ -315,7 +350,7 @@ textarea:focus {
   border-radius: 8px;
   background: #fff;
   overflow: hidden;
-  min-height: 270px;
+  min-height: 240px;
 }
 
 .lark-card.empty {
@@ -403,6 +438,10 @@ pre {
   }
 
   .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .run-panel {
     grid-template-columns: 1fr;
   }
 

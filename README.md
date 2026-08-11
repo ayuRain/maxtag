@@ -57,6 +57,12 @@ packages/ui-cards           Progress/checklist card models
 - Memory is scoped into global, workspace, project, and thread files.
 - Dry-run Lark delivery now runs through a file-backed outbox, per-run delivery
   records, and thread-to-project bindings.
+- Lark callbacks are recorded in an inbound event ledger with verification-token
+  checks, replay-window checks, duplicate short-circuiting, and processed/ignored
+  states.
+- Lark group `chat_id` maps into the project route, so one workspace bot can
+  serve multiple group/project memories instead of collapsing into one global
+  thread.
 - The admin preview exposes client readiness, memory scopes, and AgentDock parity
   gaps.
 

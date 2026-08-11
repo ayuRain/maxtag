@@ -130,25 +130,34 @@ function renderParity(items) {
   });
 }
 
-function renderDelivery(data) {
-  delivery.replaceChildren();
-  const summary = data?.summary?.outbox || {};
+function renderMetricStrip(keys, summary) {
   const metrics = document.createElement('div');
   metrics.className = 'metric-strip';
-  for (const key of ['delivered', 'pending', 'sending', 'failed']) {
+  for (const key of keys) {
     const metric = document.createElement('div');
     metric.className = 'metric';
     const value = document.createElement('strong');
-    value.textContent = String(summary[key] || 0);
+    value.textContent = String(summary?.[key] || 0);
     const label = document.createElement('span');
     label.textContent = key;
     metric.append(value, label);
     metrics.append(metric);
   }
+  return metrics;
+}
 
-  const list = document.createElement('div');
-  list.className = 'delivery-list';
-  for (const item of data?.outbox || []) {
+function renderDelivery(data) {
+  delivery.replaceChildren();
+
+  appendText(delivery, 'subhead', 'Outbound');
+  delivery.append(renderMetricStrip(
+    ['delivered', 'pending', 'sending', 'failed'],
+    data?.summary?.outbox,
+  ));
+
+  const outboundList = document.createElement('div');
+  outboundList.className = 'delivery-list';
+  for (const item of (data?.outbox || []).slice(0, 4)) {
     const row = document.createElement('div');
     row.className = 'delivery-row';
     appendText(row, 'row-main', item.kind);
@@ -158,10 +167,31 @@ function renderDelivery(data) {
       'row-detail',
       `${item.target?.chatId || item.target?.cardId || 'target'} · #${item.sequence}`,
     );
-    list.append(row);
+    outboundList.append(row);
   }
 
-  delivery.append(metrics, list);
+  appendText(delivery, 'subhead', 'Inbound');
+  delivery.append(renderMetricStrip(
+    ['processed', 'duplicates', 'rejected', 'failed'],
+    data?.summary?.inboundEvents,
+  ));
+
+  const inboundList = document.createElement('div');
+  inboundList.className = 'delivery-list';
+  for (const item of (data?.inboundEvents || []).slice(0, 4)) {
+    const row = document.createElement('div');
+    row.className = 'delivery-row';
+    appendText(row, 'row-main', item.eventType || item.platform);
+    appendState(row, item.status);
+    appendText(
+      row,
+      'row-detail',
+      `${item.externalId}${item.duplicateCount ? ` · dup ${item.duplicateCount}` : ''}`,
+    );
+    inboundList.append(row);
+  }
+
+  delivery.append(outboundList, inboundList);
 }
 
 async function refreshHealth() {
@@ -188,7 +218,7 @@ async function refreshCapabilities() {
 
 async function refreshDelivery() {
   try {
-    renderDelivery(await getJson('/v1/deliveries'));
+    renderDelivery(await getJson('/v1/deliveries?limit=4'));
   } catch (error) {
     delivery.textContent = error.message;
   }

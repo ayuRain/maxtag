@@ -33,6 +33,7 @@ export function normalizeLarkEvent(
     platform: 'lark',
     externalId: threadExternalId,
     workspaceId: body.event?.sender?.tenant_key,
+    projectId: message.chat_id,
     channelId: message.chat_id,
     rootMessageId: rootId,
     topicId: rootId,
@@ -67,4 +68,3 @@ export function normalizeLarkEvent(
     },
   };
 }
-

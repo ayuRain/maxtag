@@ -2,11 +2,16 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {
+  ClaimOutboundOptions,
   CreateOutboundInput,
   DeliverySummary,
   FileDeliveryState,
+  InboundEventRecord,
+  InboundEventStatus,
   OutboundEnvelope,
   OutboundStatus,
+  RecordInboundEventInput,
+  RecordInboundEventResult,
   ThreadBinding,
   TurnDeliveryRecord,
   TurnDeliveryStatus,
@@ -18,6 +23,7 @@ const EMPTY_STATE: FileDeliveryState = {
   outbox: [],
   turnDeliveries: [],
   threadBindings: [],
+  inboundEvents: [],
 };
 
 function now(): string {
@@ -30,6 +36,7 @@ function cloneEmptyState(): FileDeliveryState {
     outbox: [],
     turnDeliveries: [],
     threadBindings: [],
+    inboundEvents: [],
   };
 }
 
@@ -46,6 +53,19 @@ function bindingId(platform: string, externalId: string): string {
   return `${platform}:${externalId}`.replace(/[^a-zA-Z0-9_.:-]/g, '_');
 }
 
+function inboundEventId(platform: string, externalId: string): string {
+  return `${platform}:event:${externalId}`.replace(/[^a-zA-Z0-9_.:-]/g, '_');
+}
+
+function outboundTargetKey(record: OutboundEnvelope): string {
+  return (
+    record.target.cardId ||
+    record.target.chatId ||
+    record.target.rootId ||
+    'unknown-target'
+  );
+}
+
 function emptySummary(): DeliverySummary {
   return {
     outbox: {
@@ -59,6 +79,14 @@ function emptySummary(): DeliverySummary {
       accepted: 0,
       completed: 0,
       failed: 0,
+    },
+    inboundEvents: {
+      received: 0,
+      processed: 0,
+      ignored: 0,
+      failed: 0,
+      rejected: 0,
+      duplicates: 0,
     },
     bindings: 0,
   };
@@ -82,6 +110,7 @@ export class FileDeliveryStore {
         outbox: parsed.outbox ?? [],
         turnDeliveries: parsed.turnDeliveries ?? [],
         threadBindings: parsed.threadBindings ?? [],
+        inboundEvents: parsed.inboundEvents ?? [],
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -211,6 +240,51 @@ export class FileDeliveryStore {
     });
   }
 
+  async claimReadyOutbox(
+    options?: ClaimOutboundOptions,
+  ): Promise<OutboundEnvelope[]> {
+    return this.mutate((state) => {
+      const limit = Math.max(1, Math.min(options?.limit ?? 10, 100));
+      const timestamp = (options?.now ?? new Date()).toISOString();
+      const claimed: OutboundEnvelope[] = [];
+      const ordered = [...state.outbox].sort((a, b) => a.sequence - b.sequence);
+      for (const envelope of ordered) {
+        if (claimed.length >= limit) break;
+        if (envelope.status !== 'pending') continue;
+        if (envelope.nextAttemptAt > timestamp) continue;
+        const targetKey = outboundTargetKey(envelope);
+        const blocked = state.outbox.some(
+          (earlier) =>
+            earlier.sequence < envelope.sequence &&
+            outboundTargetKey(earlier) === targetKey &&
+            (earlier.status === 'pending' || earlier.status === 'sending'),
+        );
+        if (blocked) continue;
+        envelope.status = 'sending';
+        envelope.attempts += 1;
+        envelope.updatedAt = timestamp;
+        this.updateTurnDelivery(state, envelope.id, 'accepted');
+        claimed.push({ ...envelope });
+      }
+      return claimed;
+    });
+  }
+
+  async retryFailedOutbox(id: string): Promise<boolean> {
+    return this.mutate((state) => {
+      const envelope = state.outbox.find((item) => item.id === id);
+      if (!envelope || envelope.status !== 'failed') return false;
+      const timestamp = now();
+      envelope.status = 'pending';
+      envelope.attempts = 0;
+      envelope.nextAttemptAt = timestamp;
+      envelope.lastError = undefined;
+      envelope.updatedAt = timestamp;
+      this.updateTurnDelivery(state, id, 'queued');
+      return true;
+    });
+  }
+
   async listOutbox(options?: {
     runId?: string;
     status?: OutboundStatus;
@@ -277,6 +351,84 @@ export class FileDeliveryStore {
     });
   }
 
+  async recordInboundEvent(
+    input: RecordInboundEventInput,
+  ): Promise<RecordInboundEventResult> {
+    return this.mutate((state) => {
+      const id = inboundEventId(input.platform, input.externalId);
+      const existing = state.inboundEvents.find((event) => event.id === id);
+      const timestamp = now();
+      if (existing) {
+        existing.duplicateCount += 1;
+        existing.updatedAt = timestamp;
+        return { record: existing, duplicate: true };
+      }
+
+      const record: InboundEventRecord = {
+        id,
+        platform: input.platform,
+        externalId: input.externalId,
+        status: 'received',
+        duplicateCount: 0,
+        eventType: input.eventType,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        receivedAt: timestamp,
+        updatedAt: timestamp,
+        metadata: input.metadata,
+      };
+      state.inboundEvents.push(record);
+      return { record, duplicate: false };
+    });
+  }
+
+  async markInboundEventProcessed(
+    id: string,
+    input?: {
+      workspaceId?: string;
+      projectId?: string;
+      threadId?: string;
+      messageId?: string;
+    },
+  ): Promise<InboundEventRecord | undefined> {
+    return this.updateInboundEvent(id, 'processed', input);
+  }
+
+  async markInboundEventIgnored(
+    id: string,
+    reason: string,
+  ): Promise<InboundEventRecord | undefined> {
+    return this.updateInboundEvent(id, 'ignored', { reason });
+  }
+
+  async markInboundEventRejected(
+    id: string,
+    reason: string,
+  ): Promise<InboundEventRecord | undefined> {
+    return this.updateInboundEvent(id, 'rejected', { reason });
+  }
+
+  async markInboundEventFailed(
+    id: string,
+    error: string,
+  ): Promise<InboundEventRecord | undefined> {
+    return this.updateInboundEvent(id, 'failed', { error });
+  }
+
+  async listInboundEvents(options?: {
+    status?: InboundEventStatus;
+    limit?: number;
+  }): Promise<InboundEventRecord[]> {
+    const state = await this.readState();
+    const limit = options?.limit ?? 50;
+    return state.inboundEvents
+      .filter((item) => !options?.status || item.status === options.status)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, limit);
+  }
+
   async listThreadBindings(limit = 50): Promise<ThreadBinding[]> {
     const state = await this.readState();
     return state.threadBindings
@@ -291,8 +443,44 @@ export class FileDeliveryStore {
     for (const item of state.turnDeliveries) {
       summary.turnDeliveries[item.status] += 1;
     }
+    for (const item of state.inboundEvents) {
+      summary.inboundEvents[item.status] += 1;
+      summary.inboundEvents.duplicates += item.duplicateCount;
+    }
     summary.bindings = state.threadBindings.length;
     return summary;
+  }
+
+  private async updateInboundEvent(
+    id: string,
+    status: InboundEventStatus,
+    input?: {
+      workspaceId?: string;
+      projectId?: string;
+      threadId?: string;
+      messageId?: string;
+      reason?: string;
+      error?: string;
+    },
+  ): Promise<InboundEventRecord | undefined> {
+    return this.mutate((state) => {
+      const event = state.inboundEvents.find((item) => item.id === id);
+      if (!event) return undefined;
+      const timestamp = now();
+      event.status = status;
+      event.workspaceId = input?.workspaceId ?? event.workspaceId;
+      event.projectId = input?.projectId ?? event.projectId;
+      event.threadId = input?.threadId ?? event.threadId;
+      event.messageId = input?.messageId ?? event.messageId;
+      event.reason = input?.reason ?? event.reason;
+      event.lastError = input?.error ?? event.lastError;
+      event.updatedAt = timestamp;
+      if (status === 'processed') event.processedAt = timestamp;
+      if (status === 'ignored') event.ignoredAt = timestamp;
+      if (status === 'failed') event.failedAt = timestamp;
+      if (status === 'rejected') event.rejectedAt = timestamp;
+      return event;
+    });
   }
 
   private updateTurnDelivery(
