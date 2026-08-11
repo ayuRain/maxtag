@@ -8,7 +8,8 @@
     "build": "tsc -b",
     "clean": "tsc -b --clean",
     "dev": "node --watch apps/server/dist/index.js",
-    "typecheck": "tsc -b --pretty false"
+    "typecheck": "tsc -b --pretty false",
+    "worker": "node apps/worker/dist/index.js"
   },
   "workspaces": [
     "apps/*",

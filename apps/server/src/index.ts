@@ -192,7 +192,7 @@ const capabilityManifest = {
     {
       capability: 'Long-running work',
       agentdock: 'scheduled tasks and dynamic workflows',
-      opentag: 'durable run queue with inline worker and stale recovery',
+      opentag: 'durable run queue with inline or standalone worker and stale recovery',
       status: 'partial',
     },
   ],

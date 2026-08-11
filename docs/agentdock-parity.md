@@ -15,7 +15,7 @@ many clients.
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
 | Topic continuation | Mention establishes a Lark topic binding; later messages in that topic continue without repeating the mention |
 | Durable delivery skeleton | File-backed outbox, turn delivery records, scoped cancel, stale recovery, and bindings |
-| Agent run queue | File-backed run status, timeline events, cancel requests, inline worker claim, and stale recovery |
+| Agent run queue | File-backed run status, timeline events, cancel requests, inline or standalone worker claim, and stale recovery |
 | Inbound callback ledger | Lark token/timestamp checks, event idempotency, and duplicate short-circuit |
 | Executor boundary | Codex dry-run and Claude placeholder behind `Executor` |
 
@@ -25,7 +25,7 @@ many clients.
 | --- | --- |
 | Native non-Lark adapters | Map Telegram/Slack/GitHub webhooks into `/v1/client/events` and add real send/edit transports |
 | Durable IM outbox | Replace file store with SQLite/Postgres claim/retry worker |
-| Async run execution | Split inline worker into independently deployed workers with durable resume |
+| Async run execution | Add production supervisor/deployment manifests and cross-process cancellation heartbeat |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |
 | Real Lark smoke | Verify app scopes, bot-in-chat permissions, text replies, and card patching against a live app |
 | Binding governance | Add permission checks, audit history, and import/export for configured bindings |

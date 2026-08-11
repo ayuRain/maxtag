@@ -16,6 +16,8 @@
 - File-backed agent run ledger with status, cancel request, and timeline events.
 - Durable run queue with inline worker claim, startup stale recovery, and manual
   worker/recovery API controls.
+- Standalone worker process that can claim the shared run queue while HTTP
+  ingestion runs with `OPENTAG_AGENT_WORKER=manual`.
 - Generic client ingress that maps non-Lark envelopes into the same run queue,
   memory scopes, and tracked text delivery.
 - Memory and GitHub tool contracts.
@@ -48,7 +50,9 @@
 ## Phase 2: Agent Runs
 
 - Run Codex and Claude through a common `Executor` contract.
-- Split inline run execution into independent worker processes.
+- Add production supervisor/deployment manifests for independent worker
+  processes.
+- Add cross-process cancellation heartbeat for active runs.
 - Support turn steering while a run is active.
 - Attach artifacts: final message, file, patch, hosted report, PR link.
 - Move agent runs to resumable background workers with DB-backed timeline

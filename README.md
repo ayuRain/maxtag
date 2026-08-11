@@ -43,6 +43,7 @@ packages/platform-lark      Feishu/Lark adapter
 packages/platform-telegram  Telegram adapter placeholder
 packages/executor-codex     Codex executor placeholder
 packages/executor-claude    Claude executor placeholder
+packages/runtime-host       Shared runtime host for independent workers
 packages/tools-github       GitHub tool contract placeholder
 packages/memory             Global/workspace/project/thread memory stores
 packages/delivery           Durable outbox, delivery tracking, bindings
@@ -66,6 +67,8 @@ packages/ui-cards           Progress/checklist card models
   events, and cancel requests.
 - Agent execution can be enqueued into a durable run queue and claimed by an
   inline worker, with stale run recovery on startup and through the admin API.
+- Agent execution can also be claimed by the standalone `apps/worker` process
+  against the same `OPENTAG_DATA_DIR`.
 - Real Lark delivery can be enabled with `OPENTAG_LARK_TRANSPORT=http`,
   `OPENTAG_LARK_APP_ID`, and `OPENTAG_LARK_APP_SECRET`; use
   `OPENTAG_LARK_DOMAIN=lark` for international Lark.
@@ -106,6 +109,17 @@ npm install
 npm run build
 node apps/server/dist/index.js
 ```
+
+To split HTTP ingestion from execution, run the server without its inline worker
+and start the worker separately:
+
+```bash
+OPENTAG_AGENT_WORKER=manual node apps/server/dist/index.js
+npm run worker
+```
+
+For one-shot smoke tests, set `OPENTAG_WORKER_ONCE=1`; tune claim batch size with
+`OPENTAG_WORKER_BATCH`.
 
 ## Generic Client Ingress
 
