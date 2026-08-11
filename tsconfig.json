@@ -12,6 +12,7 @@
     { "path": "packages/executor-codex" },
     { "path": "packages/executor-claude" },
     { "path": "packages/runtime-host" },
+    { "path": "packages/routines" },
     { "path": "packages/tools-github" },
     { "path": "apps/server" },
     { "path": "apps/worker" },

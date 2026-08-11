@@ -21,6 +21,7 @@
       "@opentag/executor-codex": ["packages/executor-codex/src/index.ts"],
       "@opentag/executor-claude": ["packages/executor-claude/src/index.ts"],
       "@opentag/runtime-host": ["packages/runtime-host/src/index.ts"],
+      "@opentag/routines": ["packages/routines/src/index.ts"],
       "@opentag/tools-github": ["packages/tools-github/src/index.ts"],
       "@opentag/memory": ["packages/memory/src/index.ts"],
       "@opentag/ui-cards": ["packages/ui-cards/src/index.ts"]

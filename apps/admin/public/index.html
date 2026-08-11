@@ -28,6 +28,10 @@
             Projects
             <span class="nav-count" id="project-count">0</span>
           </button>
+          <button class="nav-item" data-view="routines" type="button">
+            Routines
+            <span class="nav-count" id="routine-count">0</span>
+          </button>
           <button class="nav-item" data-view="activity" type="button">
             Activity
             <span class="nav-count" id="active-count">0</span>
@@ -216,6 +220,137 @@
               <div class="editor-actions">
                 <span id="project-save-state">No unsaved changes</span>
                 <button class="primary-button" id="save-project" type="submit">Save project</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="view" id="view-routines" data-view-panel="routines" hidden>
+          <div class="routine-toolbar">
+            <div class="scheduler-status">
+              <span class="state-pill planned" id="scheduler-state">Unknown</span>
+              <div>
+                <strong>Scheduler</strong>
+                <small id="scheduler-detail">No tick recorded</small>
+              </div>
+            </div>
+            <button class="secondary-button" id="tick-routines" type="button">Tick now</button>
+          </div>
+
+          <div class="project-workbench routine-workbench">
+            <aside class="project-index">
+              <div class="index-heading">
+                <span>Routines</span>
+                <button class="square-button" id="new-routine" type="button" title="New routine" aria-label="New routine">+</button>
+              </div>
+              <div class="project-list" id="routine-list"></div>
+            </aside>
+
+            <form class="project-editor routine-editor" id="routine-form">
+              <div class="editor-header">
+                <div>
+                  <span class="eyebrow">Proactive run</span>
+                  <h2 id="routine-editor-title">New routine</h2>
+                </div>
+                <span class="state-pill planned" id="routine-state">Draft</span>
+              </div>
+
+              <div class="form-section two-column-form">
+                <label class="field">
+                  <span>Name</span>
+                  <input id="routine-name" autocomplete="off" required />
+                </label>
+                <label class="field">
+                  <span>Project</span>
+                  <select id="routine-project"></select>
+                </label>
+                <label class="field span-two">
+                  <span>Instructions</span>
+                  <textarea id="routine-instructions" rows="5" spellcheck="true" required></textarea>
+                </label>
+                <label class="toggle-field span-two">
+                  <input id="routine-enabled" type="checkbox" checked />
+                  <span>Enabled</span>
+                </label>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Schedule</h3>
+                  <span id="routine-next-run">Not scheduled</span>
+                </div>
+                <div class="routine-schedule-grid">
+                  <label class="field">
+                    <span>Frequency</span>
+                    <select id="routine-schedule-kind">
+                      <option value="interval">Interval</option>
+                      <option value="daily">Daily</option>
+                    </select>
+                  </label>
+                  <label class="field" id="routine-interval-field">
+                    <span>Every (minutes)</span>
+                    <input id="routine-every-minutes" type="number" min="1" max="525600" value="60" />
+                  </label>
+                  <label class="field" id="routine-daily-time-field" hidden>
+                    <span>Time</span>
+                    <input id="routine-daily-time" type="time" value="09:00" />
+                  </label>
+                  <label class="field" id="routine-time-zone-field" hidden>
+                    <span>Time zone</span>
+                    <input id="routine-time-zone" value="Asia/Shanghai" spellcheck="false" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Destination</h3>
+                  <span>Client neutral</span>
+                </div>
+                <div class="two-column-form">
+                  <label class="field">
+                    <span>Client</span>
+                    <select id="routine-platform">
+                      <option value="lark">Lark / Feishu</option>
+                      <option value="telegram">Telegram</option>
+                      <option value="slack">Slack</option>
+                      <option value="github">GitHub</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Channel ID</span>
+                    <input id="routine-external-id" placeholder="oc_xxx" spellcheck="false" required />
+                  </label>
+                  <label class="field">
+                    <span>Conversation</span>
+                    <select id="routine-visibility">
+                      <option value="public">Public channel</option>
+                      <option value="direct">Direct message</option>
+                      <option value="private">Private channel</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Thread ID (optional)</span>
+                    <input id="routine-thread-id" spellcheck="false" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Executions</h3>
+                  <span id="routine-execution-count">0 recorded</span>
+                </div>
+                <div class="routine-executions" id="routine-executions"></div>
+              </div>
+
+              <div class="editor-actions routine-actions">
+                <button class="danger-text-button" id="delete-routine" type="button" hidden>Delete</button>
+                <span id="routine-save-state">New routine</span>
+                <div class="toolbar-actions">
+                  <button class="secondary-button" id="trigger-routine" type="button" disabled>Run now</button>
+                  <button class="primary-button" id="save-routine" type="submit">Save routine</button>
+                </div>
               </div>
             </form>
           </div>

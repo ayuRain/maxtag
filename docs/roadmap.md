@@ -24,8 +24,11 @@
   instructions, executor selection, tool grants, network policy, and audit.
 - Opt-in local Codex and Claude CLI execution with bounded output, process-group
   cancellation, timeout, project workspace resolution, and filtered child env.
-- Operator console organized around projects, activity, scoped memory, delivery,
-  and project-aware agent previews.
+- File-backed workspace/project routines with interval and daily schedules,
+  deduped execution claims, stale reclaim, manual triggers, audit history, and
+  deterministic bridging into the shared agent run queue.
+- Operator console organized around projects, routines, activity, scoped memory,
+  delivery, and project-aware agent previews.
 - Memory and GitHub tool contracts.
 
 ## Phase 1: Lark Tag MVP
@@ -75,7 +78,10 @@
 
 ## Phase 4: Proactivity
 
-- Routines: scheduled summaries, channel digests, recurring checks.
+- Routine foundation: scheduled summaries, channel digests, and recurring checks
+  can run through the shared executor and delivery path.
+- Production routine store, supervised scheduler deployment, and live Lark
+  delivery/restart smoke evidence.
 - Watchers: PR, CI, issue, alert, and document monitors.
 - Human-readable routine inventory in each thread.
 

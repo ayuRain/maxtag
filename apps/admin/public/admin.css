@@ -26,6 +26,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -522,7 +526,8 @@ h3 {
 .state-pill.completed,
 .state-pill.delivered,
 .state-pill.processed,
-.state-pill.always {
+.state-pill.always,
+.state-pill.enabled {
   background: var(--green-soft);
   color: var(--green);
 }
@@ -533,7 +538,9 @@ h3 {
 .state-pill.sending,
 .state-pill.received,
 .state-pill.cancel_requested,
-.state-pill.mention {
+.state-pill.mention,
+.state-pill.pending,
+.state-pill.claimed {
   background: var(--amber-soft);
   color: var(--amber);
 }
@@ -546,7 +553,8 @@ h3 {
 
 .state-pill.cancelled,
 .state-pill.ignored,
-.state-pill.planned {
+.state-pill.planned,
+.state-pill.disabled {
   background: var(--surface-subtle);
   color: var(--muted);
 }
@@ -835,6 +843,103 @@ input:disabled {
   border-top: 1px solid var(--line);
   background: var(--surface);
   justify-content: space-between;
+}
+
+.routine-toolbar {
+  min-height: 58px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.scheduler-status {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scheduler-status > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.scheduler-status strong {
+  font-size: 12px;
+}
+
+.scheduler-status small {
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.routine-workbench {
+  min-height: calc(100vh - 207px);
+  border-top: 0;
+}
+
+.routine-schedule-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) repeat(2, minmax(140px, 1fr));
+  gap: 14px;
+}
+
+.routine-executions {
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+.routine-execution-row {
+  min-height: 58px;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 2px;
+}
+
+.routine-execution-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.routine-execution-copy strong,
+.routine-execution-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routine-execution-copy strong {
+  font-size: 11px;
+}
+
+.routine-execution-copy small,
+.routine-execution-time {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.routine-run-link {
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.routine-actions > span {
+  margin-right: auto;
 }
 
 .activity-toolbar,
@@ -1438,7 +1543,8 @@ pre {
   }
 
   .activity-toolbar,
-  .memory-toolbar {
+  .memory-toolbar,
+  .routine-toolbar {
     align-items: stretch;
     flex-direction: column;
     padding: 12px 0;
@@ -1446,6 +1552,29 @@ pre {
 
   .toolbar-actions {
     flex-wrap: wrap;
+  }
+
+  .routine-schedule-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .routine-execution-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .routine-execution-time {
+    display: none;
+  }
+
+  .routine-actions {
+    align-items: stretch;
+    flex-wrap: wrap;
+    padding: 10px 0;
+  }
+
+  .routine-actions > span {
+    width: 100%;
+    order: -1;
   }
 
   .segmented {

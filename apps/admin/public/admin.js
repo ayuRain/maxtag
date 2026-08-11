@@ -6,20 +6,24 @@ const state = {
   capabilities: null,
   workspace: null,
   delivery: null,
+  routines: null,
   runs: [],
   bindings: [],
   selectedProjectId: null,
+  selectedRoutineId: null,
   selectedRunId: null,
   runFilter: '',
   memoryScope: 'project',
   memoryProjectId: null,
   testProjectId: null,
   projectDirty: false,
+  routineDirty: false,
 };
 
 const viewCopy = {
   overview: { eyebrow: 'Workspace', title: 'Overview' },
   projects: { eyebrow: 'Routing and access', title: 'Projects' },
+  routines: { eyebrow: 'Proactive work', title: 'Routines' },
   activity: { eyebrow: 'Runs and delivery', title: 'Activity' },
   memory: { eyebrow: 'Scoped context', title: 'Memory' },
 };
@@ -69,7 +73,9 @@ function formatTime(value, includeDate = false) {
 }
 
 function shortId(value) {
-  return value ? value.slice(0, 8) : 'unknown';
+  if (!value) return 'unknown';
+  if (value.startsWith('routine:')) return `routine:${value.slice(-6)}`;
+  return value.slice(0, 8);
 }
 
 function initials(value) {
@@ -148,6 +154,7 @@ function renderWorkspaceHeader() {
   $('#workspace-name').textContent = workspace?.name || 'OpenTag Workspace';
   $('#workspace-id').textContent = workspace?.id || 'dev-workspace';
   $('#project-count').textContent = String(state.workspace?.projects?.length || 0);
+  $('#routine-count').textContent = String(state.routines?.routines?.length || 0);
   const runSummary = state.delivery?.summary?.agentRuns || {};
   $('#active-count').textContent = String(
     (runSummary.queued || 0) +
@@ -174,7 +181,10 @@ function renderSummary() {
   const outbox = state.delivery?.summary?.outbox || {};
   const active =
     (runs.queued || 0) + (runs.running || 0) + (runs.cancel_requested || 0);
-  const failures = (runs.failed || 0) + (outbox.failed || 0);
+  const failures =
+    (runs.failed || 0) +
+    (outbox.failed || 0) +
+    (state.routines?.summary?.executions?.failed || 0);
   summary.replaceChildren(
     metric(projects.length, 'Projects'),
     metric(clients.filter((client) => client.status !== 'planned').length, 'Active clients'),
@@ -482,8 +492,372 @@ async function saveBinding() {
   }
 }
 
+function routineById(value) {
+  return (state.routines?.routines || []).find((routine) => routine.id === value);
+}
+
+function routineScheduleLabel(schedule) {
+  if (schedule?.kind === 'daily') {
+    return `${schedule.time} daily / ${schedule.timeZone}`;
+  }
+  return `Every ${schedule?.everyMinutes || 0} min`;
+}
+
+function fillRoutineProjectOptions(selectedValue) {
+  const select = $('#routine-project');
+  select.replaceChildren();
+  const workspaceOption = document.createElement('option');
+  workspaceOption.value = '';
+  workspaceOption.textContent = 'Workspace default';
+  workspaceOption.selected = !selectedValue;
+  select.append(workspaceOption);
+  for (const project of state.workspace?.projects || []) {
+    const option = document.createElement('option');
+    option.value = project.projectId;
+    option.textContent = project.name;
+    option.selected = projectMatches(project, selectedValue);
+    select.append(option);
+  }
+}
+
+function updateRoutineScheduleFields() {
+  const daily = $('#routine-schedule-kind').value === 'daily';
+  $('#routine-interval-field').hidden = daily;
+  $('#routine-daily-time-field').hidden = !daily;
+  $('#routine-time-zone-field').hidden = !daily;
+}
+
+function preferredRoutineBinding(projectId, platform) {
+  const project = projectById(projectId);
+  const candidates = project
+    ? projectBindings(project)
+    : state.bindings.filter((binding) => binding.workspaceId === currentWorkspaceId());
+  return candidates.find((binding) => binding.platform === platform) || candidates[0];
+}
+
+function fillRoutineDestination(force = false) {
+  const externalId = $('#routine-external-id');
+  if (!force && externalId.value.trim()) return;
+  const binding = preferredRoutineBinding(
+    $('#routine-project').value,
+    $('#routine-platform').value,
+  );
+  if (!binding) {
+    if (force) externalId.value = '';
+    return;
+  }
+  $('#routine-platform').value = binding.platform;
+  externalId.value = binding.externalId;
+}
+
+function routineExecutions(routineId) {
+  return (state.routines?.executions || []).filter(
+    (execution) => execution.routineId === routineId,
+  );
+}
+
+function renderRoutineExecutions(routine) {
+  const root = $('#routine-executions');
+  root.replaceChildren();
+  const executions = routine ? routineExecutions(routine.id) : [];
+  $('#routine-execution-count').textContent = `${executions.length} recorded`;
+  if (!executions.length) {
+    root.append(
+      element(
+        'div',
+        'empty-state',
+        routine ? 'No executions yet' : 'Save the routine to create executions',
+      ),
+    );
+    return;
+  }
+  for (const execution of executions.slice(0, 20)) {
+    const row = element('div', 'routine-execution-row');
+    const copy = element('div', 'routine-execution-copy');
+    copy.append(
+      element(
+        'strong',
+        '',
+        `${statusLabel(execution.trigger)} / ${formatTime(execution.scheduledFor, true)}`,
+      ),
+      element(
+        'small',
+        '',
+        execution.error ||
+          execution.summary ||
+          (execution.runId ? `Run ${shortId(execution.runId)}` : execution.dedupKey),
+      ),
+    );
+    row.append(
+      statePill(execution.status),
+      copy,
+      element('span', 'routine-execution-time', formatTime(execution.updatedAt, true)),
+    );
+    if (execution.runId) {
+      const open = element('button', 'routine-run-link', 'Open run');
+      open.type = 'button';
+      open.addEventListener('click', () => void openRoutineRun(execution.runId));
+      row.append(open);
+    } else {
+      row.append(element('span', 'routine-execution-time', 'Not queued'));
+    }
+    root.append(row);
+  }
+}
+
+async function openRoutineRun(runId) {
+  try {
+    const data = await getJson('/v1/runs?limit=50');
+    state.runs = data.runs || [];
+    state.selectedRunId = runId;
+    showView('activity');
+    renderRunTable();
+    await openRun(runId);
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+function renderRoutineList() {
+  const root = $('#routine-list');
+  root.replaceChildren();
+  const routines = state.routines?.routines || [];
+  if (!routines.length) {
+    root.append(element('div', 'empty-state', 'No routines configured'));
+    return;
+  }
+  for (const routine of routines) {
+    const project = projectById(routine.projectId);
+    const button = element('button', 'project-list-item');
+    button.type = 'button';
+    button.classList.toggle('active', routine.id === state.selectedRoutineId);
+    button.append(
+      element('strong', '', routine.name),
+      element(
+        'span',
+        '',
+        `${routine.enabled ? 'Enabled' : 'Disabled'} / ${project?.name || 'Workspace'} / ${routineScheduleLabel(routine.schedule)}`,
+      ),
+    );
+    button.addEventListener('click', () => selectRoutine(routine.id));
+    root.append(button);
+  }
+}
+
+function fillRoutineForm(routine) {
+  const isNew = !routine;
+  const defaultProjectId = state.workspace?.projects?.[0]?.projectId || '';
+  const projectId = routine?.projectId || (isNew ? defaultProjectId : '');
+  $('#routine-editor-title').textContent = routine?.name || 'New routine';
+  $('#routine-state').textContent = isNew
+    ? 'Draft'
+    : routine.enabled
+      ? 'Enabled'
+      : 'Disabled';
+  $('#routine-state').className = `state-pill ${isNew ? 'planned' : routine.enabled ? 'enabled' : 'disabled'}`;
+  $('#routine-name').value = routine?.name || '';
+  fillRoutineProjectOptions(projectId);
+  $('#routine-instructions').value = routine?.instructions || '';
+  $('#routine-enabled').checked = routine?.enabled ?? true;
+  $('#routine-schedule-kind').value = routine?.schedule?.kind || 'interval';
+  $('#routine-every-minutes').value =
+    routine?.schedule?.kind === 'interval' ? routine.schedule.everyMinutes : 60;
+  $('#routine-daily-time').value =
+    routine?.schedule?.kind === 'daily' ? routine.schedule.time : '09:00';
+  $('#routine-time-zone').value =
+    routine?.schedule?.kind === 'daily' ? routine.schedule.timeZone : 'Asia/Shanghai';
+  updateRoutineScheduleFields();
+  $('#routine-platform').value = routine?.destination?.platform || 'lark';
+  $('#routine-external-id').value = routine?.destination?.externalId || '';
+  $('#routine-visibility').value = routine?.destination?.visibility || 'public';
+  $('#routine-thread-id').value = routine?.destination?.threadId || '';
+  if (isNew) fillRoutineDestination();
+  $('#routine-next-run').textContent = routine?.nextRunAt
+    ? `Next ${formatTime(routine.nextRunAt, true)}`
+    : 'Not scheduled';
+  $('#delete-routine').hidden = isNew;
+  $('#trigger-routine').disabled = isNew;
+  renderRoutineExecutions(routine);
+  state.routineDirty = false;
+  $('#routine-save-state').textContent = isNew ? 'New routine' : 'No unsaved changes';
+}
+
+function selectRoutine(routineId) {
+  if (state.routineDirty && !window.confirm('Discard unsaved routine changes?')) return;
+  state.selectedRoutineId = routineId;
+  renderRoutineList();
+  fillRoutineForm(routineById(routineId));
+}
+
+function newRoutine() {
+  if (state.routineDirty && !window.confirm('Discard unsaved routine changes?')) return;
+  state.selectedRoutineId = '__new__';
+  renderRoutineList();
+  fillRoutineForm(null);
+  $('#routine-name').focus();
+}
+
+function markRoutineDirty() {
+  state.routineDirty = true;
+  $('#routine-save-state').textContent = 'Unsaved changes';
+  $('#trigger-routine').disabled = true;
+}
+
+function routinePayload() {
+  const kind = $('#routine-schedule-kind').value;
+  const everyMinutes = Number($('#routine-every-minutes').value);
+  const name = $('#routine-name').value.trim();
+  const instructions = $('#routine-instructions').value.trim();
+  const externalId = $('#routine-external-id').value.trim();
+  if (!name || !instructions || !externalId) {
+    throw new Error('Name, instructions, and channel ID are required');
+  }
+  if (kind === 'interval' && (!Number.isFinite(everyMinutes) || everyMinutes < 1)) {
+    throw new Error('Interval must be at least one minute');
+  }
+  const existing = routineById(state.selectedRoutineId);
+  return {
+    id: existing?.id,
+    workspaceId: currentWorkspaceId(),
+    projectId: $('#routine-project').value || undefined,
+    name,
+    instructions,
+    enabled: $('#routine-enabled').checked,
+    schedule:
+      kind === 'daily'
+        ? {
+            kind,
+            time: $('#routine-daily-time').value,
+            timeZone: $('#routine-time-zone').value.trim(),
+          }
+        : { kind, everyMinutes },
+    destination: {
+      platform: $('#routine-platform').value,
+      externalId,
+      channelId: externalId,
+      threadId: $('#routine-thread-id').value.trim() || undefined,
+      visibility: $('#routine-visibility').value,
+      title: name,
+    },
+    actor: 'admin-console',
+  };
+}
+
+async function saveRoutine(event) {
+  event.preventDefault();
+  const button = $('#save-routine');
+  setButtonBusy(button, true, 'Saving', 'Save routine');
+  try {
+    const data = await getJson('/v1/routines', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(routinePayload()),
+    });
+    state.routines = data.routines;
+    state.selectedRoutineId = data.routine.id;
+    state.routineDirty = false;
+    renderRoutines();
+    renderWorkspaceHeader();
+    renderSummary();
+    showToast('Routine saved');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Saving', 'Save routine');
+  }
+}
+
+async function triggerRoutine() {
+  const routine = routineById(state.selectedRoutineId);
+  if (!routine) return;
+  const button = $('#trigger-routine');
+  setButtonBusy(button, true, 'Starting', 'Run now');
+  try {
+    const data = await getJson(`/v1/routines/${encodeURIComponent(routine.id)}/trigger`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actor: 'admin-console' }),
+    });
+    state.routines = data.routines;
+    renderRoutines();
+    showToast(`Routine accepted / ${statusLabel(data.execution.status)}`);
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Starting', 'Run now');
+  }
+}
+
+async function deleteRoutine() {
+  const routine = routineById(state.selectedRoutineId);
+  if (!routine || !window.confirm(`Delete ${routine.name}?`)) return;
+  const button = $('#delete-routine');
+  setButtonBusy(button, true, 'Deleting', 'Delete');
+  try {
+    const data = await getJson(`/v1/routines/${encodeURIComponent(routine.id)}`, {
+      method: 'DELETE',
+    });
+    state.routines = data.routines;
+    state.selectedRoutineId = state.routines.routines?.[0]?.id || '__new__';
+    state.routineDirty = false;
+    renderRoutines();
+    renderWorkspaceHeader();
+    showToast('Routine deleted');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Deleting', 'Delete');
+  }
+}
+
+async function tickRoutines() {
+  const button = $('#tick-routines');
+  setButtonBusy(button, true, 'Ticking', 'Tick now');
+  try {
+    const data = await getJson('/v1/routines/tick', { method: 'POST' });
+    state.routines = data.routines;
+    renderRoutines();
+    showToast(
+      `Staged ${data.result.staged} / queued ${data.result.queued} / failed ${data.result.failed}`,
+    );
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Ticking', 'Tick now');
+  }
+}
+
+function renderRoutines() {
+  const scheduler = state.routines?.scheduler || {};
+  $('#scheduler-state').textContent = scheduler.enabled ? 'Enabled' : 'Disabled';
+  $('#scheduler-state').className = `state-pill ${scheduler.enabled ? 'enabled' : 'disabled'}`;
+  const nextRunAt = state.routines?.summary?.nextRunAt;
+  $('#scheduler-detail').textContent = scheduler.lastTickAt
+    ? `Last ${formatTime(scheduler.lastTickAt, true)} / ${nextRunAt ? `next ${formatTime(nextRunAt, true)}` : 'nothing due'}`
+    : nextRunAt
+      ? `No tick recorded / next ${formatTime(nextRunAt, true)}`
+      : 'No tick recorded / no enabled routines';
+  const available = state.routines?.routines || [];
+  if (
+    state.selectedRoutineId !== '__new__' &&
+    !routineById(state.selectedRoutineId)
+  ) {
+    state.selectedRoutineId = available[0]?.id || '__new__';
+  }
+  renderRoutineList();
+  if (!state.routineDirty) {
+    fillRoutineForm(routineById(state.selectedRoutineId));
+  }
+}
+
 function runTitle(run) {
-  return run.title || run.message?.text || run.summary?.split('\n')[0] || shortId(run.id);
+  return (
+    run.metadata?.routineName ||
+    run.title ||
+    run.message?.text ||
+    run.summary?.split('\n')[0] ||
+    shortId(run.id)
+  );
 }
 
 function filteredRuns() {
@@ -846,6 +1220,7 @@ function renderAll() {
   renderConnectors();
   renderOverviewRuns();
   renderProjectList();
+  renderRoutines();
   renderRunTable();
   renderDelivery();
   fillProjectSelects();
@@ -861,7 +1236,7 @@ async function refreshAll({ quiet = false } = {}) {
   const button = $('#refresh-all');
   if (!quiet) setButtonBusy(button, true, 'Refreshing', 'Refresh');
   try {
-    const [health, capabilities, workspace, delivery, runs, bindings] =
+    const [health, capabilities, workspace, delivery, runs, bindings, routines] =
       await Promise.all([
         getJson('/health'),
         getJson('/v1/capabilities'),
@@ -869,6 +1244,7 @@ async function refreshAll({ quiet = false } = {}) {
         getJson('/v1/deliveries?limit=20'),
         getJson('/v1/runs?limit=50'),
         getJson('/v1/bindings?limit=100'),
+        getJson(`/v1/routines?workspaceId=${encodeURIComponent(currentWorkspaceId())}`),
       ]);
     state.health = health;
     state.capabilities = capabilities;
@@ -876,6 +1252,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.delivery = delivery;
     state.runs = runs.runs || [];
     state.bindings = bindings.bindings || [];
+    state.routines = routines;
     const fallback = workspace.projects?.[0]?.projectId;
     state.selectedProjectId = projectById(state.selectedProjectId)?.projectId || fallback;
     state.memoryProjectId = projectById(state.memoryProjectId)?.projectId || fallback;
@@ -905,6 +1282,11 @@ $('#test-form').addEventListener('submit', (event) => void runTest(event));
 $('#new-project').addEventListener('click', newProject);
 $('#project-form').addEventListener('submit', (event) => void saveProject(event));
 $('#save-binding').addEventListener('click', () => void saveBinding());
+$('#new-routine').addEventListener('click', newRoutine);
+$('#routine-form').addEventListener('submit', (event) => void saveRoutine(event));
+$('#trigger-routine').addEventListener('click', () => void triggerRoutine());
+$('#delete-routine').addEventListener('click', () => void deleteRoutine());
+$('#tick-routines').addEventListener('click', () => void tickRoutines());
 $('#memory-form').addEventListener('submit', (event) => void rememberMemory(event));
 $('#forget-memory').addEventListener('click', () => void forgetMemory());
 $('#reload-memory').addEventListener('click', () => void refreshMemory());
@@ -913,6 +1295,15 @@ for (const input of $$('#project-form input, #project-form textarea, #project-fo
   input.addEventListener('input', markProjectDirty);
   input.addEventListener('change', markProjectDirty);
 }
+
+for (const input of $$('#routine-form input, #routine-form textarea, #routine-form select')) {
+  input.addEventListener('input', markRoutineDirty);
+  input.addEventListener('change', markRoutineDirty);
+}
+
+$('#routine-schedule-kind').addEventListener('change', updateRoutineScheduleFields);
+$('#routine-project').addEventListener('change', () => fillRoutineDestination(true));
+$('#routine-platform').addEventListener('change', () => fillRoutineDestination(true));
 
 $('#project-id').addEventListener('input', () => {
   if (state.selectedProjectId === '__new__') {
@@ -979,7 +1370,11 @@ showView(viewCopy[initialView] ? initialView : 'overview', false);
 await refreshAll();
 
 setInterval(() => {
-  if (document.visibilityState === 'visible' && !state.projectDirty) {
+  if (
+    document.visibilityState === 'visible' &&
+    !state.projectDirty &&
+    !state.routineDirty
+  ) {
     void refreshAll({ quiet: true });
   }
 }, 10000);

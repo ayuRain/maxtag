@@ -12,7 +12,8 @@
     { "path": "../../packages/executor-claude" },
     { "path": "../../packages/executor-codex" },
     { "path": "../../packages/memory" },
-    { "path": "../../packages/platform-lark" }
+    { "path": "../../packages/platform-lark" },
+    { "path": "../../packages/routines" }
   ],
   "include": ["src/**/*.ts"]
 }

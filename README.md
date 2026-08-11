@@ -37,7 +37,7 @@ those lessons, but starts from a different product model:
 
 ```text
 apps/server                 HTTP/event ingestion and runtime host
-apps/admin                  Operator console for projects, runs, and memory
+apps/admin                  Operator console for projects, routines, runs, and memory
 packages/core               Platform-neutral domain model and runtime contract
 packages/config             Workspace/project agent policy and audit store
 packages/platform-lark      Feishu/Lark adapter
@@ -48,6 +48,7 @@ packages/executor-claude    Claude dry-run and local CLI executor
 packages/runtime-host       Shared runtime host for independent workers
 packages/tools-github       GitHub tool contract placeholder
 packages/memory             Global/workspace/project/thread memory stores
+packages/routines           Scheduled work, execution claims, and audit history
 packages/delivery           Durable outbox, delivery tracking, bindings
 packages/ui-cards           Progress/checklist card models
 ```
@@ -77,6 +78,10 @@ packages/ui-cards           Progress/checklist card models
   inline worker, with stale run recovery on startup and through the admin API.
 - Agent execution can also be claimed by the standalone `apps/worker` process
   against the same `OPENTAG_DATA_DIR`.
+- Workspace and project routines support interval or IANA-time-zone daily
+  schedules, client-neutral destinations, manual triggers, deterministic run
+  bridging, deduplication, and stale execution reclaim. Routine work enters the
+  same run queue, executor policy, memory scopes, and delivery path as messages.
 - Real Lark delivery can be enabled with `OPENTAG_LARK_TRANSPORT=http`,
   `OPENTAG_LARK_APP_ID`, and `OPENTAG_LARK_APP_SECRET`; use
   `OPENTAG_LARK_DOMAIN=lark` for international Lark.
@@ -95,9 +100,10 @@ packages/ui-cards           Progress/checklist card models
 - Scoped memory can be viewed and updated through `/v1/memory`, the admin
   console, or chat commands such as `remember project ...` and
   `forget project ...`.
-- The admin console exposes Overview, Projects, Activity, and Memory workspaces,
-  with project policy editing, channel binding, run timelines, delivery ledgers,
-  and a project-aware Lark preview.
+- The admin console exposes Overview, Projects, Routines, Activity, and Memory
+  workspaces, with project policy editing, channel binding, scheduler controls,
+  routine execution history, run timelines, delivery ledgers, and a
+  project-aware Lark preview.
 
 ## MVP
 
@@ -116,8 +122,11 @@ packages/ui-cards           Progress/checklist card models
 ```bash
 npm install
 npm run build
-node apps/server/dist/index.js
+npm run dev
 ```
+
+Open `http://127.0.0.1:3077`. Use
+`node apps/server/dist/index.js` instead when file watching is not needed.
 
 To split HTTP ingestion from execution, run the server without its inline worker
 and start the worker separately:
@@ -129,6 +138,25 @@ npm run worker
 
 For one-shot smoke tests, set `OPENTAG_WORKER_ONCE=1`; tune claim batch size with
 `OPENTAG_WORKER_BATCH`.
+
+## Routines
+
+The server scheduler is enabled by default. It persists routines and execution
+history under `OPENTAG_DATA_DIR`, stages due work without catch-up floods, and
+bridges each execution into a deterministic agent run. Configure it with:
+
+```bash
+OPENTAG_ROUTINES_ENABLED=true
+OPENTAG_ROUTINE_TICK_INTERVAL_MS=30000
+OPENTAG_ROUTINE_CLAIM_STALE_MS=120000
+OPENTAG_DEFAULT_TIME_ZONE=Asia/Shanghai
+```
+
+Use the **Routines** console to create interval or daily work, choose a project
+and client destination, trigger a manual run, and open the corresponding run
+timeline. `POST /v1/routines/tick` is available for an operator or external
+supervisor. Local development still uses the configured dry-run executor and
+memory Lark transport unless those modes are explicitly changed.
 
 ## Local CLI Executors
 

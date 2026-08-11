@@ -54,6 +54,14 @@ import {
   type LarkOpenApiDomain,
   type LarkTransport,
 } from '@opentag/platform-lark';
+import {
+  FileRoutineStore,
+  type Routine,
+  type RoutineClaim,
+  type RoutineExecution,
+  type RoutineSchedule,
+  type UpsertRoutineInput,
+} from '@opentag/routines';
 
 const port = Number(process.env.OPENTAG_PORT || 3077);
 const host = process.env.OPENTAG_HOST || '127.0.0.1';
@@ -94,11 +102,29 @@ const claudeModel = process.env.OPENTAG_CLAUDE_MODEL;
 const claudeMaxBudgetUsd = optionalNumberEnvironmentValue(
   'OPENTAG_CLAUDE_MAX_BUDGET_USD',
 );
+const routinesEnabled = !['0', 'false', 'no'].includes(
+  String(process.env.OPENTAG_ROUTINES_ENABLED || 'true').toLowerCase(),
+);
+const routineTickIntervalMs = numberEnvironmentValue(
+  'OPENTAG_ROUTINE_TICK_INTERVAL_MS',
+  30_000,
+);
+const routineClaimStaleMs = numberEnvironmentValue(
+  'OPENTAG_ROUTINE_CLAIM_STALE_MS',
+  120_000,
+);
+const defaultRoutineTimeZone =
+  process.env.OPENTAG_DEFAULT_TIME_ZONE || 'Asia/Shanghai';
+const routineSchedulerId = `opentag-routines-${process.pid}`;
 const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
 const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
+const routineStore = new FileRoutineStore(path.join(dataDir, 'routines'));
 const activeRuns = new Map<string, AbortController>();
 let agentWorkerTimer: NodeJS.Timeout | undefined;
 let agentWorkerPass: Promise<AgentWorkerPassResult> | undefined;
+let routineTickPass: Promise<RoutineTickResult> | undefined;
+let routineLastTickAt: string | undefined;
+let routineLastTickResult: RoutineTickResult | undefined;
 const threadConfigStore = new FileThreadConfigStore(path.join(dataDir, 'config'), {
   identity: {
     displayName: 'OpenTag',
@@ -224,7 +250,7 @@ const capabilityManifest = {
     {
       capability: 'Long-running work',
       agentdock: 'scheduled tasks and dynamic workflows',
-      opentag: 'durable run queue with inline or standalone worker and stale recovery',
+      opentag: 'durable run queue plus interval/daily workspace routines with manual triggers',
       status: 'partial',
     },
   ],
@@ -425,13 +451,14 @@ async function deliverySnapshot(limit = 50): Promise<Record<string, unknown>> {
 async function workspaceSnapshot(
   workspaceId = 'dev-workspace',
 ): Promise<Record<string, unknown>> {
-  const [workspacePolicies, projects, bindings, recentRuns, audit] =
+  const [workspacePolicies, projects, bindings, recentRuns, audit, routines] =
     await Promise.all([
       threadConfigStore.listWorkspacePolicies(),
       threadConfigStore.listProjectPolicies(workspaceId),
       deliveryStore.listThreadBindings(500),
       deliveryStore.listAgentRuns({ workspaceId, limit: 500 }),
       threadConfigStore.listAudit(25),
+      routineStore.summarize(workspaceId),
     ]);
   const workspacePolicy =
     workspacePolicies.find((item) => item.workspace.id === workspaceId) ??
@@ -473,6 +500,7 @@ async function workspaceSnapshot(
       { id: 'claude', label: 'Claude', mode: executorMode },
     ],
     audit,
+    routines,
   };
 }
 
@@ -664,6 +692,68 @@ function coerceProjectPolicyInput(
             allowedHosts,
           }
         : undefined,
+    actor: stringValue(body, 'actor', 'admin-console'),
+  };
+}
+
+function coerceRoutineSchedule(
+  body: Record<string, unknown>,
+): RoutineSchedule | { error: string } {
+  const schedule = recordValue(body, 'schedule') || body;
+  const kind = stringValue(schedule, 'kind', 'interval');
+  if (kind === 'interval') {
+    const everyMinutes = numberValue(schedule, 'everyMinutes');
+    if (!everyMinutes) return { error: 'routine_interval_minutes_required' };
+    return { kind, everyMinutes };
+  }
+  if (kind === 'daily') {
+    const time = stringValue(schedule, 'time');
+    const timeZone = stringValue(
+      schedule,
+      'timeZone',
+      defaultRoutineTimeZone,
+    );
+    if (!time || !timeZone) return { error: 'routine_daily_time_required' };
+    return { kind, time, timeZone };
+  }
+  return { error: 'unsupported_routine_schedule' };
+}
+
+function coerceRoutineInput(
+  body: Record<string, unknown>,
+): UpsertRoutineInput | { error: string } {
+  const schedule = coerceRoutineSchedule(body);
+  if ('error' in schedule) return schedule;
+  const destination = recordValue(body, 'destination') || body;
+  const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+  const name = stringValue(body, 'name');
+  const instructions = stringValue(body, 'instructions');
+  const platform = stringValue(destination, 'platform', 'lark');
+  const externalId = stringValue(destination, 'externalId');
+  if (!workspaceId || !name || !instructions || !platform || !externalId) {
+    return {
+      error:
+        'routine_workspace_name_instructions_platform_destination_required',
+    };
+  }
+  return {
+    id: stringValue(body, 'id'),
+    workspaceId,
+    projectId: stringValue(body, 'projectId'),
+    name,
+    instructions,
+    enabled: booleanValue(body, 'enabled', true),
+    schedule,
+    destination: {
+      platform: platform as PlatformKind,
+      externalId,
+      channelId: stringValue(destination, 'channelId', externalId),
+      threadId: stringValue(destination, 'threadId'),
+      rootMessageId: stringValue(destination, 'rootMessageId'),
+      topicId: stringValue(destination, 'topicId'),
+      visibility: visibilityValue(destination.visibility) || 'public',
+      title: stringValue(destination, 'title', name),
+    },
     actor: stringValue(body, 'actor', 'admin-console'),
   };
 }
@@ -1215,12 +1305,24 @@ interface AgentWorkerPassResult {
   runs: AgentRunRecord[];
 }
 
+interface RoutineTickResult {
+  at: string;
+  staged: number;
+  claimed: number;
+  queued: number;
+  failed: number;
+  reconciled: number;
+  executionIds: string[];
+  runIds: string[];
+}
+
 async function enqueueMessageRun(input: {
   thread: SourceThread;
   message: SourceMessage;
 }, options?: {
   inboundEventId?: string;
   runId?: string;
+  metadata?: Record<string, unknown>;
 }): Promise<QueuedMessageRun> {
   const runId = options?.runId ?? randomUUID();
   const routed = await routeMessage(input);
@@ -1263,6 +1365,7 @@ async function enqueueMessageRun(input: {
       : resolvedPolicy.identity.defaultExecutorId,
     transportMode,
     metadata: {
+      ...options?.metadata,
       memoryCommand: memoryCommand
         ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
         : undefined,
@@ -1286,6 +1389,192 @@ async function enqueueMessageRun(input: {
     larkTransport: larkTransport
       ? { mode: larkTransport.mode as 'memory' | 'http' }
       : undefined,
+  };
+}
+
+async function routineProjectId(routine: Routine): Promise<string> {
+  if (routine.projectId) return routine.projectId;
+  const workspaces = await threadConfigStore.listWorkspacePolicies();
+  return (
+    workspaces.find((item) => item.workspace.id === routine.workspaceId)
+      ?.workspace.defaultProjectId || 'opentag'
+  );
+}
+
+async function routineRunInput(claim: RoutineClaim): Promise<{
+  thread: SourceThread;
+  message: SourceMessage;
+}> {
+  const routine = claim.routine;
+  const destination = routine.destination;
+  const projectId = await routineProjectId(routine);
+  const threadId =
+    destination.threadId ||
+    `${destination.platform}:${destination.externalId}:routine:${routine.id}`;
+  const thread: SourceThread = {
+    id: threadId,
+    platform: destination.platform,
+    externalId: destination.externalId,
+    workspaceId: routine.workspaceId,
+    projectId,
+    channelId: destination.channelId || destination.externalId,
+    rootMessageId: destination.rootMessageId,
+    topicId: destination.topicId,
+    title: destination.title || routine.name,
+    visibility: destination.visibility,
+    metadata: {
+      routineId: routine.id,
+      routineExecutionId: claim.execution.id,
+      routineTrigger: claim.execution.trigger,
+    },
+  };
+  return {
+    thread,
+    message: {
+      id: `routine:${claim.execution.id}`,
+      threadId,
+      platform: destination.platform,
+      text: routine.instructions,
+      actor: {
+        id: `routine:${routine.id}`,
+        displayName: routine.name,
+        isBot: true,
+      },
+      createdAt: new Date().toISOString(),
+      mentionsAgent: true,
+      metadata: {
+        routineId: routine.id,
+        routineExecutionId: claim.execution.id,
+        scheduledFor: claim.execution.scheduledFor,
+      },
+    },
+  };
+}
+
+async function reconcileRoutineExecutions(): Promise<number> {
+  const executions = await routineStore.listExecutions({ limit: 500 });
+  let reconciled = 0;
+  for (const execution of executions) {
+    if (!execution.runId) continue;
+    if (
+      execution.status === 'completed' ||
+      execution.status === 'failed' ||
+      execution.status === 'cancelled'
+    ) {
+      continue;
+    }
+    const run = await deliveryStore.getAgentRun(execution.runId);
+    if (!run) continue;
+    const status =
+      run.status === 'cancel_requested' ? 'running' : run.status;
+    await routineStore.reconcileRun({
+      runId: run.id,
+      status,
+      summary: run.summary,
+      error: run.lastError,
+    });
+    reconciled += 1;
+  }
+  return reconciled;
+}
+
+async function enqueueRoutineClaim(claim: RoutineClaim): Promise<string> {
+  const input = await routineRunInput(claim);
+  const queued = await enqueueMessageRun(input, {
+    runId: `routine:${claim.execution.id}`,
+    metadata: {
+      source: 'routine',
+      routineId: claim.routine.id,
+      routineName: claim.routine.name,
+      routineExecutionId: claim.execution.id,
+      routineTrigger: claim.execution.trigger,
+      routineScheduledFor: claim.execution.scheduledFor,
+    },
+  });
+  await routineStore.markExecutionQueued(
+    claim.execution.id,
+    queued.run.id,
+  );
+  scheduleAgentWorkerPass();
+  return queued.run.id;
+}
+
+async function runRoutineSchedulerTick(input?: {
+  at?: Date;
+  stageDue?: boolean;
+}): Promise<RoutineTickResult> {
+  if (routineTickPass) return routineTickPass;
+  routineTickPass = (async () => {
+    const at = input?.at ?? new Date();
+    const reconciledBefore = await reconcileRoutineExecutions();
+    const staged = input?.stageDue === false
+      ? []
+      : await routineStore.stageDue(at, 100);
+    const claims = await routineStore.claimExecutions({
+      claimerId: routineSchedulerId,
+      limit: 100,
+      staleAfterMs: routineClaimStaleMs,
+      at,
+    });
+    const result: RoutineTickResult = {
+      at: at.toISOString(),
+      staged: staged.length,
+      claimed: claims.length,
+      queued: 0,
+      failed: 0,
+      reconciled: reconciledBefore,
+      executionIds: claims.map((claim) => claim.execution.id),
+      runIds: [],
+    };
+    for (const claim of claims) {
+      try {
+        const runId = await enqueueRoutineClaim(claim);
+        result.queued += 1;
+        result.runIds.push(runId);
+      } catch (error) {
+        result.failed += 1;
+        await routineStore.markExecutionFailed(
+          claim.execution.id,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    result.reconciled += await reconcileRoutineExecutions();
+    routineLastTickAt = result.at;
+    routineLastTickResult = result;
+    return result;
+  })();
+  try {
+    return await routineTickPass;
+  } finally {
+    routineTickPass = undefined;
+  }
+}
+
+async function routineSnapshot(
+  workspaceId = 'dev-workspace',
+  projectId?: string,
+): Promise<Record<string, unknown>> {
+  await reconcileRoutineExecutions();
+  const [routines, executions, summary, audit] = await Promise.all([
+    routineStore.listRoutines({ workspaceId, projectId }),
+    routineStore.listExecutions({ workspaceId, projectId, limit: 200 }),
+    routineStore.summarize(workspaceId, projectId),
+    routineStore.listAudit({ workspaceId, projectId, limit: 50 }),
+  ]);
+  return {
+    routines,
+    executions,
+    summary,
+    audit,
+    scheduler: {
+      enabled: routinesEnabled,
+      tickIntervalMs: routineTickIntervalMs,
+      claimStaleMs: routineClaimStaleMs,
+      running: Boolean(routineTickPass),
+      lastTickAt: routineLastTickAt,
+      lastTickResult: routineLastTickResult,
+    },
   };
 }
 
@@ -1542,6 +1831,11 @@ const server = createServer(async (request, response) => {
           passRunning: Boolean(agentWorkerPass),
         },
         executors: executorStatus(),
+        routines: {
+          enabled: routinesEnabled,
+          running: Boolean(routineTickPass),
+          lastTickAt: routineLastTickAt,
+        },
       });
       return;
     }
@@ -1574,6 +1868,14 @@ const server = createServer(async (request, response) => {
           passRunning: Boolean(agentWorkerPass),
         },
         executorRuntime: executorStatus(),
+        routines: {
+          enabled: routinesEnabled,
+          tickIntervalMs: routineTickIntervalMs,
+          claimStaleMs: routineClaimStaleMs,
+          running: Boolean(routineTickPass),
+          lastTickAt: routineLastTickAt,
+          lastTickResult: routineLastTickResult,
+        },
       });
       return;
     }
@@ -1609,6 +1911,100 @@ const server = createServer(async (request, response) => {
         audit: await threadConfigStore.listAudit(
           Number(url.searchParams.get('limit') || 50),
         ),
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/routines') {
+      sendJson(
+        response,
+        200,
+        await routineSnapshot(
+          url.searchParams.get('workspaceId') || 'dev-workspace',
+          url.searchParams.get('projectId') || undefined,
+        ),
+      );
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/routines/tick') {
+      const result = await runRoutineSchedulerTick();
+      sendJson(response, 200, {
+        result,
+        routines: await routineSnapshot(),
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/routines') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const input = coerceRoutineInput(body);
+      if ('error' in input) {
+        sendJson(response, 400, { error: input.error });
+        return;
+      }
+      try {
+        const routine = await routineStore.upsertRoutine(input);
+        sendJson(response, 200, {
+          routine,
+          routines: await routineSnapshot(routine.workspaceId),
+        });
+      } catch (error) {
+        sendJson(response, 400, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      url.pathname.startsWith('/v1/routines/') &&
+      url.pathname.endsWith('/trigger')
+    ) {
+      const id = decodeURIComponent(
+        url.pathname.slice('/v1/routines/'.length, -'/trigger'.length),
+      );
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      try {
+        const execution = await routineStore.triggerRoutine(
+          id,
+          stringValue(body, 'actor', 'admin-console'),
+        );
+        const tick = await runRoutineSchedulerTick({ stageDue: false });
+        const currentExecution = (
+          await routineStore.listExecutions({ routineId: id, limit: 50 })
+        ).find((item) => item.id === execution.id);
+        sendJson(response, 202, {
+          accepted: true,
+          execution: currentExecution || execution,
+          tick,
+          routines: await routineSnapshot(execution.routine.workspaceId),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        sendJson(response, message === 'routine_not_found' ? 404 : 400, {
+          error: message,
+        });
+      }
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      url.pathname.startsWith('/v1/routines/')
+    ) {
+      const id = decodeURIComponent(
+        url.pathname.slice('/v1/routines/'.length),
+      );
+      const routine = await routineStore.deleteRoutine(id, 'admin-console');
+      if (!routine) {
+        sendJson(response, 404, { error: 'routine_not_found' });
+        return;
+      }
+      sendJson(response, 200, {
+        routine,
+        routines: await routineSnapshot(routine.workspaceId),
       });
       return;
     }
@@ -2085,5 +2481,16 @@ server.listen(port, host, () => {
       scheduleAgentWorkerPass();
     }, agentWorkerIntervalMs);
     interval.unref?.();
+  }
+  if (routinesEnabled) {
+    void runRoutineSchedulerTick().catch((error) => {
+      console.error('OpenTag routine startup tick failed', error);
+    });
+    const routineInterval = setInterval(() => {
+      void runRoutineSchedulerTick().catch((error) => {
+        console.error('OpenTag routine tick failed', error);
+      });
+    }, routineTickIntervalMs);
+    routineInterval.unref?.();
   }
 });
