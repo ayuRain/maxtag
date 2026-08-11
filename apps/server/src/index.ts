@@ -218,13 +218,16 @@ const sqliteStorage =
           'access',
           'workspace-access.json',
         ),
+        legacyMemoryDir: path.join(dataDir, 'memory'),
       })
     : undefined;
 const routineSchedulerId = `opentag-routines-${process.pid}`;
 const deliveryStore =
   sqliteStorage?.deliveryStore ??
   new FileDeliveryStore(path.join(dataDir, 'delivery'));
-const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
+const memoryStore =
+  sqliteStorage?.memoryStore ??
+  new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
 const routineStore = new FileRoutineStore(path.join(dataDir, 'routines'));
 const routineCommandService = new RoutineCommandService(routineStore, {
   defaultTimeZone: defaultRoutineTimeZone,
@@ -334,8 +337,8 @@ const capabilityManifest = {
     {
       capability: 'Scoped memory',
       agentdock: 'session memory with async write queue',
-      opentag: 'global/workspace/project/thread scopes with remember/forget commands',
-      status: 'partial',
+      opentag: 'transactional global/workspace/project/thread documents with immutable revisions and restore',
+      status: 'ready',
     },
     {
       capability: 'Channel binding',
@@ -1599,7 +1602,7 @@ async function authorizeRoutedMessage(input: {
   thread: SourceThread;
   message: SourceMessage;
 }): Promise<ActorAuthorizationDecision> {
-  return accessStore.authorize({
+  const decision = await accessStore.authorize({
     workspaceId: input.thread.workspaceId || 'dev-workspace',
     projectId:
       input.thread.projectId || input.thread.channelId || 'general',
@@ -1607,6 +1610,32 @@ async function authorizeRoutedMessage(input: {
     actor: input.message.actor,
     capability: requiredActorCapability(input),
   });
+  if (!decision.allowed) return decision;
+  const memoryCommand = parseMemoryCommand(input.message.text, {
+    defaultScope: memoryCommandDefaultScope(input.thread),
+  });
+  const mutatesMemory =
+    memoryCommand?.kind === 'remember' || memoryCommand?.kind === 'forget';
+  if (!mutatesMemory) return decision;
+  const workspaceRole = decision.member?.role;
+  const workspaceWriteAllowed =
+    workspaceRole === 'owner' ||
+    workspaceRole === 'admin' ||
+    workspaceRole === 'member';
+  if (
+    memoryCommand.scope === 'global' ||
+    (memoryCommand.scope === 'workspace' && !workspaceWriteAllowed)
+  ) {
+    return {
+      ...decision,
+      allowed: false,
+      reason: 'memory_scope_not_granted',
+      capabilities: decision.capabilities.filter(
+        (capability) => capability !== 'write_memory',
+      ),
+    };
+  }
+  return decision;
 }
 
 function actorAuthorizationPayload(
@@ -1887,6 +1916,12 @@ function memoryCommandDefaultScope(thread: SourceThread): MemoryScopeKind {
   return thread.visibility === 'direct' ? 'thread' : 'project';
 }
 
+function memoryActorForMessage(thread: SourceThread, actorId: string): string {
+  return actorId.startsWith('operator:')
+    ? actorId
+    : `${thread.platform}:${actorId || 'unknown'}`;
+}
+
 function formatMemoryScopeLabel(scope: MemoryScopeKind): string {
   return `${scope} memory`;
 }
@@ -1933,6 +1968,8 @@ function agentRunEventSummary(event: AgentRunEvent): {
 async function applyMemoryCommand(input: {
   command: ParsedMemoryCommand;
   thread: SourceThread;
+  actorId?: string;
+  source?: string;
 }): Promise<Record<string, unknown>> {
   const { workspace, project } = await memoryContextForThread(input.thread);
   if (input.command.kind === 'remember') {
@@ -1942,6 +1979,8 @@ async function applyMemoryCommand(input: {
       project,
       scope: input.command.scope,
       text: input.command.value,
+      actorId: input.actorId,
+      source: input.source,
     });
     return {
       summary: `Remembered in ${formatMemoryScopeLabel(input.command.scope)}.`,
@@ -1959,6 +1998,8 @@ async function applyMemoryCommand(input: {
       project,
       scope: input.command.scope,
       selector: input.command.value,
+      actorId: input.actorId,
+      source: input.source,
     });
     return {
       summary: `Removed matching lines from ${formatMemoryScopeLabel(input.command.scope)}.`,
@@ -2448,6 +2489,11 @@ async function executeAgentRun(
       const commandResult = await applyMemoryCommand({
         command: memoryCommand,
         thread: initialRun.thread,
+        actorId: memoryActorForMessage(
+          initialRun.thread,
+          initialRun.message.actor.id,
+        ),
+        source: `${initialRun.thread.platform}-command`,
       });
       await deliveryStore.appendAgentRunEvent(runId, 'memory_command', {
         message: String(commandResult.summary),
@@ -3552,6 +3598,13 @@ const server = createServer(async (request, response) => {
         project,
         scopes: [scope],
       });
+      const history = await memoryStore.getMemoryHistory({
+        thread,
+        workspace,
+        project,
+        scope,
+        limit: numberValue(query, 'historyLimit') || 20,
+      });
       sendJson(response, 200, {
         route: {
           workspaceId: workspace?.id,
@@ -3561,6 +3614,7 @@ const server = createServer(async (request, response) => {
         },
         scope,
         snapshot,
+        history,
       });
       return;
     }
@@ -3574,15 +3628,25 @@ const server = createServer(async (request, response) => {
         stringValue(body, 'text') ||
         stringValue(body, 'value') ||
         stringValue(body, 'selector');
+      const revisionId = stringValue(body, 'revisionId');
       if ((action === 'remember' || action === 'forget') && !value) {
         sendJson(response, 400, { error: 'memory_value_required' });
         return;
       }
-      if (action !== 'remember' && action !== 'forget' && action !== 'show') {
+      if (action === 'restore' && !revisionId) {
+        sendJson(response, 400, { error: 'memory_revision_required' });
+        return;
+      }
+      if (
+        action !== 'remember' &&
+        action !== 'forget' &&
+        action !== 'show' &&
+        action !== 'restore'
+      ) {
         sendJson(response, 400, { error: 'unsupported_memory_action' });
         return;
       }
-      const { workspace } = await memoryContextForThread(thread);
+      const { workspace, project } = await memoryContextForThread(thread);
       const memoryAllowed =
         scope === 'global'
           ? requireInstallationOperator(response, operatorAuthentication!)
@@ -3592,6 +3656,43 @@ const server = createServer(async (request, response) => {
               workspace?.id || thread.workspaceId || 'dev-workspace',
             );
       if (!memoryAllowed) return;
+      if (action === 'restore') {
+        try {
+          const document = await memoryStore.restoreScoped({
+            thread,
+            workspace,
+            project,
+            scope,
+            revisionId: revisionId!,
+            actorId: operatorActor(operatorAuthentication!),
+            source: 'operator-api',
+          });
+          sendJson(response, 200, {
+            route: {
+              workspaceId: workspace?.id,
+              projectId: project?.id,
+              threadId: thread.id,
+              platform: thread.platform,
+            },
+            memoryCommand: {
+              summary: `Restored ${formatMemoryScopeLabel(scope)} to version ${document.version}.`,
+              action: 'restore',
+              scope,
+              document,
+            },
+          });
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message === 'memory_revision_not_found'
+          ) {
+            sendJson(response, 404, { error: error.message });
+            return;
+          }
+          throw error;
+        }
+        return;
+      }
       const result = await applyMemoryCommand({
         command: {
           kind: action,
@@ -3599,6 +3700,8 @@ const server = createServer(async (request, response) => {
           value: value ?? '',
         },
         thread,
+        actorId: operatorActor(operatorAuthentication!),
+        source: 'operator-api',
       });
       sendJson(response, 200, {
         route: {
@@ -3837,6 +3940,17 @@ const server = createServer(async (request, response) => {
           operatorAuthentication!,
           workspaceId,
         )
+      ) {
+        return;
+      }
+      const devMemoryCommand = parseMemoryCommand(normalized.message.text, {
+        defaultScope: memoryCommandDefaultScope(normalized.thread),
+      });
+      if (
+        devMemoryCommand?.scope === 'global' &&
+        (devMemoryCommand.kind === 'remember' ||
+          devMemoryCommand.kind === 'forget') &&
+        !requireInstallationOperator(response, operatorAuthentication!)
       ) {
         return;
       }
@@ -4292,7 +4406,7 @@ server.listen(port, host, () => {
   console.log(
     `OpenTag storage driver=${storageDriver}${
       sqliteStorage
-        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_pairing=${sqliteStorage.migration.pairingImported} migrated_access=${sqliteStorage.migration.accessImported}`
+        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_pairing=${sqliteStorage.migration.pairingImported} migrated_access=${sqliteStorage.migration.accessImported} migrated_memory=${sqliteStorage.migration.memoryImported}`
         : ''
     }`,
   );

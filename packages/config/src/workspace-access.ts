@@ -119,7 +119,8 @@ export interface ActorAuthorizationDecision {
     | 'workspace_member_required'
     | 'workspace_member_suspended'
     | 'project_member_required'
-    | 'capability_not_granted';
+    | 'capability_not_granted'
+    | 'memory_scope_not_granted';
   member?: WorkspaceMember;
   projectMembership?: ProjectMembership;
   capabilities: ActorCapability[];

@@ -149,6 +149,25 @@ test(
       /Dry-run Codex executor received/,
     );
 
+    const memoryRoute = {
+      platform: 'lark',
+      externalId: 'sqlite-memory-channel',
+      threadId: 'lark:sqlite-memory-channel:root',
+      workspaceId: 'dev-workspace',
+      projectId: 'opentag',
+      scope: 'project',
+    };
+    const firstMemoryWrite = await fetch(`${firstServer.baseUrl}/v1/memory`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...memoryRoute,
+        action: 'remember',
+        text: 'memory persisted before restart',
+      }),
+    });
+    assert.equal(firstMemoryWrite.status, 200);
+
     await stopProcess(firstServer.child);
     const secondServer = await startServer(dataDir);
     processes.push(secondServer.child);
@@ -156,6 +175,7 @@ test(
       deliveryImported: false,
       pairingImported: false,
       accessImported: false,
+      memoryImported: false,
     });
     const afterRestart = await fetch(
       `${secondServer.baseUrl}/v1/runs?limit=20`,
@@ -163,6 +183,49 @@ test(
     assert.equal(
       afterRestart.runs.find((run) => run.id === queued.run.id)?.status,
       'completed',
+    );
+    const memoryQuery = new URLSearchParams(memoryRoute);
+    const persistedMemory = await fetch(
+      `${secondServer.baseUrl}/v1/memory?${memoryQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.match(
+      persistedMemory.snapshot.scopes[0].content,
+      /memory persisted before restart/,
+    );
+    assert.equal(persistedMemory.history.document.version, 1);
+    assert.equal(
+      persistedMemory.history.revisions[0].actorId,
+      'operator:local-development',
+    );
+    assert.equal(persistedMemory.history.revisions[0].source, 'operator-api');
+
+    await fetch(`${secondServer.baseUrl}/v1/memory`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...memoryRoute,
+        action: 'remember',
+        text: 'temporary second version',
+      }),
+    });
+    const restoreResponse = await fetch(`${secondServer.baseUrl}/v1/memory`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...memoryRoute,
+        action: 'restore',
+        revisionId: persistedMemory.history.revisions[0].id,
+      }),
+    });
+    assert.equal(restoreResponse.status, 200);
+    const restoredMemory = await fetch(
+      `${secondServer.baseUrl}/v1/memory?${memoryQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.equal(restoredMemory.history.document.version, 3);
+    assert.equal(restoredMemory.history.revisions[0].action, 'restore');
+    assert.doesNotMatch(
+      restoredMemory.snapshot.scopes[0].content,
+      /temporary second version/,
     );
   },
 );

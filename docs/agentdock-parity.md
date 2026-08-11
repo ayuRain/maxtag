@@ -11,7 +11,7 @@ many clients.
 | Client-neutral event model | `SourceThread`, `SourceMessage`, and `PlatformAdapter` |
 | Lark first client | Lark normalize path, progress cards, dry-run server route, and HTTP OpenAPI transport |
 | Multiple clients | Native Lark and Telegram ingress/delivery plus generic `/v1/client/events` for adapters in development |
-| Scoped memory | Global, workspace, project, and thread file scopes; Lark groups route to project scope; remember/forget commands |
+| Scoped memory | SQLite-backed global, workspace, project, and thread documents; transactional cross-process writes; immutable remember/forget/import/restore revisions with trusted actor provenance; Lark groups route to project scope |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
 | Self-service pairing | Lark and Telegram `/pair` commands use expiring, single-use, platform-bound codes; salted hashes persist across restarts, successful pairing creates a configured project route, and operators can revoke invitations or unbind chats |
 | Topic continuation | Mention establishes a Lark or Telegram topic binding; later messages in that topic continue without repeating the mention |
@@ -38,7 +38,7 @@ many clients.
 | Pairing and binding governance | Add binding audit/import/export and optional actor-restricted pairing invitations; project role enforcement already applies after a chat is routed, and pairing consumption plus binding creation are one SQLite transaction |
 | Operator credential lifecycle | Add in-product credential creation, revocation, rotation, finer-grained operator capabilities, and optional SSO/OIDC; environment-configured named principals and workspace enforcement are implemented |
 | Encrypted Lark callbacks | Implement decrypt path before enabling encrypted events in production |
-| Memory governance | Add durable write queue, audit history, approval policy, and admin restore |
+| Memory governance | Add optional approval policy, retention/compaction controls, diff rendering, and export; durable transactional writes, audit history, legacy import, and admin restore are implemented |
 | Routine production hardening | Move routine state and claims to the production database, run scheduler under a supervisor, and verify real Lark delivery and restart recovery |
 | Dynamic workflows | Add saved workflow definitions and async workflow runs |
 | Tooling depth | Replace direct CLI permission mapping with brokered GitHub, Lark Docs/Base, browser, and shell tools |

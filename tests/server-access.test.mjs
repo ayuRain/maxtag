@@ -287,6 +287,36 @@ test(
       'contributor',
     );
 
+    const contributorWorkspaceMemory = await postJson(
+      baseUrl,
+      '/v1/client/events',
+      clientEvent(
+        'access-workspace-memory',
+        'ou-contributor',
+        'remember workspace shared workspace fact',
+      ),
+    );
+    assert.equal(contributorWorkspaceMemory.data.accepted, true);
+    assert.equal(
+      contributorWorkspaceMemory.data.run.metadata.actorAuthorization.workspaceRole,
+      'member',
+    );
+
+    const ownerGlobalMemory = await postJson(
+      baseUrl,
+      '/v1/client/events',
+      clientEvent(
+        'access-global-memory',
+        'ou-owner',
+        'remember global installation fact',
+      ),
+    );
+    assert.equal(ownerGlobalMemory.data.accepted, false);
+    assert.equal(
+      ownerGlobalMemory.data.authorization.reason,
+      'memory_scope_not_granted',
+    );
+
     const deniedRoutine = await postJson(
       baseUrl,
       '/v1/client/events',

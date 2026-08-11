@@ -8,7 +8,8 @@
   "references": [
     { "path": "../config" },
     { "path": "../core" },
-    { "path": "../delivery" }
+    { "path": "../delivery" },
+    { "path": "../memory" }
   ],
   "include": ["src/**/*.ts"]
 }

@@ -616,7 +616,10 @@
                   <span class="eyebrow" id="memory-route">Project memory</span>
                   <h2>Current memory</h2>
                 </div>
-                <button class="text-button" id="reload-memory" type="button">Reload</button>
+                <div class="memory-current-actions">
+                  <span id="memory-meta">No revisions</span>
+                  <button class="text-button" id="reload-memory" type="button">Reload</button>
+                </div>
               </div>
               <pre id="memory-output">No memory loaded.</pre>
             </section>
@@ -631,6 +634,18 @@
               </div>
             </form>
           </div>
+
+          <section class="memory-history">
+            <div class="section-heading compact-heading">
+              <div>
+                <span class="eyebrow">Immutable revisions</span>
+                <h2>History</h2>
+              </div>
+            </div>
+            <div class="memory-history-list" id="memory-history-list">
+              <div class="empty-state">No revisions in this scope.</div>
+            </div>
+          </section>
 
           <div class="scope-map" id="scope-map"></div>
         </section>

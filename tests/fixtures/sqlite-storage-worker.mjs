@@ -12,7 +12,9 @@ try {
   const result =
     workerData.action === 'pair'
       ? await store.consumePairingAndConfigureBinding(workerData.input)
-      : await store.deliveryStore.claimReadyOutbox({ limit: 1 });
+      : workerData.action === 'remember'
+        ? await store.memoryStore.rememberScoped(workerData.input)
+        : await store.deliveryStore.claimReadyOutbox({ limit: 1 });
   parentPort.postMessage({ ok: true, result });
 } catch (error) {
   parentPort.postMessage({

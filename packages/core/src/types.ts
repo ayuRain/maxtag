@@ -47,8 +47,44 @@ export interface ScopedMemorySnapshot {
   scopes: Array<{
     scope: MemoryScope;
     content: string;
+    document?: MemoryDocument;
   }>;
   text: string;
+}
+
+export type MemoryRevisionAction =
+  | 'remember'
+  | 'forget'
+  | 'restore'
+  | 'import';
+
+export interface MemoryDocument {
+  key: string;
+  scope: MemoryScope;
+  content: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string;
+  latestRevisionId: string;
+}
+
+export interface MemoryRevision {
+  id: string;
+  documentKey: string;
+  version: number;
+  action: MemoryRevisionAction;
+  actorId: string;
+  source?: string;
+  at: string;
+  content: string;
+  selector?: string;
+  restoredFromRevisionId?: string;
+}
+
+export interface MemoryHistory {
+  document?: MemoryDocument;
+  revisions: MemoryRevision[];
 }
 
 export interface MemoryQuery {
@@ -61,11 +97,27 @@ export interface MemoryQuery {
 export interface MemoryWriteRequest extends MemoryQuery {
   scope: MemoryScopeKind;
   text: string;
+  actorId?: string;
+  source?: string;
 }
 
 export interface MemoryForgetRequest extends MemoryQuery {
   scope: MemoryScopeKind;
   selector: string;
+  actorId?: string;
+  source?: string;
+}
+
+export interface MemoryHistoryQuery extends MemoryQuery {
+  scope: MemoryScopeKind;
+  limit?: number;
+}
+
+export interface MemoryRestoreRequest extends MemoryQuery {
+  scope: MemoryScopeKind;
+  revisionId: string;
+  actorId?: string;
+  source?: string;
 }
 
 export interface SourceThread {
@@ -251,6 +303,8 @@ export interface MemoryStore {
   rememberScoped?(request: MemoryWriteRequest): Promise<void>;
   forget(thread: SourceThread, selector: string): Promise<void>;
   forgetScoped?(request: MemoryForgetRequest): Promise<void>;
+  getMemoryHistory?(query: MemoryHistoryQuery): Promise<MemoryHistory>;
+  restoreScoped?(request: MemoryRestoreRequest): Promise<MemoryDocument>;
 }
 
 export interface ThreadConfigContext {

@@ -68,7 +68,9 @@ packages/ui-cards           Progress/checklist card models
 - Other clients can enter through `/v1/client/events`, which normalizes a
   client envelope into the same run queue, scoped memory, and delivery ledger.
   Deployments can protect this adapter-only ingress with its own Bearer token.
-- Memory is scoped into global, workspace, project, and thread files.
+- Memory is scoped into global, workspace, project, and thread documents. In
+  the default SQLite mode, every remember, forget, restore, and legacy import
+  creates an immutable revision with its trusted operator or client actor.
 - Workspace and project agent policies are persisted separately from memory,
   including identity, instructions, executor choice, project tool grants,
   network policy, and an admin change audit.
@@ -80,9 +82,9 @@ packages/ui-cards           Progress/checklist card models
 - Codex and Claude executors are selected per project. They support safe-by-default
   dry-runs or explicit local CLI execution, and the standalone worker resolves
   the same policy and runtime mode as the HTTP server.
-- Delivery, run, inbound-event, binding, pairing, and workspace-access state
-  defaults to a shared SQLite WAL database. The outbox and run claims are
-  transactional across the HTTP server and standalone workers.
+- Delivery, run, inbound-event, binding, pairing, workspace-access, and memory
+  state defaults to a shared SQLite WAL database. Outbox/run claims and memory
+  revisions are transactional across the HTTP server and standalone workers.
 - Delivery recovery can requeue stale `sending` records and cancel only the
   selected run/thread/workspace/project scope.
 - Agent runs are recorded in the durable run ledger with status, timeline
@@ -119,7 +121,12 @@ packages/ui-cards           Progress/checklist card models
   routes.
 - Scoped memory can be viewed and updated through `/v1/memory`, the admin
   console, or chat commands such as `remember project ...` and
-  `forget project ...`.
+  `forget project ...`. The API and console expose revision history and restore;
+  restoring creates a new revision instead of rewriting audit history.
+- Client memory writes follow the scope boundary: authorized project users can
+  update project/thread memory, identified non-guest workspace members can
+  update workspace memory, and global memory is reserved for an installation
+  operator through the authenticated control plane.
 - The admin console exposes Overview, Projects, Access, Connectors, Routines,
   Activity, and Memory workspaces, with workspace identity linking, project
   roles, project policy editing, self-service chat pairing, channel unbinding,
@@ -168,7 +175,7 @@ For one-shot smoke tests, set `OPENTAG_WORKER_ONCE=1`; tune claim batch size wit
 ## Storage
 
 SQLite WAL is the default for delivery, run, inbound-event, channel-binding,
-pairing, and workspace-access state:
+pairing, workspace-access, and versioned memory state:
 
 ```bash
 OPENTAG_STORAGE_DRIVER=sqlite
@@ -178,14 +185,17 @@ OPENTAG_SQLITE_BUSY_TIMEOUT_MS=5000
 
 The HTTP server and standalone worker can safely share this database. Outbox
 and run claims use immediate write transactions, and consuming a pairing code
-plus creating its channel binding commits atomically. On first startup, OpenTag
-imports existing `delivery-state.json` and `pairing-state.json` files when the
-SQLite documents do not yet exist. It also imports a legacy
-`workspace-access.json` file when present; later restarts use only the database.
+plus creating its channel binding commits atomically. Memory writes also use an
+immediate transaction, so the server and independent workers cannot overwrite
+one another's revisions. On first startup, OpenTag imports existing
+`delivery-state.json`, `pairing-state.json`, `workspace-access.json`, and scoped
+memory Markdown or `memory-state.json` when their SQLite documents do not yet
+exist. Later restarts use only the database.
 
 Set `OPENTAG_STORAGE_DRIVER=file` only for legacy or isolated local operation.
-Project policy, scoped memory, and routines are still file-backed and remain on
-the production-storage roadmap.
+Project policy and routines are still file-backed and remain on the
+production-storage roadmap. File-mode memory keeps the same version contract,
+but is intended for one process rather than shared workers.
 
 ## Operator Authentication
 
@@ -263,6 +273,9 @@ work. Contributors can invoke the agent and write memory. Viewers cannot start
 agent work. Workspace guests can invoke the agent in `workspace` mode but cannot
 write memory or manage routines. Authorization denials are recorded in the
 inbound ledger, and native clients receive a rate-limited access notice.
+Project-level write access covers project and thread memory. Workspace memory
+also requires an identified active `owner`, `admin`, or `member`; global memory
+cannot be mutated from a client thread, including by a workspace owner.
 
 Workspace member roles govern people invoking OpenTag from client threads;
 operator principals govern the separate control plane. Deployment credentials

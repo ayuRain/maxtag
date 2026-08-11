@@ -8,8 +8,11 @@
 - Progress card model that can render to Lark today and Slack/Telegram later.
 - Selectable Lark delivery transport: memory dry-run locally, HTTP OpenAPI for
   real app bots.
-- Global/workspace/project/thread memory scopes.
-- Explicit scoped memory commands and admin API for remember, forget, and show.
+- SQLite-backed global/workspace/project/thread memory documents with
+  transactional cross-process writes, immutable actor-attributed revisions,
+  legacy Markdown import, history, and restore.
+- Explicit scoped memory commands and admin API for remember, forget, show,
+  history, and restore.
 - SQLite WAL outbox, inbound event ledger, turn delivery tracker, and configured
   channel/project bindings, with transactional claims across server and worker.
 - SQLite-backed Lark/Telegram pairing invitations with short-lived single-use
@@ -68,6 +71,8 @@
 - Short-circuit duplicate Lark events by `event_id` or message id.
 - Add retention, compaction, and queue-depth metrics to the SQLite-backed inbound
   ledger and worker-backed durable outbound queue.
+- Add retention/compaction policy, revision diffs, export, and optional approval
+  gates to the SQLite-backed memory history.
 - Queue accepted Lark events quickly, then execute runs through the shared worker
   path instead of blocking callback delivery.
 - Keep operator recovery scoped to a run, thread, workspace, project, target, or

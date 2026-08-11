@@ -290,6 +290,67 @@ test(
       'processed',
     );
 
+    const memoryResponse = await fetch(`${baseUrl}/v1/telegram/events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-telegram-bot-api-secret-token': 'integration-secret',
+      },
+      body: JSON.stringify(
+        update(9_005, 'remember project native Telegram memory', 77),
+      ),
+    });
+    assert.equal(memoryResponse.status, 202);
+    const memoryAccepted = await memoryResponse.json();
+    await waitForJson(
+      `${baseUrl}/v1/runs?limit=10`,
+      (data) =>
+        data.runs.some(
+          (item) =>
+            item.id === memoryAccepted.run.id && item.status === 'completed',
+        ),
+      child,
+      logs,
+    );
+    const memoryQuery = new URLSearchParams({
+      platform: 'telegram',
+      externalId: '-100123:77',
+      threadId: 'telegram:-100123:77',
+      workspaceId: 'dev-workspace',
+      projectId: 'opentag',
+      scope: 'project',
+    });
+    const nativeMemory = await fetch(
+      `${baseUrl}/v1/memory?${memoryQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.match(nativeMemory.snapshot.scopes[0].content, /native Telegram memory/);
+    assert.equal(nativeMemory.history.revisions[0].actorId, 'telegram:42');
+    assert.equal(nativeMemory.history.revisions[0].source, 'telegram-command');
+
+    for (const [updateId, scope] of [
+      [9_006, 'workspace'],
+      [9_007, 'global'],
+    ]) {
+      const scopedWrite = await fetch(`${baseUrl}/v1/telegram/events`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-telegram-bot-api-secret-token': 'integration-secret',
+        },
+        body: JSON.stringify(
+          update(updateId, `remember ${scope} must stay governed`, 77),
+        ),
+      });
+      assert.equal(scopedWrite.status, 202);
+      const denied = await scopedWrite.json();
+      assert.equal(denied.accepted, false);
+      assert.equal(denied.reason, 'actor_not_authorized');
+      assert.equal(
+        denied.authorization.reason,
+        'memory_scope_not_granted',
+      );
+    }
+
     const duplicateResponse = await fetch(`${baseUrl}/v1/telegram/events`, {
       method: 'POST',
       headers: {

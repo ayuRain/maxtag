@@ -19,6 +19,8 @@ clients of the same thread-agent core.
 - `AccessBundle`: thread-level tool and credential grants.
 - `ScopedMemorySnapshot`: global, workspace, project, and thread memory loaded in
   deterministic order.
+- `MemoryDocument` and `MemoryRevision`: the current scoped snapshot plus an
+  immutable SQLite history attributed to a trusted client or operator actor.
 - `Executor`: Codex, Claude, or another agent runner.
 
 ## Current Status
@@ -36,6 +38,9 @@ clients of the same thread-agent core.
   Named operator principals carry workspace scopes and owner/admin/viewer roles;
   authenticated principal identity, never a request-body actor string, owns
   control-plane audit records.
+- Project/thread memory follows project write capability, workspace memory also
+  requires an identified active non-guest workspace member, and installation
+  global memory is writable only from the operator control plane.
 - Slack: planned.
 - GitHub: planned as both a tool provider and a source client.
 

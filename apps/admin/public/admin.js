@@ -1732,6 +1732,66 @@ function renderScopeMap(route) {
   }
 }
 
+function memoryRevisionSummary(revision) {
+  if (revision.action === 'forget') {
+    return revision.selector
+      ? `Removed lines matching "${revision.selector}"`
+      : 'Removed matching lines';
+  }
+  if (revision.action === 'restore') return 'Restored an earlier snapshot';
+  if (revision.action === 'import') return 'Imported legacy memory';
+  const lines = String(revision.content || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return (
+    lines
+      .at(-1)
+      ?.replace(/^-\s+/, '')
+      .replace(/^\d{4}-\d{2}-\d{2}T\S+\s+/, '') || 'Saved an empty snapshot'
+  );
+}
+
+function renderMemoryHistory(history) {
+  const root = $('#memory-history-list');
+  const revisions = history?.revisions || [];
+  root.replaceChildren();
+  if (!revisions.length) {
+    root.append(element('div', 'empty-state', 'No revisions in this scope.'));
+    return;
+  }
+  const currentRevisionId = history?.document?.latestRevisionId;
+  const viewer = state.auth?.principal?.role === 'viewer';
+  for (const revision of revisions) {
+    const row = element('div', 'memory-revision-row');
+    const version = element('div', 'memory-revision-version');
+    version.append(
+      element('strong', '', `v${revision.version}`),
+      element('span', '', statusLabel(revision.action)),
+    );
+    const detail = element('div', 'memory-revision-detail');
+    detail.append(
+      element('strong', '', memoryRevisionSummary(revision)),
+      element(
+        'span',
+        '',
+        `${revision.actorId || 'Unknown actor'} / ${formatTime(revision.at, true)}`,
+      ),
+    );
+    const current = revision.id === currentRevisionId;
+    const restore = element(
+      'button',
+      'secondary-button',
+      current ? 'Current' : 'Restore',
+    );
+    restore.type = 'button';
+    restore.disabled = viewer || current;
+    restore.addEventListener('click', () => void restoreMemory(revision.id));
+    row.append(version, detail, restore);
+    root.append(row);
+  }
+}
+
 async function refreshMemory() {
   if (!state.workspace) return;
   const route = memoryThread();
@@ -1741,9 +1801,34 @@ async function refreshMemory() {
   try {
     const data = await getJson(`/v1/memory?${query.toString()}`);
     const content = data.snapshot?.scopes?.[0]?.content?.trim();
+    const document = data.history?.document;
     $('#memory-output').textContent = content || 'No memory in this scope.';
+    $('#memory-meta').textContent = document
+      ? `v${document.version} / ${formatTime(document.updatedAt, true)}`
+      : 'No revisions';
+    renderMemoryHistory(data.history);
   } catch (error) {
     $('#memory-output').textContent = error.message;
+    $('#memory-meta').textContent = 'Unavailable';
+    renderMemoryHistory();
+  }
+}
+
+async function restoreMemory(revisionId) {
+  try {
+    await getJson('/v1/memory', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...memoryThread(),
+        action: 'restore',
+        revisionId,
+      }),
+    });
+    await refreshMemory();
+    showToast('Memory revision restored');
+  } catch (error) {
+    showToast(error.message, 'error');
   }
 }
 
@@ -1979,6 +2064,7 @@ async function refreshAll({ quiet = false } = {}) {
     renderAll();
     applyOperatorCapabilities();
     $('#sync-label').textContent = `Synced ${formatTime(new Date().toISOString())}`;
+    if (!$('#view-memory').hidden) await refreshMemory();
   } catch (error) {
     state.health = null;
     renderHealth();

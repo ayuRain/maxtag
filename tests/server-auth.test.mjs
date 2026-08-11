@@ -392,6 +392,25 @@ test(
       'installation_operator_required',
     );
 
+    const globalMemoryPreviewWrite = await fetch(`${baseUrl}/v1/dev/messages`, {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'content-type': 'application/json',
+        'x-opentag-csrf': adminSession.csrfToken,
+      },
+      body: JSON.stringify({
+        workspaceId: 'dev-workspace',
+        projectId: 'opentag',
+        text: 'remember global cannot bypass operator scope',
+      }),
+    });
+    assert.equal(globalMemoryPreviewWrite.status, 403);
+    assert.equal(
+      (await globalMemoryPreviewWrite.json()).error,
+      'installation_operator_required',
+    );
+
     const viewerLogin = await fetch(`${baseUrl}/v1/admin/session`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

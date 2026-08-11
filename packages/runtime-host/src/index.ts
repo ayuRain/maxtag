@@ -24,6 +24,7 @@ import { createCodexExecutor } from '@opentag/executor-codex';
 import { createClaudeExecutor } from '@opentag/executor-claude';
 import {
   ScopedFileMemoryStore,
+  StateMemoryStore,
   parseMemoryCommand,
   type ParsedMemoryCommand,
 } from '@opentag/memory';
@@ -150,6 +151,12 @@ function memoryCommandDefaultScope(thread: SourceThread): MemoryScopeKind {
   return thread.visibility === 'direct' ? 'thread' : 'project';
 }
 
+function memoryActorForMessage(thread: SourceThread, actorId: string): string {
+  return actorId.startsWith('operator:')
+    ? actorId
+    : `${thread.platform}:${actorId || 'unknown'}`;
+}
+
 function formatMemoryScopeLabel(scope: MemoryScopeKind): string {
   return `${scope} memory`;
 }
@@ -195,7 +202,7 @@ function agentRunEventSummary(event: AgentRunEvent): {
 
 export class OpenTagWorkerHost {
   readonly deliveryStore: DeliveryStore;
-  readonly memoryStore: ScopedFileMemoryStore;
+  readonly memoryStore: StateMemoryStore;
   readonly routineStore: FileRoutineStore;
   private readonly config: RuntimeHostConfig;
   readonly threadConfigStore: FileThreadConfigStore;
@@ -228,14 +235,15 @@ export class OpenTagWorkerHost {
               'access',
               'workspace-access.json',
             ),
+            legacyMemoryDir: path.join(config.dataDir, 'memory'),
           })
         : undefined;
     this.deliveryStore =
       this.sqliteStorage?.deliveryStore ??
       new FileDeliveryStore(path.join(config.dataDir, 'delivery'));
-    this.memoryStore = new ScopedFileMemoryStore(
-      path.join(config.dataDir, 'memory'),
-    );
+    this.memoryStore =
+      this.sqliteStorage?.memoryStore ??
+      new ScopedFileMemoryStore(path.join(config.dataDir, 'memory'));
     this.routineStore = new FileRoutineStore(
       path.join(config.dataDir, 'routines'),
     );
@@ -275,6 +283,7 @@ export class OpenTagWorkerHost {
       deliveryImported: boolean;
       pairingImported: boolean;
       accessImported: boolean;
+      memoryImported: boolean;
     };
   } {
     return {
@@ -482,6 +491,11 @@ export class OpenTagWorkerHost {
         const commandResult = await this.applyMemoryCommand({
           command: memoryCommand,
           thread: initialRun.thread,
+          actorId: memoryActorForMessage(
+            initialRun.thread,
+            initialRun.message.actor.id,
+          ),
+          source: `${initialRun.thread.platform}-command`,
         });
         await this.deliveryStore.appendAgentRunEvent(runId, 'memory_command', {
           message: String(commandResult.summary),
@@ -593,6 +607,8 @@ export class OpenTagWorkerHost {
   private async applyMemoryCommand(input: {
     command: ParsedMemoryCommand;
     thread: SourceThread;
+    actorId?: string;
+    source?: string;
   }): Promise<Record<string, unknown>> {
     const { workspace, project } = await this.memoryContextForThread(
       input.thread,
@@ -604,6 +620,8 @@ export class OpenTagWorkerHost {
         project,
         scope: input.command.scope,
         text: input.command.value,
+        actorId: input.actorId,
+        source: input.source,
       });
       return {
         summary: `Remembered in ${formatMemoryScopeLabel(input.command.scope)}.`,
@@ -621,6 +639,8 @@ export class OpenTagWorkerHost {
         project,
         scope: input.command.scope,
         selector: input.command.value,
+        actorId: input.actorId,
+        source: input.source,
       });
       return {
         summary: `Removed matching lines from ${formatMemoryScopeLabel(input.command.scope)}.`,

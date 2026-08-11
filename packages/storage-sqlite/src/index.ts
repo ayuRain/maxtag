@@ -22,11 +22,19 @@ import {
   type FileDeliveryState,
   type ThreadBinding,
 } from '@opentag/delivery';
+import {
+  StateMemoryStore,
+  createEmptyMemoryState,
+  normalizeMemoryState,
+  readLegacyMemoryState,
+  type MemoryState,
+} from '@opentag/memory';
 
 const SCHEMA_VERSION = 1;
 const DELIVERY_DOCUMENT = 'delivery';
 const PAIRING_DOCUMENT = 'pairing';
 const ACCESS_DOCUMENT = 'access';
+const MEMORY_DOCUMENT = 'memory';
 
 interface StateDocumentRow {
   schema_version: number;
@@ -37,6 +45,7 @@ export interface SqliteMigrationSummary {
   deliveryImported: boolean;
   pairingImported: boolean;
   accessImported: boolean;
+  memoryImported: boolean;
 }
 
 export interface SqliteOpenTagStoreOptions {
@@ -46,6 +55,7 @@ export interface SqliteOpenTagStoreOptions {
   legacyDeliveryFile?: string;
   legacyPairingFile?: string;
   legacyAccessFile?: string;
+  legacyMemoryDir?: string;
 }
 
 export interface AtomicPairingBindingInput extends ConsumePairingCodeInput {
@@ -150,6 +160,14 @@ class SqliteStateBackend {
     );
   }
 
+  readMemory(): MemoryState {
+    return this.readDocument(
+      MEMORY_DOCUMENT,
+      normalizeMemoryState,
+      createEmptyMemoryState,
+    );
+  }
+
   mutateDelivery<T>(operation: (state: FileDeliveryState) => T): T {
     return this.immediateTransaction(() => {
       const state = this.readDelivery();
@@ -178,6 +196,15 @@ class SqliteStateBackend {
     });
   }
 
+  mutateMemory<T>(operation: (state: MemoryState) => T): T {
+    return this.immediateTransaction(() => {
+      const state = this.readMemory();
+      const result = operation(state);
+      this.writeDocument(MEMORY_DOCUMENT, state);
+      return result;
+    });
+  }
+
   mutatePairingAndDelivery<T>(
     operation: (pairing: PairingState, delivery: FileDeliveryState) => T,
   ): T {
@@ -199,6 +226,7 @@ class SqliteStateBackend {
       let deliveryImported = false;
       let pairingImported = false;
       let accessImported = false;
+      let memoryImported = false;
       if (!this.hasDocument(DELIVERY_DOCUMENT)) {
         const legacy = readLegacyState(
           options.legacyDeliveryFile,
@@ -226,8 +254,20 @@ class SqliteStateBackend {
         accessImported = legacy.imported;
         this.writeDocument(ACCESS_DOCUMENT, legacy.state);
       }
+      if (!this.hasDocument(MEMORY_DOCUMENT)) {
+        const legacy = options.legacyMemoryDir
+          ? readLegacyMemoryState(options.legacyMemoryDir)
+          : { state: createEmptyMemoryState(), imported: false };
+        memoryImported = legacy.imported;
+        this.writeDocument(MEMORY_DOCUMENT, legacy.state);
+      }
       this.database.pragma(`user_version = ${SCHEMA_VERSION}`);
-      return { deliveryImported, pairingImported, accessImported };
+      return {
+        deliveryImported,
+        pairingImported,
+        accessImported,
+        memoryImported,
+      };
     });
   }
 
@@ -327,10 +367,27 @@ class SqliteWorkspaceAccessStore extends FileWorkspaceAccessStore {
   }
 }
 
+class SqliteMemoryStore extends StateMemoryStore {
+  constructor(private readonly backend: SqliteStateBackend) {
+    super();
+  }
+
+  protected override async readState(): Promise<MemoryState> {
+    return this.backend.readMemory();
+  }
+
+  protected override async mutate<T>(
+    operation: (state: MemoryState) => T,
+  ): Promise<T> {
+    return this.backend.mutateMemory(operation);
+  }
+}
+
 export class SqliteOpenTagStore {
   readonly deliveryStore: SqliteDeliveryStore;
   readonly pairingStore: SqlitePairingStore;
   readonly accessStore: SqliteWorkspaceAccessStore;
+  readonly memoryStore: SqliteMemoryStore;
   readonly migration: SqliteMigrationSummary;
   readonly databasePath: string;
   private readonly backend: SqliteStateBackend;
@@ -345,6 +402,7 @@ export class SqliteOpenTagStore {
       options.pairingTtlMs,
     );
     this.accessStore = new SqliteWorkspaceAccessStore(this.backend);
+    this.memoryStore = new SqliteMemoryStore(this.backend);
   }
 
   async consumePairingAndConfigureBinding(

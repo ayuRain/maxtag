@@ -64,6 +64,7 @@ test('SQLite storage imports existing file state once and preserves it', async (
   const fileDelivery = new FileDeliveryStore(deliveryDir);
   const filePairing = new FilePairingStore(pairingDir, { ttlMs: 600_000 });
   const accessDir = path.join(root, 'access');
+  const memoryDir = path.join(root, 'memory');
   const fileAccess = new FileWorkspaceAccessStore(accessDir);
   await fileDelivery.configureThreadBinding({
     platform: 'lark',
@@ -89,6 +90,22 @@ test('SQLite storage imports existing file state once and preserves it', async (
     role: 'owner',
     identities: [{ platform: 'lark', externalId: 'ou-legacy-owner' }],
   });
+  await fs.mkdir(
+    path.join(memoryDir, 'workspaces', 'dev-workspace', 'projects', 'legacy-project'),
+    { recursive: true },
+  );
+  await fs.writeFile(
+    path.join(
+      memoryDir,
+      'workspaces',
+      'dev-workspace',
+      'projects',
+      'legacy-project',
+      'memory.md',
+    ),
+    '- legacy project memory\n',
+    'utf8',
+  );
 
   const databasePath = path.join(root, 'opentag.sqlite');
   const sqlite = new SqliteOpenTagStore({
@@ -97,16 +114,40 @@ test('SQLite storage imports existing file state once and preserves it', async (
     legacyDeliveryFile: path.join(deliveryDir, 'delivery-state.json'),
     legacyPairingFile: path.join(pairingDir, 'pairing-state.json'),
     legacyAccessFile: path.join(accessDir, 'workspace-access.json'),
+    legacyMemoryDir: memoryDir,
   });
   assert.deepEqual(sqlite.migration, {
     deliveryImported: true,
     pairingImported: true,
     accessImported: true,
+    memoryImported: true,
   });
   assert.equal((await sqlite.deliveryStore.listThreadBindings()).length, 1);
   assert.equal((await sqlite.deliveryStore.listOutbox()).length, 1);
   assert.equal((await sqlite.pairingStore.listInvitations()).length, 1);
   assert.equal((await sqlite.accessStore.snapshot('dev-workspace')).members.length, 1);
+  const memoryQuery = {
+    thread: {
+      id: 'lark:legacy-channel',
+      platform: 'lark',
+      externalId: 'legacy-channel',
+      workspaceId: 'dev-workspace',
+      projectId: 'legacy-project',
+      visibility: 'public',
+    },
+  };
+  assert.match(
+    (await sqlite.memoryStore.loadMemory({ ...memoryQuery, scopes: ['project'] }))
+      .scopes[0].content,
+    /legacy project memory/,
+  );
+  assert.equal(
+    (await sqlite.memoryStore.getMemoryHistory({
+      ...memoryQuery,
+      scope: 'project',
+    })).revisions[0].action,
+    'import',
+  );
 
   const paired = await sqlite.consumePairingAndConfigureBinding({
     platform: 'lark',
@@ -125,11 +166,13 @@ test('SQLite storage imports existing file state once and preserves it', async (
     legacyDeliveryFile: path.join(deliveryDir, 'delivery-state.json'),
     legacyPairingFile: path.join(pairingDir, 'pairing-state.json'),
     legacyAccessFile: path.join(accessDir, 'workspace-access.json'),
+    legacyMemoryDir: memoryDir,
   });
   assert.deepEqual(reopened.migration, {
     deliveryImported: false,
     pairingImported: false,
     accessImported: false,
+    memoryImported: false,
   });
   assert.equal(
     (await reopened.deliveryStore.getThreadBinding('lark', 'sqlite-channel'))
@@ -143,6 +186,15 @@ test('SQLite storage imports existing file state once and preserves it', async (
   assert.equal(
     (await reopened.accessStore.snapshot('dev-workspace')).members[0].displayName,
     'Legacy owner',
+  );
+  assert.match(
+    (
+      await reopened.memoryStore.loadMemory({
+        ...memoryQuery,
+        scopes: ['project'],
+      })
+    ).scopes[0].content,
+    /legacy project memory/,
   );
 });
 
@@ -221,5 +273,38 @@ test(
       (await store.deliveryStore.listOutbox({ status: 'pending' })).length,
       1,
     );
+
+    const memoryThread = {
+      id: 'telegram:shared-topic',
+      platform: 'telegram',
+      externalId: 'shared-topic',
+      workspaceId: 'workspace-race',
+      projectId: 'project-race',
+      visibility: 'public',
+    };
+    await runContendingWorkers(databasePath, 'remember', [
+      {
+        thread: memoryThread,
+        scope: 'project',
+        text: 'memory from worker A',
+        actorId: 'telegram:actor-a',
+        source: 'telegram-command',
+      },
+      {
+        thread: memoryThread,
+        scope: 'project',
+        text: 'memory from worker B',
+        actorId: 'telegram:actor-b',
+        source: 'telegram-command',
+      },
+    ]);
+    const history = await store.memoryStore.getMemoryHistory({
+      thread: memoryThread,
+      scope: 'project',
+    });
+    assert.equal(history.document.version, 2);
+    assert.equal(history.revisions.length, 2);
+    assert.match(history.document.content, /memory from worker A/);
+    assert.match(history.document.content, /memory from worker B/);
   },
 );

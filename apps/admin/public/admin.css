@@ -1514,6 +1514,17 @@ pre {
   color: var(--ink);
 }
 
+.memory-current-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.memory-current-actions > span {
+  color: var(--muted);
+  font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
 .memory-editor {
   display: grid;
   align-content: start;
@@ -1522,6 +1533,62 @@ pre {
 
 .memory-actions {
   justify-content: space-between;
+}
+
+.memory-history {
+  border-top: 1px solid var(--line);
+  padding: 18px 22px 0;
+}
+
+.memory-history-list {
+  margin: 12px -22px 0;
+}
+
+.memory-revision-row {
+  min-width: 0;
+  min-height: 58px;
+  border-top: 1px solid var(--line);
+  padding: 10px 22px;
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.memory-revision-version {
+  display: grid;
+  gap: 2px;
+}
+
+.memory-revision-version strong {
+  font-size: 12px;
+}
+
+.memory-revision-version span,
+.memory-revision-detail span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.memory-revision-detail {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.memory-revision-detail strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-revision-row .secondary-button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 10px;
 }
 
 .scope-map {
@@ -1815,6 +1882,14 @@ pre {
     border-bottom: 1px solid var(--line);
   }
 
+  .memory-layout {
+    min-height: 0;
+  }
+
+  .memory-current pre {
+    min-height: 140px;
+  }
+
   .access-pane:first-child {
     border-right: 0;
     border-bottom: 1px solid var(--line);
@@ -1984,6 +2059,12 @@ pre {
   .scope-map,
   .test-result {
     grid-template-columns: 1fr;
+  }
+
+  .memory-revision-row {
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    gap: 8px;
+    padding-inline: 14px;
   }
 
   .access-member-form,
