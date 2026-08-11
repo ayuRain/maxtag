@@ -6,6 +6,10 @@ export type TurnDeliveryStatus = 'queued' | 'accepted' | 'completed' | 'failed';
 
 export type ThreadActivationMode = 'mention' | 'always';
 
+export type ThreadBindingScope = 'thread' | 'channel';
+
+export type ThreadBindingSource = 'observed' | 'configured';
+
 export type InboundEventStatus =
   | 'received'
   | 'processed'
@@ -78,6 +82,9 @@ export interface ThreadBinding {
   id: string;
   platform: PlatformKind;
   externalId: string;
+  scope?: ThreadBindingScope;
+  source?: ThreadBindingSource;
+  channelId?: string;
   workspaceId: string;
   projectId: string;
   title?: string;
@@ -132,6 +139,20 @@ export interface UpsertThreadBindingInput {
   projectId: string;
   activationMode?: ThreadActivationMode;
   requireMention?: boolean;
+}
+
+export interface ConfigureThreadBindingInput {
+  platform: PlatformKind;
+  externalId: string;
+  workspaceId: string;
+  projectId: string;
+  scope?: ThreadBindingScope;
+  source?: ThreadBindingSource;
+  channelId?: string;
+  title?: string;
+  activationMode?: ThreadActivationMode;
+  requireMention?: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 export interface DeliverySummary {

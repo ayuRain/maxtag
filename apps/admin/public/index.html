@@ -35,6 +35,34 @@
 
         <div class="section-label">Memory</div>
         <div class="scope-list" id="memory-scopes"></div>
+
+        <div class="section-label">Bindings</div>
+        <form class="binding-form" id="binding-form">
+          <label class="field compact">
+            <span>Lark chat</span>
+            <input id="binding-external-id" value="oc-smoke-project" spellcheck="false" />
+          </label>
+          <label class="field compact">
+            <span>Workspace</span>
+            <input id="binding-workspace-id" value="dev-workspace" spellcheck="false" />
+          </label>
+          <label class="field compact">
+            <span>Project</span>
+            <input id="binding-project-id" value="opentag" spellcheck="false" />
+          </label>
+          <div class="binding-actions">
+            <select id="binding-activation-mode">
+              <option value="mention">mention</option>
+              <option value="always">always</option>
+            </select>
+            <label class="check-field">
+              <input id="binding-require-mention" type="checkbox" checked />
+              <span>mention</span>
+            </label>
+            <button id="save-binding" type="submit">Save</button>
+          </div>
+        </form>
+        <div class="binding-list" id="bindings"></div>
       </section>
 
       <section class="run-panel">

@@ -171,25 +171,43 @@ h2 {
   display: block;
 }
 
+.field.compact {
+  margin-top: 10px;
+}
+
 .field span {
   display: block;
   margin-bottom: 8px;
 }
 
-textarea {
+textarea,
+input,
+select {
   width: 100%;
-  min-height: 180px;
-  resize: vertical;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
   color: var(--ink);
-  padding: 13px;
   outline: none;
+}
+
+textarea {
+  min-height: 180px;
+  resize: vertical;
+  padding: 13px;
   font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-textarea:focus {
+input,
+select {
+  height: 34px;
+  padding: 0 10px;
+  font: 13px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+textarea:focus,
+input:focus,
+select:focus {
   border-color: rgba(36, 87, 197, 0.7);
   box-shadow: 0 0 0 3px rgba(36, 87, 197, 0.1);
 }
@@ -208,14 +226,16 @@ textarea:focus {
 .client-list,
 .scope-list,
 .parity-list,
-.delivery-list {
+.delivery-list,
+.binding-list {
   display: grid;
 }
 
 .client-row,
 .scope-row,
 .parity-row,
-.delivery-row {
+.delivery-row,
+.binding-row {
   display: grid;
   align-items: center;
   gap: 12px;
@@ -282,6 +302,37 @@ textarea:focus {
   padding: 8px 0;
 }
 
+.binding-row {
+  grid-template-columns: minmax(88px, 0.8fr) minmax(88px, 0.8fr) 84px;
+}
+
+.binding-form {
+  display: grid;
+  gap: 0;
+}
+
+.binding-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.check-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.check-field input {
+  width: 15px;
+  height: 15px;
+}
+
 .row-main {
   font-weight: 650;
   overflow-wrap: anywhere;
@@ -325,8 +376,13 @@ textarea:focus {
 .state.pending,
 .state.sending,
 .state.queued,
-.state.accepted {
+.state.accepted,
+.state.mention {
   color: var(--amber);
+}
+
+.state.always {
+  color: var(--green);
 }
 
 .state.failed {
@@ -472,9 +528,15 @@ pre {
   .client-row,
   .scope-row,
   .parity-row,
-  .delivery-row {
+  .delivery-row,
+  .binding-row {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+
+  .binding-actions {
+    grid-template-columns: 1fr;
+    justify-items: start;
   }
 
   .metric-strip {

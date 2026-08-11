@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {
   ClaimOutboundOptions,
+  ConfigureThreadBindingInput,
   CreateOutboundInput,
   DeliverySummary,
   FileDeliveryState,
@@ -13,6 +14,7 @@ import type {
   RecordInboundEventInput,
   RecordInboundEventResult,
   ThreadBinding,
+  ThreadBindingScope,
   TurnDeliveryRecord,
   TurnDeliveryStatus,
   UpsertThreadBindingInput,
@@ -51,6 +53,13 @@ function targetIdFor(input: CreateOutboundInput): string {
 
 function bindingId(platform: string, externalId: string): string {
   return `${platform}:${externalId}`.replace(/[^a-zA-Z0-9_.:-]/g, '_');
+}
+
+function copyBinding(binding: ThreadBinding): ThreadBinding {
+  return {
+    ...binding,
+    metadata: binding.metadata ? { ...binding.metadata } : undefined,
+  };
 }
 
 function inboundEventId(platform: string, externalId: string): string {
@@ -313,42 +322,77 @@ export class FileDeliveryStore {
       .slice(0, limit);
   }
 
+  async configureThreadBinding(
+    input: ConfigureThreadBindingInput,
+  ): Promise<ThreadBinding> {
+    return this.mutate((state) =>
+      this.upsertBindingInState(state, {
+        ...input,
+        scope: input.scope ?? 'channel',
+        source: input.source ?? 'configured',
+      }),
+    );
+  }
+
   async upsertThreadBinding(
     input: UpsertThreadBindingInput,
   ): Promise<ThreadBinding> {
-    return this.mutate((state) => {
-      const timestamp = now();
-      const id = bindingId(input.thread.platform, input.thread.externalId);
-      const existing = state.threadBindings.find((binding) => binding.id === id);
-      if (existing) {
-        existing.workspaceId = input.workspaceId;
-        existing.projectId = input.projectId;
-        existing.title = input.thread.title;
-        existing.activationMode = input.activationMode ?? existing.activationMode;
-        existing.requireMention =
-          input.requireMention ?? existing.requireMention;
-        existing.updatedAt = timestamp;
-        existing.metadata = input.thread.metadata;
-        return existing;
-      }
-
-      const binding: ThreadBinding = {
-        id,
+    return this.mutate((state) =>
+      this.upsertBindingInState(state, {
         platform: input.thread.platform,
         externalId: input.thread.externalId,
+        scope: 'thread',
+        source: 'observed',
+        channelId: input.thread.channelId,
         workspaceId: input.workspaceId,
         projectId: input.projectId,
         title: input.thread.title,
         activationMode: input.activationMode ?? 'mention',
         requireMention:
           input.requireMention ?? input.thread.visibility !== 'direct',
-        createdAt: timestamp,
-        updatedAt: timestamp,
         metadata: input.thread.metadata,
-      };
-      state.threadBindings.push(binding);
-      return binding;
-    });
+      }),
+    );
+  }
+
+  async getThreadBinding(
+    platform: string,
+    externalId: string,
+  ): Promise<ThreadBinding | undefined> {
+    const state = await this.readState();
+    const binding = state.threadBindings.find(
+      (item) => item.id === bindingId(platform, externalId),
+    );
+    return binding ? copyBinding(binding) : undefined;
+  }
+
+  async getThreadBindingForThread(
+    thread: { platform: string; externalId: string; channelId?: string },
+  ): Promise<ThreadBinding | undefined> {
+    const state = await this.readState();
+    const exactId = bindingId(thread.platform, thread.externalId);
+    const channelId = thread.channelId
+      ? bindingId(thread.platform, thread.channelId)
+      : undefined;
+    const exactConfigured = state.threadBindings.find(
+      (item) => item.id === exactId && item.source === 'configured',
+    );
+    if (exactConfigured) return copyBinding(exactConfigured);
+    const exactObserved = state.threadBindings.find((item) => item.id === exactId);
+    if (!thread.channelId) {
+      return exactObserved ? copyBinding(exactObserved) : undefined;
+    }
+    const channelConfigured = state.threadBindings.find(
+      (item) =>
+        item.source === 'configured' &&
+        (item.id === channelId || item.channelId === thread.channelId),
+    );
+    if (channelConfigured) return copyBinding(channelConfigured);
+    if (exactObserved) return copyBinding(exactObserved);
+    const channelObserved = state.threadBindings.find(
+      (item) => item.id === channelId || item.channelId === thread.channelId,
+    );
+    return channelObserved ? copyBinding(channelObserved) : undefined;
   }
 
   async recordInboundEvent(
@@ -399,8 +443,14 @@ export class FileDeliveryStore {
   async markInboundEventIgnored(
     id: string,
     reason: string,
+    input?: {
+      workspaceId?: string;
+      projectId?: string;
+      threadId?: string;
+      messageId?: string;
+    },
   ): Promise<InboundEventRecord | undefined> {
-    return this.updateInboundEvent(id, 'ignored', { reason });
+    return this.updateInboundEvent(id, 'ignored', { ...input, reason });
   }
 
   async markInboundEventRejected(
@@ -449,6 +499,51 @@ export class FileDeliveryStore {
     }
     summary.bindings = state.threadBindings.length;
     return summary;
+  }
+
+  private upsertBindingInState(
+    state: FileDeliveryState,
+    input: ConfigureThreadBindingInput & { scope: ThreadBindingScope },
+  ): ThreadBinding {
+    const timestamp = now();
+    const id = bindingId(input.platform, input.externalId);
+    const existing = state.threadBindings.find((binding) => binding.id === id);
+    if (existing) {
+      existing.scope = input.scope ?? existing.scope;
+      existing.source =
+        existing.source === 'configured' && input.source === 'observed'
+          ? existing.source
+          : input.source ?? existing.source;
+      existing.channelId = input.channelId ?? existing.channelId;
+      existing.workspaceId = input.workspaceId;
+      existing.projectId = input.projectId;
+      existing.title = input.title ?? existing.title;
+      existing.activationMode = input.activationMode ?? existing.activationMode;
+      existing.requireMention =
+        input.requireMention ?? existing.requireMention;
+      existing.updatedAt = timestamp;
+      existing.metadata = input.metadata ?? existing.metadata;
+      return copyBinding(existing);
+    }
+
+    const binding: ThreadBinding = {
+      id,
+      platform: input.platform,
+      externalId: input.externalId,
+      scope: input.scope,
+      source: input.source ?? 'observed',
+      channelId: input.channelId,
+      workspaceId: input.workspaceId,
+      projectId: input.projectId,
+      title: input.title,
+      activationMode: input.activationMode ?? 'mention',
+      requireMention: input.requireMention ?? true,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      metadata: input.metadata,
+    };
+    state.threadBindings.push(binding);
+    return copyBinding(binding);
   }
 
   private async updateInboundEvent(

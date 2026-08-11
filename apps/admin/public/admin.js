@@ -9,6 +9,14 @@ const memoryScopes = document.querySelector('#memory-scopes');
 const parity = document.querySelector('#parity');
 const routeLine = document.querySelector('#route-line');
 const delivery = document.querySelector('#delivery');
+const bindings = document.querySelector('#bindings');
+const bindingForm = document.querySelector('#binding-form');
+const bindingExternalId = document.querySelector('#binding-external-id');
+const bindingWorkspaceId = document.querySelector('#binding-workspace-id');
+const bindingProjectId = document.querySelector('#binding-project-id');
+const bindingActivationMode = document.querySelector('#binding-activation-mode');
+const bindingRequireMention = document.querySelector('#binding-require-mention');
+const saveBindingButton = document.querySelector('#save-binding');
 
 async function getJson(url, options) {
   const response = await fetch(url, options);
@@ -194,6 +202,17 @@ function renderDelivery(data) {
   delivery.append(outboundList, inboundList);
 }
 
+function renderBindings(items) {
+  renderRows(bindings, items, (item) => {
+    const row = document.createElement('div');
+    row.className = 'binding-row';
+    appendText(row, 'row-main', item.externalId);
+    appendText(row, 'row-detail', `${item.workspaceId} / ${item.projectId}`);
+    appendState(row, item.activationMode || 'mention');
+    return row;
+  });
+}
+
 async function refreshHealth() {
   try {
     await getJson('/health');
@@ -221,6 +240,44 @@ async function refreshDelivery() {
     renderDelivery(await getJson('/v1/deliveries?limit=4'));
   } catch (error) {
     delivery.textContent = error.message;
+  }
+}
+
+async function refreshBindings() {
+  try {
+    const data = await getJson('/v1/bindings?limit=8');
+    renderBindings(data.bindings || []);
+  } catch (error) {
+    bindings.textContent = error.message;
+  }
+}
+
+async function saveBinding(event) {
+  event.preventDefault();
+  saveBindingButton.disabled = true;
+  saveBindingButton.textContent = 'Saving';
+  try {
+    await getJson('/v1/bindings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        platform: 'lark',
+        externalId: bindingExternalId.value,
+        channelId: bindingExternalId.value,
+        workspaceId: bindingWorkspaceId.value,
+        projectId: bindingProjectId.value,
+        scope: 'channel',
+        activationMode: bindingActivationMode.value,
+        requireMention: bindingRequireMention.checked,
+      }),
+    });
+    await refreshBindings();
+    await refreshDelivery();
+  } catch (error) {
+    routeLine.textContent = error.message;
+  } finally {
+    saveBindingButton.disabled = false;
+    saveBindingButton.textContent = 'Save';
   }
 }
 
@@ -256,6 +313,11 @@ runButton.addEventListener('click', () => {
   void runDryRun();
 });
 
+bindingForm.addEventListener('submit', (event) => {
+  void saveBinding(event);
+});
+
 await refreshHealth();
 await refreshCapabilities();
 await refreshDelivery();
+await refreshBindings();

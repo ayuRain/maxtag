@@ -7,8 +7,8 @@
 - Executor abstraction for Codex and Claude.
 - Progress card model that can render to Lark today and Slack/Telegram later.
 - Global/workspace/project/thread memory scopes.
-- File-backed outbox, inbound event ledger, turn delivery tracker, and thread
-  bindings.
+- File-backed outbox, inbound event ledger, turn delivery tracker, and
+  configured channel/project bindings.
 - Memory and GitHub tool contracts.
 
 ## Phase 1: Lark Tag MVP
@@ -16,7 +16,8 @@
 - Verify Lark callbacks with token/timestamp checks; add event decrypt before
   production encrypted callbacks.
 - Normalize group messages, mentions, files, images, and topic/thread metadata.
-- Create or bind `SourceThread` records from Lark group/topic events.
+- Create or bind `SourceThread` records from Lark group/topic events, with
+  channel-level project assignment for group memory.
 - Resolve workspace and project identity before every run.
 - Render live progress cards with checklist items, stop action, and final state.
 - Short-circuit duplicate Lark events by `event_id` or message id.

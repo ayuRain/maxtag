@@ -12,6 +12,10 @@ import {
   FileDeliveryStore,
   TrackedLarkTransport,
   runDeliveryWorkerPass,
+  type ConfigureThreadBindingInput,
+  type ThreadActivationMode,
+  type ThreadBinding,
+  type ThreadBindingScope,
 } from '@opentag/delivery';
 import { createCodexExecutor } from '@opentag/executor-codex';
 import { ScopedFileMemoryStore } from '@opentag/memory';
@@ -112,7 +116,13 @@ const capabilityManifest = {
     {
       capability: 'Scoped memory',
       agentdock: 'session memory with async write queue',
-      opentag: 'global/workspace/project/thread file scopes',
+      opentag: 'global/workspace/project/thread file scopes with channel bindings',
+      status: 'partial',
+    },
+    {
+      capability: 'Channel binding',
+      agentdock: 'chat/session routing and activation controls',
+      opentag: 'admin-configured project route and activation mode',
       status: 'partial',
     },
     {
@@ -253,6 +263,123 @@ function coerceDevMessage(body: Record<string, unknown>): {
   };
 }
 
+function stringValue(
+  body: Record<string, unknown>,
+  key: string,
+  fallback?: string,
+): string | undefined {
+  const value = body[key];
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
+
+function booleanValue(
+  body: Record<string, unknown>,
+  key: string,
+  fallback?: boolean,
+): boolean | undefined {
+  const value = body[key];
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return fallback;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return fallback;
+}
+
+function activationModeValue(
+  body: Record<string, unknown>,
+): ThreadActivationMode | undefined {
+  const value = stringValue(body, 'activationMode');
+  return value === 'always' || value === 'mention' ? value : undefined;
+}
+
+function bindingScopeValue(
+  body: Record<string, unknown>,
+): ThreadBindingScope | undefined {
+  const value = stringValue(body, 'scope');
+  return value === 'thread' || value === 'channel' ? value : undefined;
+}
+
+function coerceBindingInput(
+  body: Record<string, unknown>,
+): ConfigureThreadBindingInput | { error: string } {
+  const platform = stringValue(body, 'platform', 'lark');
+  const externalId = stringValue(body, 'externalId');
+  const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+  const projectId = stringValue(body, 'projectId');
+  if (!platform || !externalId || !workspaceId || !projectId) {
+    return { error: 'platform_externalId_workspaceId_projectId_required' };
+  }
+  const scope = bindingScopeValue(body) ?? 'channel';
+  return {
+    platform,
+    externalId,
+    workspaceId,
+    projectId,
+    scope,
+    source: 'configured',
+    channelId: stringValue(body, 'channelId', scope === 'channel' ? externalId : undefined),
+    title: stringValue(body, 'title'),
+    activationMode: activationModeValue(body) ?? 'mention',
+    requireMention: booleanValue(body, 'requireMention', scope !== 'thread'),
+    metadata: {
+      configuredVia: 'admin-api',
+    },
+  };
+}
+
+function applyBindingToThread(
+  thread: SourceThread,
+  binding: ThreadBinding,
+): SourceThread {
+  return {
+    ...thread,
+    workspaceId: binding.workspaceId,
+    projectId: binding.projectId,
+    title: binding.title || thread.title,
+    metadata: {
+      ...thread.metadata,
+      bindingId: binding.id,
+      bindingScope: binding.scope,
+      bindingSource: binding.source,
+    },
+  };
+}
+
+async function routeMessage(input: {
+  thread: SourceThread;
+  message: SourceMessage;
+}): Promise<{
+  thread: SourceThread;
+  message: SourceMessage;
+  binding?: ThreadBinding;
+}> {
+  const binding = await deliveryStore.getThreadBindingForThread(input.thread);
+  if (!binding) return input;
+  const thread = applyBindingToThread(input.thread, binding);
+  return {
+    thread,
+    message: {
+      ...input.message,
+      threadId: thread.id,
+    },
+    binding,
+  };
+}
+
+function shouldHandleMessage(input: {
+  thread: SourceThread;
+  message: SourceMessage;
+  binding?: ThreadBinding;
+}): boolean {
+  if (input.thread.visibility === 'direct') return true;
+  if (input.binding?.activationMode === 'always') return true;
+  const requireMention =
+    input.binding?.requireMention ?? Boolean(botOpenId);
+  return !requireMention || input.message.mentionsAgent;
+}
+
 async function runDryMessage(input: {
   thread: SourceThread;
   message: SourceMessage;
@@ -263,24 +390,28 @@ async function runDryMessage(input: {
   const trackedTransport = new TrackedLarkTransport(memoryTransport, deliveryStore);
   const runtime = createRuntimeForDryRun(trackedTransport);
   const runId = randomUUID();
-  const binding = await deliveryStore.upsertThreadBinding({
-    thread: input.thread,
-    workspaceId: input.thread.workspaceId ?? 'default-workspace',
-    projectId: input.thread.projectId ?? 'general',
+  const routed = await routeMessage(input);
+  const observedBinding = await deliveryStore.upsertThreadBinding({
+    thread: routed.thread,
+    workspaceId: routed.thread.workspaceId ?? 'default-workspace',
+    projectId: routed.thread.projectId ?? 'general',
+    activationMode: routed.binding?.activationMode,
+    requireMention: routed.binding?.requireMention,
   });
+  const routeBinding = routed.binding ?? observedBinding;
   let result;
   try {
     result = await runtime.handleMessage({
       runId,
-      thread: input.thread,
-      message: input.message,
+      thread: routed.thread,
+      message: routed.message,
     });
     if (options?.inboundEventId) {
       await deliveryStore.markInboundEventProcessed(options.inboundEventId, {
-        workspaceId: binding.workspaceId,
-        projectId: binding.projectId,
-        threadId: input.thread.id,
-        messageId: input.message.id,
+        workspaceId: observedBinding.workspaceId,
+        projectId: observedBinding.projectId,
+        threadId: routed.thread.id,
+        messageId: routed.message.id,
       });
     }
   } catch (error) {
@@ -296,10 +427,14 @@ async function runDryMessage(input: {
   return {
     result,
     route: {
-      workspaceId: input.thread.workspaceId,
-      projectId: input.thread.projectId,
-      threadId: input.thread.id,
-      platform: input.thread.platform,
+      workspaceId: routed.thread.workspaceId,
+      projectId: routed.thread.projectId,
+      threadId: routed.thread.id,
+      platform: routed.thread.platform,
+      bindingId: routeBinding.id,
+      bindingScope: routeBinding.scope,
+      activationMode: routeBinding.activationMode,
+      observedBindingId: observedBinding.id,
     },
     delivery,
     larkDryRun: {
@@ -341,6 +476,29 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/v1/deliveries') {
       const limit = Number(url.searchParams.get('limit') || 20);
       sendJson(response, 200, await deliverySnapshot(limit));
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/bindings') {
+      const limit = Number(url.searchParams.get('limit') || 20);
+      sendJson(response, 200, {
+        bindings: await deliveryStore.listThreadBindings(limit),
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/bindings') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const input = coerceBindingInput(body);
+      if ('error' in input) {
+        sendJson(response, 400, { error: input.error });
+        return;
+      }
+      const binding = await deliveryStore.configureThreadBinding(input);
+      sendJson(response, 200, {
+        binding,
+        delivery: await deliverySnapshot(20),
+      });
       return;
     }
 
@@ -447,12 +605,37 @@ const server = createServer(async (request, response) => {
         sendJson(response, 202, { accepted: false, reason: 'unsupported_lark_event' });
         return;
       }
+      const routed = await routeMessage(normalized);
+      if (!shouldHandleMessage(routed)) {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'mention_required',
+          {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            messageId: routed.message.id,
+          },
+        );
+        sendJson(response, 202, {
+          accepted: false,
+          reason: 'mention_required',
+          route: {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            platform: routed.thread.platform,
+            bindingId: routed.binding?.id,
+          },
+        });
+        return;
+      }
       sendJson(
         response,
         200,
         {
           accepted: true,
-          ...(await runDryMessage(normalized, {
+          ...(await runDryMessage(routed, {
             inboundEventId: inbound.record.id,
           })),
         },

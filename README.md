@@ -63,6 +63,8 @@ packages/ui-cards           Progress/checklist card models
 - Lark group `chat_id` maps into the project route, so one workspace bot can
   serve multiple group/project memories instead of collapsing into one global
   thread.
+- Channel/project bindings can be configured through the admin API and console,
+  including mention-only vs always-on activation.
 - The admin preview exposes client readiness, memory scopes, and AgentDock parity
   gaps.
 
