@@ -1474,6 +1474,18 @@ input:disabled {
   gap: 16px;
 }
 
+.activity-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.activity-status {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .segmented {
   display: inline-flex;
   align-items: center;
@@ -1592,6 +1604,63 @@ input:disabled {
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.run-controls {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.run-steer-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.run-steer-form input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+}
+
+.run-followups {
+  display: grid;
+  gap: 0;
+  margin: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.run-followups h3 {
+  margin: 12px 0 6px;
+  font-size: 10px;
+}
+
+.run-followup-row {
+  min-width: 0;
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.run-followup-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.run-followup-row strong {
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.run-followup-row small {
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .timeline-row {
@@ -2289,6 +2358,11 @@ pre {
     align-items: stretch;
     flex-direction: column;
     padding: 12px 0;
+  }
+
+  .activity-filter-group {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .toolbar-actions {

@@ -51,8 +51,13 @@ import {
   WorkflowCoordinatorService,
   type WorkflowCoordinatorTickResult,
 } from './workflow-coordinator.js';
+import {
+  createDurableSteeringProvider,
+  monitorDurableRunCancellation,
+} from './run-control.js';
 
 export * from './routine-scheduler.js';
+export * from './run-control.js';
 export * from './workflow-coordinator.js';
 
 export interface RuntimeHostLarkConfig {
@@ -106,6 +111,7 @@ export interface RuntimeHostConfig {
   routines?: RuntimeHostRoutineConfig;
   workflows?: RuntimeHostWorkflowConfig;
   storage?: RuntimeHostStorageConfig;
+  runControlPollMs?: number;
 }
 
 export interface AgentWorkerPassResult {
@@ -363,12 +369,15 @@ export class OpenTagWorkerHost {
       codex: {
         command: config.codexCommand || 'codex',
         model: config.codexModel,
+        steeringMode: 'next_turn',
       },
       claude: {
         command: config.claudeCommand || 'claude',
         model: config.claudeModel,
         maxBudgetUsd: config.claudeMaxBudgetUsd,
+        steeringMode: 'next_turn',
       },
+      runControlPollMs: this.config.runControlPollMs ?? 250,
     };
   }
 
@@ -379,13 +388,14 @@ export class OpenTagWorkerHost {
   }
 
   async deliverySnapshot(limit = 50): Promise<Record<string, unknown>> {
-    const [summary, outbox, turnDeliveries, bindings, inboundEvents] =
+    const [summary, outbox, turnDeliveries, bindings, inboundEvents, steering] =
       await Promise.all([
         this.deliveryStore.summarize(),
         this.deliveryStore.listOutbox({ limit }),
         this.deliveryStore.listTurnDeliveries({ limit }),
         this.deliveryStore.listThreadBindings(limit),
         this.deliveryStore.listInboundEvents({ limit }),
+        this.deliveryStore.listAgentRunSteering({ limit }),
       ]);
     return {
       summary,
@@ -393,6 +403,7 @@ export class OpenTagWorkerHost {
       turnDeliveries,
       bindings,
       inboundEvents,
+      steering,
     };
   }
 
@@ -605,12 +616,24 @@ export class OpenTagWorkerHost {
     const runtime = this.createRuntimeForPlatform(runPlatform.platform);
     const abortController = new AbortController();
     this.activeRuns.set(runId, abortController);
+    const stopCancellationMonitor = monitorDurableRunCancellation({
+      deliveryStore: this.deliveryStore,
+      runId,
+      abortController,
+      pollMs: this.config.runControlPollMs,
+    });
     try {
       const result = await runtime.handleMessage({
         runId,
         thread: initialRun.thread,
         message: initialRun.message,
         abortSignal: abortController.signal,
+        steering: createDurableSteeringProvider({
+          deliveryStore: this.deliveryStore,
+          runId,
+          workerId: this.workerId,
+          pollMs: this.config.runControlPollMs,
+        }),
         onEvent: async (event) => {
           await this.deliveryStore.appendAgentRunEvent(
             runId,
@@ -647,6 +670,7 @@ export class OpenTagWorkerHost {
       await this.markRunInboundFailed(initialRun, message);
       throw error;
     } finally {
+      stopCancellationMonitor();
       this.activeRuns.delete(runId);
     }
   }

@@ -91,6 +91,13 @@ packages/ui-cards           Progress/checklist card models
   selected run/thread/workspace/project scope.
 - Agent runs are recorded in the durable run ledger with status, timeline
   events, and cancel requests.
+- Authorized follow-ups in one active thread enter an atomic SQLite steering
+  mailbox instead of starting concurrent runs. Live-capable executors can claim
+  them in-place; the current one-shot Codex and Claude CLIs preserve order by
+  continuing each follow-up as the next durable turn.
+- `/stop`, `/cancel`, `stop`, and `停止任务` in an authorized thread cancel only
+  that thread's active run and queued follow-ups. A durable poll carries control
+  requests to an independently running worker process.
 - Agent execution can be enqueued into a durable run queue and claimed by an
   inline worker, with stale run recovery on startup and through the admin API.
 - Agent execution can also be claimed by the standalone `apps/worker` process
@@ -206,12 +213,31 @@ OPENTAG_SQLITE_BUSY_TIMEOUT_MS=5000
 The HTTP server, scheduler, and standalone workers can safely share this
 database. Outbox, run, routine, and workflow-node claims use immediate write transactions, and
 consuming a pairing code plus creating its channel binding commits atomically.
+Run creation and steering arbitration use the same transaction, so competing
+Lark, Telegram, or adapter events cannot create parallel work for one thread.
 Memory writes also use an immediate transaction, so independent processes
 cannot overwrite one another's revisions. On first startup, OpenTag imports
 existing `delivery-state.json`, `pairing-state.json`,
 `workspace-access.json`, `routine-state.json`, `workflow-state.json`, and scoped
 memory Markdown or `memory-state.json` when their SQLite documents do not yet exist. Later
 restarts use only the database.
+
+## Thread Steering
+
+The first authorized message creates a run. While that thread has a queued or
+running run, later messages are recorded as follow-ups against it. Executors
+advertise one of two modes:
+
+- `live`: the executor claims follow-ups through `AgentSteeringChannel` and
+  acknowledges them after incorporating the input.
+- `next_turn`: OpenTag creates a deterministic continuation only after the
+  current run reaches a terminal state.
+
+The inbox, claim, acknowledgement, continuation link, actor, and original
+inbound event remain in the run timeline. Operators can inspect or add a
+follow-up in **Activity**, call `POST /v1/runs/:id/steer`, or request scoped
+cancellation with `POST /v1/runs/:id/cancel`. Tune cross-process control latency
+with `OPENTAG_RUN_CONTROL_POLL_MS` (default `250`).
 
 Set `OPENTAG_STORAGE_DRIVER=file` only for legacy or isolated local operation.
 Project policy is still file-backed and remains on the production-storage
@@ -409,6 +435,11 @@ kills the full child process group on cancellation or timeout, bounds retained
 stdout/stderr, and filters service secrets such as Lark credentials from the CLI
 environment. Additional variables must be named explicitly through
 `OPENTAG_EXECUTOR_INHERIT_ENV`.
+
+Both local CLI adapters currently advertise `next_turn` steering because they
+run as bounded one-shot processes without a persistent provider session. The
+runtime contract and durable mailbox already support a future SDK/session
+executor advertising `live` without changing client ingress or storage.
 
 `deny-by-default` and `allow-all` network policy map onto the Codex workspace
 sandbox. Claude built-in web tools are enabled only for an `allow-all` project

@@ -688,11 +688,14 @@
 
         <section class="view" id="view-activity" data-view-panel="activity" hidden>
           <div class="activity-toolbar">
-            <div class="segmented" id="run-filter" role="group" aria-label="Run status">
-              <button class="active" type="button" data-status="">All</button>
-              <button type="button" data-status="running">Running</button>
-              <button type="button" data-status="completed">Completed</button>
-              <button type="button" data-status="failed">Failed</button>
+            <div class="activity-filter-group">
+              <div class="segmented" id="run-filter" role="group" aria-label="Run status">
+                <button class="active" type="button" data-status="">All</button>
+                <button type="button" data-status="running">Running</button>
+                <button type="button" data-status="completed">Completed</button>
+                <button type="button" data-status="failed">Failed</button>
+              </div>
+              <span class="activity-status" id="steering-count">0 follow-ups waiting</span>
             </div>
             <div class="toolbar-actions">
               <button class="secondary-button" id="worker-pass" type="button">Worker pass</button>

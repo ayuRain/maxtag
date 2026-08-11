@@ -223,3 +223,123 @@ test('runtime closes the progress surface when a configured executor is unavaila
   assert.equal(completed[0].summary, 'executor_not_available:missing');
   assert.equal(completed[0].checklist[0].status, 'failed');
 });
+
+test('runtime exposes a live steering channel to a capable executor', async () => {
+  const calls = [];
+  const thread = {
+    id: 'lark:live:root',
+    platform: 'lark',
+    externalId: 'live:root',
+    workspaceId: 'acme',
+    projectId: 'live',
+    visibility: 'public',
+  };
+  const followUp = {
+    id: 'steering-1',
+    targetRunId: 'run-live',
+    receivedAt: new Date().toISOString(),
+    thread,
+    message: {
+      id: 'message-follow-up',
+      threadId: thread.id,
+      platform: 'lark',
+      text: 'Check the database first.',
+      actor: { id: 'user-2' },
+    },
+  };
+  const runtime = new OpenTagRuntime({
+    platform: {
+      kind: 'lark',
+      capabilities: {
+        supportsThreads: true,
+        supportsCards: true,
+        supportsFiles: true,
+        supportsReactions: true,
+        supportsMentions: true,
+      },
+      createProgressSurface() {
+        return {
+          async create() {
+            return { surfaceId: 'surface-live' };
+          },
+          async update() {},
+          async complete() {},
+        };
+      },
+      async sendMessage() {},
+    },
+    executor: {
+      id: 'live',
+      label: 'Live executor',
+      steeringMode: 'live',
+      async run(request) {
+        assert.equal(request.steering.mode, 'live');
+        const input = await request.steering.receive({ waitMs: 10 });
+        calls.push(input.message.text);
+        await request.steering.acknowledge(input.id, 'Applied in place');
+        return { summary: 'Steered result', artifacts: [] };
+      },
+    },
+    memory: {
+      async loadThreadMemory() {
+        return '';
+      },
+      async remember() {},
+      async forget() {},
+    },
+    threadConfig: {
+      async getIdentity() {
+        return {
+          id: 'live-agent',
+          displayName: 'Live agent',
+          instructions: 'Handle live input.',
+          defaultExecutorId: 'live',
+        };
+      },
+      async getAccessBundle() {
+        return {
+          id: 'access-live',
+          threadId: thread.id,
+          grants: [],
+          networkPolicy: { mode: 'deny-by-default', allowedHosts: [] },
+        };
+      },
+    },
+  });
+
+  const result = await runtime.handleMessage({
+    runId: 'run-live',
+    thread,
+    message: {
+      id: 'message-live',
+      threadId: thread.id,
+      platform: 'lark',
+      text: 'Investigate the incident.',
+      actor: { id: 'user-1' },
+    },
+    steering: {
+      async open(mode) {
+        calls.push(`mode:${mode}`);
+        let delivered = false;
+        return {
+          mode,
+          async receive() {
+            if (delivered) return undefined;
+            delivered = true;
+            return followUp;
+          },
+          async acknowledge(id, detail) {
+            calls.push(`ack:${id}:${detail}`);
+          },
+        };
+      },
+    },
+  });
+
+  assert.equal(result.summary, 'Steered result');
+  assert.deepEqual(calls, [
+    'mode:live',
+    'Check the database first.',
+    'ack:steering-1:Applied in place',
+  ]);
+});

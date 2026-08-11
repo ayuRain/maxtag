@@ -1,4 +1,9 @@
-import type { PlatformKind, SourceMessage, SourceThread } from '@opentag/core';
+import type {
+  ExecutorSteeringMode,
+  PlatformKind,
+  SourceMessage,
+  SourceThread,
+} from '@opentag/core';
 
 export type OutboundStatus =
   | 'pending'
@@ -28,6 +33,14 @@ export type AgentRunStatus =
   | 'failed'
   | 'cancelled';
 
+export type AgentRunSteeringStatus =
+  | 'pending'
+  | 'claimed'
+  | 'scheduled'
+  | 'applied'
+  | 'failed'
+  | 'cancelled';
+
 export type AgentRunEventType =
   | 'created'
   | 'started'
@@ -39,6 +52,13 @@ export type AgentRunEventType =
   | 'failed'
   | 'cancel_requested'
   | 'cancelled'
+  | 'steering_mode'
+  | 'steering_queued'
+  | 'steering_claimed'
+  | 'steering_scheduled'
+  | 'steering_applied'
+  | 'steering_failed'
+  | 'steering_cancelled'
   | 'memory_command'
   | 'routine_command';
 
@@ -175,6 +195,76 @@ export interface CreateAgentRunInput {
   metadata?: Record<string, unknown>;
 }
 
+export interface CreateAgentRunOrSteerInput extends CreateAgentRunInput {
+  allowLiveSteering?: boolean;
+}
+
+export interface AgentRunSteeringRecord {
+  id: string;
+  sequence: number;
+  targetRunId: string;
+  status: AgentRunSteeringStatus;
+  mode?: ExecutorSteeringMode;
+  allowLive: boolean;
+  platform: PlatformKind;
+  thread: SourceThread;
+  message: SourceMessage;
+  threadId: string;
+  workspaceId?: string;
+  projectId?: string;
+  inboundEventId?: string;
+  bindingId?: string;
+  executorId?: string;
+  transportMode?: string;
+  continuationRunId?: string;
+  claimedBy?: string;
+  claimedAt?: string;
+  receivedAt: string;
+  scheduledAt?: string;
+  appliedAt?: string;
+  failedAt?: string;
+  cancelledAt?: string;
+  updatedAt: string;
+  lastError?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateAgentRunOrSteerResult {
+  disposition: 'created' | 'steered';
+  run: AgentRunRecord;
+  steering?: AgentRunSteeringRecord;
+}
+
+export interface EnqueueAgentRunSteeringInput {
+  targetRunId: string;
+  message: SourceMessage;
+  inboundEventId?: string;
+  bindingId?: string;
+  executorId?: string;
+  transportMode?: string;
+  allowLiveSteering?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ClaimAgentRunSteeringOptions {
+  workerId: string;
+  now?: Date;
+}
+
+export interface ListAgentRunSteeringOptions {
+  runId?: string;
+  workspaceId?: string;
+  projectId?: string;
+  threadId?: string;
+  status?: AgentRunSteeringStatus;
+  limit?: number;
+}
+
+export interface CancelThreadAgentRunsResult {
+  runs: AgentRunRecord[];
+  steering: AgentRunSteeringRecord[];
+}
+
 export interface ClaimAgentRunsOptions {
   limit?: number;
   workerId?: string;
@@ -303,15 +393,18 @@ export interface DeliverySummary {
   turnDeliveries: Record<TurnDeliveryStatus, number>;
   inboundEvents: Record<InboundEventStatus, number> & { duplicates: number };
   agentRuns: Record<AgentRunStatus, number>;
+  steering: Record<AgentRunSteeringStatus, number>;
   bindings: number;
 }
 
 export interface FileDeliveryState {
   nextSequence: number;
+  nextSteeringSequence: number;
   outbox: OutboundEnvelope[];
   turnDeliveries: TurnDeliveryRecord[];
   threadBindings: ThreadBinding[];
   inboundEvents: InboundEventRecord[];
   agentRuns: AgentRunRecord[];
   agentRunEvents: AgentRunTimelineEvent[];
+  agentRunSteering: AgentRunSteeringRecord[];
 }

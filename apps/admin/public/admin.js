@@ -232,6 +232,7 @@ function shortId(value) {
   if (!value) return 'unknown';
   if (value.startsWith('routine:')) return `routine:${value.slice(-6)}`;
   if (value.startsWith('workflow:')) return `workflow:${value.slice(-6)}`;
+  if (value.startsWith('steering:')) return `follow-up:${value.slice(-6)}`;
   return value.slice(0, 8);
 }
 
@@ -2121,6 +2122,9 @@ function renderWorkflows() {
 }
 
 function runTitle(run) {
+  if (run.metadata?.source === 'steering') {
+    return `Follow-up: ${run.message?.text || run.summary?.split('\n')[0] || shortId(run.id)}`;
+  }
   return (
     run.metadata?.workflowName ||
     run.metadata?.routineName ||
@@ -2144,6 +2148,9 @@ function renderRunTable() {
   }
   root.append(header);
   const items = filteredRuns();
+  const steering = state.delivery?.summary?.steering || {};
+  const waiting = (steering.pending || 0) + (steering.claimed || 0) + (steering.scheduled || 0);
+  $('#steering-count').textContent = `${waiting} follow-up${waiting === 1 ? '' : 's'} waiting`;
   if (!items.length) {
     root.append(element('div', 'empty-state', 'No runs in this view'));
     return;
@@ -2171,30 +2178,73 @@ async function openRun(runId) {
   detail.replaceChildren(element('div', 'empty-state', 'Loading run'));
   try {
     const data = await getJson(`/v1/runs/${encodeURIComponent(runId)}/events?limit=100`);
-    renderRunDetail(data.run, data.events || []);
+    renderRunDetail(data.run, data.events || [], data.steering || []);
   } catch (error) {
     detail.replaceChildren(element('div', 'empty-state', error.message));
   }
 }
 
-function renderRunDetail(run, events) {
+function renderRunDetail(run, events, steering = []) {
   const detail = $('#run-detail');
   detail.replaceChildren();
   const head = element('div', 'run-detail-head');
   const copy = element('div');
   copy.append(
     element('strong', '', runTitle(run)),
-    element('small', '', `${shortId(run.id)} / ${run.executorId || 'executor'} / ${run.workerId || 'unclaimed'}`),
+    element(
+      'small',
+      '',
+      `${shortId(run.id)} / ${run.executorId || 'executor'} / ${run.metadata?.steeringMode ? statusLabel(run.metadata.steeringMode) : 'Steering pending'} / ${run.workerId || 'unclaimed'}`,
+    ),
   );
   head.append(copy, statePill(run.status));
   detail.append(head);
   if (run.summary) detail.append(element('div', 'run-summary', run.summary));
 
   if (['queued', 'running', 'cancel_requested'].includes(run.status)) {
+    const controls = element('div', 'run-controls');
+    if (run.status !== 'cancel_requested') {
+      const form = element('form', 'run-steer-form');
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.name = 'text';
+      input.placeholder = 'Add a follow-up';
+      input.maxLength = 4000;
+      input.required = true;
+      const send = element('button', 'primary-button', 'Send');
+      send.type = 'submit';
+      form.append(input, send);
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        void steerRun(run.id, input, send);
+      });
+      controls.append(form);
+    }
     const cancel = element('button', 'secondary-button', 'Cancel run');
     cancel.type = 'button';
     cancel.addEventListener('click', () => void cancelRun(run.id, cancel));
-    detail.append(cancel);
+    controls.append(cancel);
+    detail.append(controls);
+  }
+
+  if (steering.length) {
+    const followUps = element('div', 'run-followups');
+    followUps.append(element('h3', '', 'Follow-ups'));
+    for (const item of [...steering].sort((a, b) => a.sequence - b.sequence)) {
+      const row = element('div', 'run-followup-row');
+      const copy = element('div');
+      copy.append(
+        element('strong', '', item.message?.text || shortId(item.id)),
+        element(
+          'small',
+          '',
+          `${item.message?.actor?.displayName || item.message?.actor?.id || 'Operator'} / ${item.mode ? statusLabel(item.mode) : 'Waiting'}`,
+        ),
+      );
+      row.append(copy, statePill(item.status));
+      followUps.append(row);
+    }
+    detail.append(followUps);
   }
 
   const timeline = element('div', 'timeline');
@@ -2210,6 +2260,27 @@ function renderRunDetail(run, events) {
   }
   if (!events.length) timeline.append(element('div', 'empty-state', 'No timeline events'));
   detail.append(timeline);
+}
+
+async function steerRun(runId, input, button) {
+  const text = input.value.trim();
+  if (!text) return;
+  setButtonBusy(button, true, 'Sending', 'Send');
+  try {
+    await getJson(`/v1/runs/${encodeURIComponent(runId)}/steer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    input.value = '';
+    await refreshAll({ quiet: true });
+    await openRun(runId);
+    showToast('Follow-up queued');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Sending', 'Send');
+  }
 }
 
 async function cancelRun(runId, button) {

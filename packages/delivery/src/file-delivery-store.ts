@@ -4,19 +4,26 @@ import path from 'node:path';
 import type {
   AgentRunEventType,
   AgentRunRecord,
+  AgentRunSteeringRecord,
+  AgentRunSteeringStatus,
   AgentRunStatus,
   AgentRunTimelineEvent,
   CancelOutboxOptions,
   CancelOutboxResult,
   ClaimAgentRunsOptions,
+  ClaimAgentRunSteeringOptions,
   ClaimOutboundOptions,
   ConfigureThreadBindingInput,
   CreateAgentRunInput,
+  CreateAgentRunOrSteerInput,
+  CreateAgentRunOrSteerResult,
   CreateOutboundInput,
   DeliverySummary,
   FileDeliveryState,
   InboundEventRecord,
   InboundEventStatus,
+  EnqueueAgentRunSteeringInput,
+  ListAgentRunSteeringOptions,
   OutboxScopeFilter,
   OutboundEnvelope,
   OutboundStatus,
@@ -31,17 +38,20 @@ import type {
   TurnDeliveryRecord,
   TurnDeliveryStatus,
   ListAgentRunsOptions,
+  CancelThreadAgentRunsResult,
   UpsertThreadBindingInput,
 } from './types.js';
 
 const EMPTY_STATE: FileDeliveryState = {
   nextSequence: 1,
+  nextSteeringSequence: 1,
   outbox: [],
   turnDeliveries: [],
   threadBindings: [],
   inboundEvents: [],
   agentRuns: [],
   agentRunEvents: [],
+  agentRunSteering: [],
 };
 
 function now(): string {
@@ -51,12 +61,14 @@ function now(): string {
 export function createEmptyDeliveryState(): FileDeliveryState {
   return {
     nextSequence: EMPTY_STATE.nextSequence,
+    nextSteeringSequence: EMPTY_STATE.nextSteeringSequence,
     outbox: [],
     turnDeliveries: [],
     threadBindings: [],
     inboundEvents: [],
     agentRuns: [],
     agentRunEvents: [],
+    agentRunSteering: [],
   };
 }
 
@@ -65,12 +77,14 @@ export function normalizeDeliveryState(
 ): FileDeliveryState {
   return {
     nextSequence: parsed.nextSequence ?? 1,
+    nextSteeringSequence: parsed.nextSteeringSequence ?? 1,
     outbox: parsed.outbox ?? [],
     turnDeliveries: parsed.turnDeliveries ?? [],
     threadBindings: parsed.threadBindings ?? [],
     inboundEvents: parsed.inboundEvents ?? [],
     agentRuns: parsed.agentRuns ?? [],
     agentRunEvents: parsed.agentRunEvents ?? [],
+    agentRunSteering: parsed.agentRunSteering ?? [],
   };
 }
 
@@ -166,8 +180,56 @@ function copyRun(run: AgentRunRecord): AgentRunRecord {
   };
 }
 
+function copySteering(
+  steering: AgentRunSteeringRecord,
+): AgentRunSteeringRecord {
+  return {
+    ...steering,
+    thread: {
+      ...steering.thread,
+      metadata: steering.thread.metadata
+        ? { ...steering.thread.metadata }
+        : undefined,
+    },
+    message: {
+      ...steering.message,
+      actor: { ...steering.message.actor },
+      attachments: steering.message.attachments?.map((attachment) => ({
+        ...attachment,
+        metadata: attachment.metadata
+          ? { ...attachment.metadata }
+          : undefined,
+      })),
+      metadata: steering.message.metadata
+        ? { ...steering.message.metadata }
+        : undefined,
+    },
+    metadata: steering.metadata ? { ...steering.metadata } : undefined,
+  };
+}
+
 function isTerminalRunStatus(status: AgentRunStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+function isActiveRunStatus(status: AgentRunStatus): boolean {
+  return status === 'queued' || status === 'running' || status === 'cancel_requested';
+}
+
+function sameThread(
+  left: Pick<AgentRunRecord, 'platform' | 'threadId' | 'workspaceId' | 'projectId'>,
+  right: Pick<AgentRunRecord, 'platform' | 'threadId' | 'workspaceId' | 'projectId'>,
+): boolean {
+  return (
+    left.platform === right.platform &&
+    left.threadId === right.threadId &&
+    left.workspaceId === right.workspaceId &&
+    left.projectId === right.projectId
+  );
+}
+
+function steeringContinuationRunId(steeringId: string): string {
+  return `steering:${steeringId}`;
 }
 
 function inboundEventId(platform: string, externalId: string): string {
@@ -238,6 +300,14 @@ function emptySummary(): DeliverySummary {
       running: 0,
       cancel_requested: 0,
       completed: 0,
+      failed: 0,
+      cancelled: 0,
+    },
+    steering: {
+      pending: 0,
+      claimed: 0,
+      scheduled: 0,
+      applied: 0,
       failed: 0,
       cancelled: 0,
     },
@@ -512,41 +582,81 @@ export class FileDeliveryStore {
   }
 
   async createAgentRun(input: CreateAgentRunInput): Promise<AgentRunRecord> {
+    return this.mutate((state) =>
+      copyRun(this.createAgentRunInState(state, input)),
+    );
+  }
+
+  async createAgentRunOrSteer(
+    input: CreateAgentRunOrSteerInput,
+  ): Promise<CreateAgentRunOrSteerResult> {
     return this.mutate((state) => {
-      const timestamp = now();
       const existing = state.agentRuns.find((run) => run.id === input.runId);
-      if (existing) return copyRun(existing);
-      const record: AgentRunRecord = {
-        id: input.runId,
-        status: 'queued',
+      if (existing) {
+        return { disposition: 'created', run: copyRun(existing) };
+      }
+      const duplicateSteering = this.findDuplicateSteering(state, input);
+      if (duplicateSteering) {
+        const target = state.agentRuns.find(
+          (run) => run.id === duplicateSteering.targetRunId,
+        );
+        if (target) {
+          return {
+            disposition: 'steered',
+            run: copyRun(target),
+            steering: copySteering(duplicateSteering),
+          };
+        }
+      }
+
+      const active = this.activeRunForThread(state, {
         platform: input.thread.platform,
-        thread: input.thread,
-        message: input.message,
         threadId: input.thread.id,
-        threadExternalId: input.thread.externalId,
         workspaceId: input.thread.workspaceId,
         projectId: input.thread.projectId,
-        messageId: input.message?.id,
-        actorId: input.message?.actor.id,
-        bindingId: input.bindingId,
-        executorId: input.executorId,
-        transportMode: input.transportMode,
-        title: input.thread.title,
-        inboundEventId: input.inboundEventId,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        metadata: input.metadata,
-      };
-      state.agentRuns.push(record);
-      this.appendAgentRunEventInState(state, input.runId, 'created', {
-        message: 'Agent run created',
-        metadata: {
-          threadId: input.thread.id,
-          messageId: input.message?.id,
-          bindingId: input.bindingId,
-        },
       });
-      return copyRun(record);
+      if (active && input.message) {
+        const steering = this.enqueueSteeringInState(state, active, {
+          targetRunId: active.id,
+          message: input.message,
+          inboundEventId: input.inboundEventId,
+          bindingId: input.bindingId,
+          executorId: input.executorId,
+          transportMode: input.transportMode,
+          allowLiveSteering: input.allowLiveSteering,
+          metadata: input.metadata,
+        });
+        return {
+          disposition: 'steered',
+          run: copyRun(active),
+          steering: copySteering(steering),
+        };
+      }
+
+      const run = this.createAgentRunInState(state, input);
+      return { disposition: 'created', run: copyRun(run) };
+    });
+  }
+
+  async enqueueAgentRunSteering(
+    input: EnqueueAgentRunSteeringInput,
+  ): Promise<AgentRunSteeringRecord | undefined> {
+    return this.mutate((state) => {
+      const target = state.agentRuns.find(
+        (run) => run.id === input.targetRunId,
+      );
+      if (!target || !target.thread || !isActiveRunStatus(target.status)) {
+        return undefined;
+      }
+      const duplicate = this.findDuplicateSteering(state, {
+        thread: target.thread!,
+        message: input.message,
+        inboundEventId: input.inboundEventId,
+      });
+      if (duplicate) return copySteering(duplicate);
+      return copySteering(
+        this.enqueueSteeringInState(state, target, input),
+      );
     });
   }
 
@@ -564,6 +674,14 @@ export class FileDeliveryStore {
       for (const run of ordered) {
         if (claimed.length >= limit) break;
         if (run.status !== 'queued') continue;
+        const threadAlreadyRunning = state.agentRuns.some(
+          (candidate) =>
+            candidate.id !== run.id &&
+            sameThread(candidate, run) &&
+            (candidate.status === 'running' ||
+              candidate.status === 'cancel_requested'),
+        );
+        if (threadAlreadyRunning) continue;
         if (!run.thread || !run.message) {
           run.status = 'failed';
           run.failedAt = timestamp;
@@ -591,6 +709,127 @@ export class FileDeliveryStore {
 
       return claimed;
     });
+  }
+
+  async setAgentRunSteeringMode(
+    runId: string,
+    mode: 'live' | 'next_turn',
+  ): Promise<AgentRunRecord | undefined> {
+    return this.mutate((state) => {
+      const run = state.agentRuns.find((item) => item.id === runId);
+      if (!run) return undefined;
+      if (run.metadata?.steeringMode === mode) return copyRun(run);
+      run.metadata = { ...run.metadata, steeringMode: mode };
+      run.updatedAt = now();
+      this.appendAgentRunEventInState(state, runId, 'steering_mode', {
+        message:
+          mode === 'live'
+            ? 'Executor accepts live steering'
+            : 'Follow-ups continue in the next turn',
+        metadata: { mode },
+      });
+      return copyRun(run);
+    });
+  }
+
+  async claimNextAgentRunSteering(
+    runId: string,
+    options: ClaimAgentRunSteeringOptions,
+  ): Promise<AgentRunSteeringRecord | undefined> {
+    return this.mutate((state) => {
+      const run = state.agentRuns.find((item) => item.id === runId);
+      if (!run || run.status !== 'running') return undefined;
+      const steering = state.agentRunSteering
+        .filter(
+          (item) =>
+            item.targetRunId === runId &&
+            item.status === 'pending' &&
+            item.allowLive,
+        )
+        .sort((a, b) => a.sequence - b.sequence)[0];
+      if (!steering) return undefined;
+      const timestamp = (options.now ?? new Date()).toISOString();
+      steering.status = 'claimed';
+      steering.mode = 'live';
+      steering.claimedBy = options.workerId;
+      steering.claimedAt = timestamp;
+      steering.updatedAt = timestamp;
+      this.appendAgentRunEventInState(state, runId, 'steering_claimed', {
+        message: `Live follow-up from ${steering.message.actor.displayName || steering.message.actor.id}`,
+        metadata: {
+          steeringId: steering.id,
+          messageId: steering.message.id,
+          actorId: steering.message.actor.id,
+        },
+      });
+      return copySteering(steering);
+    });
+  }
+
+  async markAgentRunSteeringApplied(
+    id: string,
+    detail?: string,
+    expectedRunId?: string,
+  ): Promise<AgentRunSteeringRecord | undefined> {
+    return this.mutate((state) => {
+      const steering = state.agentRunSteering.find((item) => item.id === id);
+      if (!steering) return undefined;
+      if (expectedRunId && steering.targetRunId !== expectedRunId) {
+        return undefined;
+      }
+      if (steering.status === 'applied') return copySteering(steering);
+      if (steering.status !== 'claimed') return copySteering(steering);
+      const timestamp = now();
+      steering.status = 'applied';
+      steering.mode = 'live';
+      steering.appliedAt = timestamp;
+      steering.updatedAt = timestamp;
+      steering.lastError = undefined;
+      this.appendAgentRunEventInState(
+        state,
+        steering.targetRunId,
+        'steering_applied',
+        {
+          message: detail || 'Live follow-up applied',
+          metadata: { steeringId: steering.id, messageId: steering.message.id },
+        },
+      );
+      this.updateInboundEventInState(state, steering.inboundEventId, 'processed', {
+        workspaceId: steering.workspaceId,
+        projectId: steering.projectId,
+        threadId: steering.threadId,
+        messageId: steering.message.id,
+        metadata: {
+          steeringId: steering.id,
+          steeringMode: 'live',
+          targetRunId: steering.targetRunId,
+        },
+      });
+      return copySteering(steering);
+    });
+  }
+
+  async listAgentRunSteering(
+    options: ListAgentRunSteeringOptions = {},
+  ): Promise<AgentRunSteeringRecord[]> {
+    const state = await this.readState();
+    const limit = options.limit ?? 50;
+    return state.agentRunSteering
+      .filter(
+        (item) =>
+          !options.runId ||
+          item.targetRunId === options.runId ||
+          item.continuationRunId === options.runId,
+      )
+      .filter((item) => !options.status || item.status === options.status)
+      .filter(
+        (item) => !options.workspaceId || item.workspaceId === options.workspaceId,
+      )
+      .filter((item) => !options.projectId || item.projectId === options.projectId)
+      .filter((item) => !options.threadId || item.threadId === options.threadId)
+      .sort((a, b) => b.sequence - a.sequence)
+      .slice(0, limit)
+      .map(copySteering);
   }
 
   async recoverStaleAgentRuns(
@@ -623,6 +862,18 @@ export class FileDeliveryStore {
             message: reason,
             metadata: { recoveredFrom: 'running' },
           });
+          for (const steering of state.agentRunSteering) {
+            if (
+              steering.targetRunId === run.id &&
+              steering.status === 'claimed'
+            ) {
+              steering.status = 'pending';
+              steering.mode = undefined;
+              steering.claimedBy = undefined;
+              steering.claimedAt = undefined;
+              steering.updatedAt = nowIso;
+            }
+          }
           result.requeued += 1;
           result.records.push(copyRun(run));
         } else if (run.status === 'cancel_requested') {
@@ -634,6 +885,9 @@ export class FileDeliveryStore {
           this.appendAgentRunEventInState(state, run.id, 'cancelled', {
             message: reason,
           });
+          this.finishRunInboundInState(state, run, nowIso);
+          this.finishContinuationSteeringInState(state, run, nowIso);
+          this.scheduleNextSteeringInState(state, run, nowIso);
           result.cancelled += 1;
           result.records.push(copyRun(run));
         }
@@ -708,6 +962,9 @@ export class FileDeliveryStore {
         this.appendAgentRunEventInState(state, id, 'cancelled', {
           message: reason ?? 'Queued run cancelled',
         });
+        this.finishRunInboundInState(state, run, timestamp);
+        this.finishContinuationSteeringInState(state, run, timestamp);
+        this.scheduleNextSteeringInState(state, run, timestamp);
         return copyRun(run);
       }
       run.status = 'cancel_requested';
@@ -718,6 +975,100 @@ export class FileDeliveryStore {
         message: reason ?? 'Cancel requested',
       });
       return copyRun(run);
+    });
+  }
+
+  async cancelActiveAgentRunsForThread(
+    thread: {
+      platform: AgentRunRecord['platform'];
+      id: string;
+      workspaceId?: string;
+      projectId?: string;
+    },
+    reason = 'cancelled_from_thread',
+  ): Promise<CancelThreadAgentRunsResult> {
+    return this.mutate((state) => {
+      const timestamp = now();
+      const scope = {
+        platform: thread.platform,
+        threadId: thread.id,
+        workspaceId: thread.workspaceId,
+        projectId: thread.projectId,
+      };
+      for (const steering of state.agentRunSteering) {
+        if (!sameThread(steering, scope)) continue;
+        if (steering.status !== 'pending' && steering.status !== 'claimed') {
+          continue;
+        }
+        steering.status = 'cancelled';
+        steering.cancelledAt = timestamp;
+        steering.updatedAt = timestamp;
+        steering.lastError = reason;
+        this.appendAgentRunEventInState(
+          state,
+          steering.targetRunId,
+          'steering_cancelled',
+          {
+            message: reason,
+            metadata: { steeringId: steering.id },
+          },
+        );
+        this.updateInboundEventInState(
+          state,
+          steering.inboundEventId,
+          'ignored',
+          {
+            workspaceId: steering.workspaceId,
+            projectId: steering.projectId,
+            threadId: steering.threadId,
+            messageId: steering.message.id,
+            reason,
+            metadata: { steeringId: steering.id },
+          },
+          timestamp,
+        );
+      }
+
+      const affectedRuns: AgentRunRecord[] = [];
+      for (const run of state.agentRuns) {
+        if (!sameThread(run, scope) || !isActiveRunStatus(run.status)) continue;
+        if (run.status === 'queued') {
+          run.status = 'cancelled';
+          run.cancelRequestedAt = timestamp;
+          run.cancelledAt = timestamp;
+          run.lastError = reason;
+          run.updatedAt = timestamp;
+          this.appendAgentRunEventInState(state, run.id, 'cancel_requested', {
+            message: reason,
+          });
+          this.appendAgentRunEventInState(state, run.id, 'cancelled', {
+            message: reason,
+          });
+          this.finishRunInboundInState(state, run, timestamp);
+          this.finishContinuationSteeringInState(state, run, timestamp);
+        } else if (run.status !== 'cancel_requested') {
+          run.status = 'cancel_requested';
+          run.cancelRequestedAt = timestamp;
+          run.lastError = reason;
+          run.updatedAt = timestamp;
+          this.appendAgentRunEventInState(state, run.id, 'cancel_requested', {
+            message: reason,
+          });
+        }
+        affectedRuns.push(copyRun(run));
+      }
+      const allCancelledSteering = state.agentRunSteering
+        .filter(
+          (steering) =>
+            sameThread(steering, scope) &&
+            steering.status === 'cancelled' &&
+            steering.cancelledAt === timestamp,
+        )
+        .map(copySteering);
+      return {
+        runs: affectedRuns,
+        steering: allCancelledSteering,
+      };
     });
   }
 
@@ -1049,10 +1400,325 @@ export class FileDeliveryStore {
         summary.agentRuns[item.status] += 1;
       }
     }
+    for (const item of state.agentRunSteering) {
+      if (!workspaceId || item.workspaceId === workspaceId) {
+        summary.steering[item.status] += 1;
+      }
+    }
     summary.bindings = state.threadBindings.filter(
       (item) => !workspaceId || item.workspaceId === workspaceId,
     ).length;
     return summary;
+  }
+
+  private createAgentRunInState(
+    state: FileDeliveryState,
+    input: CreateAgentRunInput,
+    timestamp = now(),
+  ): AgentRunRecord {
+    const existing = state.agentRuns.find((run) => run.id === input.runId);
+    if (existing) return existing;
+    const record: AgentRunRecord = {
+      id: input.runId,
+      status: 'queued',
+      platform: input.thread.platform,
+      thread: input.thread,
+      message: input.message,
+      threadId: input.thread.id,
+      threadExternalId: input.thread.externalId,
+      workspaceId: input.thread.workspaceId,
+      projectId: input.thread.projectId,
+      messageId: input.message?.id,
+      actorId: input.message?.actor.id,
+      bindingId: input.bindingId,
+      executorId: input.executorId,
+      transportMode: input.transportMode,
+      title: input.thread.title,
+      inboundEventId: input.inboundEventId,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      metadata: input.metadata,
+    };
+    state.agentRuns.push(record);
+    this.appendAgentRunEventInState(state, input.runId, 'created', {
+      message: 'Agent run created',
+      metadata: {
+        threadId: input.thread.id,
+        messageId: input.message?.id,
+        bindingId: input.bindingId,
+      },
+    });
+    return record;
+  }
+
+  private activeRunForThread(
+    state: FileDeliveryState,
+    scope: Pick<
+      AgentRunRecord,
+      'platform' | 'threadId' | 'workspaceId' | 'projectId'
+    >,
+  ): AgentRunRecord | undefined {
+    return state.agentRuns
+      .filter(
+        (run) =>
+          sameThread(run, scope) &&
+          isActiveRunStatus(run.status),
+      )
+      .sort((a, b) => {
+        if (a.status === 'running' && b.status !== 'running') return -1;
+        if (b.status === 'running' && a.status !== 'running') return 1;
+        return a.createdAt.localeCompare(b.createdAt);
+      })[0];
+  }
+
+  private findDuplicateSteering(
+    state: FileDeliveryState,
+    input: {
+      thread: { platform: string; id: string };
+      message?: { id: string };
+      inboundEventId?: string;
+    },
+  ): AgentRunSteeringRecord | undefined {
+    return state.agentRunSteering.find(
+      (item) =>
+        (Boolean(input.inboundEventId) &&
+          item.inboundEventId === input.inboundEventId) ||
+        (Boolean(input.message?.id) &&
+          item.platform === input.thread.platform &&
+          item.threadId === input.thread.id &&
+          item.message.id === input.message?.id),
+    );
+  }
+
+  private enqueueSteeringInState(
+    state: FileDeliveryState,
+    target: AgentRunRecord,
+    input: EnqueueAgentRunSteeringInput,
+    timestamp = now(),
+  ): AgentRunSteeringRecord {
+    if (!target.thread) throw new Error('steering_target_missing_thread');
+    const steering: AgentRunSteeringRecord = {
+      id: randomUUID(),
+      sequence: state.nextSteeringSequence,
+      targetRunId: target.id,
+      status: 'pending',
+      allowLive: input.allowLiveSteering ?? true,
+      platform: target.platform,
+      thread: target.thread,
+      message: {
+        ...input.message,
+        threadId: target.thread.id,
+      },
+      threadId: target.threadId,
+      workspaceId: target.workspaceId,
+      projectId: target.projectId,
+      inboundEventId: input.inboundEventId,
+      bindingId: input.bindingId ?? target.bindingId,
+      executorId: input.executorId ?? target.executorId,
+      transportMode: input.transportMode ?? target.transportMode,
+      receivedAt: timestamp,
+      updatedAt: timestamp,
+      metadata: input.metadata,
+    };
+    state.nextSteeringSequence += 1;
+    state.agentRunSteering.push(steering);
+    this.appendAgentRunEventInState(state, target.id, 'steering_queued', {
+      message: `Follow-up queued from ${steering.message.actor.displayName || steering.message.actor.id}`,
+      metadata: {
+        steeringId: steering.id,
+        messageId: steering.message.id,
+        actorId: steering.message.actor.id,
+        allowLive: steering.allowLive,
+      },
+    });
+    const inbound = steering.inboundEventId
+      ? state.inboundEvents.find((event) => event.id === steering.inboundEventId)
+      : undefined;
+    if (inbound) {
+      inbound.workspaceId = steering.workspaceId ?? inbound.workspaceId;
+      inbound.projectId = steering.projectId ?? inbound.projectId;
+      inbound.threadId = steering.threadId;
+      inbound.messageId = steering.message.id;
+      inbound.metadata = {
+        ...inbound.metadata,
+        steeringId: steering.id,
+        steeringTargetRunId: target.id,
+      };
+      inbound.updatedAt = timestamp;
+    }
+    return steering;
+  }
+
+  private finishContinuationSteeringInState(
+    state: FileDeliveryState,
+    run: AgentRunRecord,
+    timestamp: string,
+  ): void {
+    const steeringId =
+      typeof run.metadata?.steeringId === 'string'
+        ? run.metadata.steeringId
+        : undefined;
+    if (!steeringId) return;
+    const steering = state.agentRunSteering.find(
+      (item) => item.id === steeringId,
+    );
+    if (!steering || steering.continuationRunId !== run.id) return;
+
+    let inboundStatus: InboundEventStatus;
+    let eventType: AgentRunEventType;
+    if (run.status === 'completed') {
+      steering.status = 'applied';
+      steering.appliedAt = timestamp;
+      steering.lastError = undefined;
+      inboundStatus = 'processed';
+      eventType = 'steering_applied';
+    } else if (run.status === 'failed') {
+      steering.status = 'failed';
+      steering.failedAt = timestamp;
+      steering.lastError = run.lastError || 'continuation_failed';
+      inboundStatus = 'failed';
+      eventType = 'steering_failed';
+    } else if (run.status === 'cancelled') {
+      steering.status = 'cancelled';
+      steering.cancelledAt = timestamp;
+      steering.lastError = run.lastError || 'continuation_cancelled';
+      inboundStatus = 'ignored';
+      eventType = 'steering_cancelled';
+    } else {
+      return;
+    }
+    steering.updatedAt = timestamp;
+    this.appendAgentRunEventInState(state, steering.targetRunId, eventType, {
+      message:
+        run.status === 'completed'
+          ? 'Follow-up completed in the next turn'
+          : steering.lastError,
+      metadata: {
+        steeringId: steering.id,
+        continuationRunId: run.id,
+        mode: 'next_turn',
+      },
+    });
+    this.updateInboundEventInState(
+      state,
+      steering.inboundEventId,
+      inboundStatus,
+      {
+        workspaceId: steering.workspaceId,
+        projectId: steering.projectId,
+        threadId: steering.threadId,
+        messageId: steering.message.id,
+        reason:
+          inboundStatus === 'ignored' ? steering.lastError : undefined,
+        error: inboundStatus === 'failed' ? steering.lastError : undefined,
+        metadata: {
+          steeringId: steering.id,
+          steeringMode: 'next_turn',
+          targetRunId: steering.targetRunId,
+          continuationRunId: run.id,
+        },
+      },
+    );
+  }
+
+  private finishRunInboundInState(
+    state: FileDeliveryState,
+    run: AgentRunRecord,
+    timestamp: string,
+  ): void {
+    if (!run.inboundEventId || !isTerminalRunStatus(run.status)) return;
+    const status: InboundEventStatus =
+      run.status === 'completed'
+        ? 'processed'
+        : run.status === 'failed'
+          ? 'failed'
+          : 'ignored';
+    this.updateInboundEventInState(
+      state,
+      run.inboundEventId,
+      status,
+      {
+        workspaceId: run.workspaceId,
+        projectId: run.projectId,
+        threadId: run.threadId,
+        messageId: run.messageId,
+        reason: status === 'ignored' ? run.lastError : undefined,
+        error: status === 'failed' ? run.lastError : undefined,
+        metadata: { runId: run.id },
+      },
+      timestamp,
+    );
+  }
+
+  private scheduleNextSteeringInState(
+    state: FileDeliveryState,
+    scope: Pick<
+      AgentRunRecord,
+      'platform' | 'threadId' | 'workspaceId' | 'projectId'
+    >,
+    timestamp = now(),
+  ): AgentRunRecord | undefined {
+    if (
+      state.agentRuns.some(
+        (run) => sameThread(run, scope) && isActiveRunStatus(run.status),
+      )
+    ) {
+      return undefined;
+    }
+    const steering = state.agentRunSteering
+      .filter(
+        (item) =>
+          sameThread(item, scope) &&
+          (item.status === 'pending' || item.status === 'claimed') &&
+          state.agentRuns.some(
+            (run) =>
+              run.id === item.targetRunId && isTerminalRunStatus(run.status),
+          ),
+      )
+      .sort((a, b) => a.sequence - b.sequence)[0];
+    if (!steering) return undefined;
+
+    const runId = steeringContinuationRunId(steering.id);
+    const continuation = this.createAgentRunInState(
+      state,
+      {
+        runId,
+        thread: steering.thread,
+        message: steering.message,
+        inboundEventId: steering.inboundEventId,
+        bindingId: steering.bindingId,
+        executorId: steering.executorId,
+        transportMode: steering.transportMode,
+        metadata: {
+          ...steering.metadata,
+          source: 'steering',
+          steeringId: steering.id,
+          continuationOfRunId: steering.targetRunId,
+        },
+      },
+      timestamp,
+    );
+    steering.status = 'scheduled';
+    steering.mode = 'next_turn';
+    steering.continuationRunId = continuation.id;
+    steering.scheduledAt = timestamp;
+    steering.claimedBy = undefined;
+    steering.claimedAt = undefined;
+    steering.updatedAt = timestamp;
+    this.appendAgentRunEventInState(
+      state,
+      steering.targetRunId,
+      'steering_scheduled',
+      {
+        message: 'Follow-up scheduled as the next turn',
+        metadata: {
+          steeringId: steering.id,
+          continuationRunId: continuation.id,
+          mode: 'next_turn',
+        },
+      },
+    );
+    return continuation;
   }
 
   private appendAgentRunEventInState(
@@ -1101,21 +1767,36 @@ export class FileDeliveryStore {
         return copyRun(run);
       }
       const timestamp = now();
-      run.status = status;
+      const cancellationWins =
+        run.status === 'cancel_requested' && status === 'completed';
+      const nextStatus: AgentRunStatus = cancellationWins ? 'cancelled' : status;
+      run.status = nextStatus;
       run.startedAt = input?.startedAt ?? run.startedAt;
-      run.completedAt = input?.completedAt ?? run.completedAt;
+      run.completedAt = cancellationWins
+        ? run.completedAt
+        : input?.completedAt ?? run.completedAt;
       run.failedAt = input?.failedAt ?? run.failedAt;
       run.cancelRequestedAt =
         input?.cancelRequestedAt ?? run.cancelRequestedAt;
       run.cancelledAt = input?.cancelledAt ?? run.cancelledAt;
+      if (cancellationWins) run.cancelledAt = timestamp;
       run.summary = input?.summary ?? run.summary;
       run.lastError = input?.lastError ?? run.lastError;
       run.updatedAt = timestamp;
-      if (input?.event) {
+      if (cancellationWins) {
+        this.appendAgentRunEventInState(state, id, 'cancelled', {
+          message: run.lastError || 'Cancellation completed before finalization',
+        });
+      } else if (input?.event) {
         this.appendAgentRunEventInState(state, id, input.event.type, {
           message: input.event.message,
           metadata: input.event.metadata,
         });
+      }
+      if (isTerminalRunStatus(nextStatus)) {
+        this.finishRunInboundInState(state, run, timestamp);
+        this.finishContinuationSteeringInState(state, run, timestamp);
+        this.scheduleNextSteeringInState(state, run, timestamp);
       }
       return copyRun(run);
     });
@@ -1134,27 +1815,45 @@ export class FileDeliveryStore {
       metadata?: Record<string, unknown>;
     },
   ): Promise<InboundEventRecord | undefined> {
-    return this.mutate((state) => {
-      const event = state.inboundEvents.find((item) => item.id === id);
-      if (!event) return undefined;
-      const timestamp = now();
-      event.status = status;
-      event.workspaceId = input?.workspaceId ?? event.workspaceId;
-      event.projectId = input?.projectId ?? event.projectId;
-      event.threadId = input?.threadId ?? event.threadId;
-      event.messageId = input?.messageId ?? event.messageId;
-      event.reason = input?.reason ?? event.reason;
-      event.lastError = input?.error ?? event.lastError;
-      event.metadata = input?.metadata
-        ? { ...event.metadata, ...input.metadata }
-        : event.metadata;
-      event.updatedAt = timestamp;
-      if (status === 'processed') event.processedAt = timestamp;
-      if (status === 'ignored') event.ignoredAt = timestamp;
-      if (status === 'failed') event.failedAt = timestamp;
-      if (status === 'rejected') event.rejectedAt = timestamp;
-      return event;
-    });
+    return this.mutate((state) =>
+      this.updateInboundEventInState(state, id, status, input),
+    );
+  }
+
+  private updateInboundEventInState(
+    state: FileDeliveryState,
+    id: string | undefined,
+    status: InboundEventStatus,
+    input?: {
+      workspaceId?: string;
+      projectId?: string;
+      threadId?: string;
+      messageId?: string;
+      reason?: string;
+      error?: string;
+      metadata?: Record<string, unknown>;
+    },
+    timestamp = now(),
+  ): InboundEventRecord | undefined {
+    if (!id) return undefined;
+    const event = state.inboundEvents.find((item) => item.id === id);
+    if (!event) return undefined;
+    event.status = status;
+    event.workspaceId = input?.workspaceId ?? event.workspaceId;
+    event.projectId = input?.projectId ?? event.projectId;
+    event.threadId = input?.threadId ?? event.threadId;
+    event.messageId = input?.messageId ?? event.messageId;
+    event.reason = input?.reason ?? event.reason;
+    event.lastError = input?.error ?? event.lastError;
+    event.metadata = input?.metadata
+      ? { ...event.metadata, ...input.metadata }
+      : event.metadata;
+    event.updatedAt = timestamp;
+    if (status === 'processed') event.processedAt = timestamp;
+    if (status === 'ignored') event.ignoredAt = timestamp;
+    if (status === 'failed') event.failedAt = timestamp;
+    if (status === 'rejected') event.rejectedAt = timestamp;
+    return event;
   }
 
   private updateTurnDelivery(

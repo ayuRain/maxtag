@@ -1,6 +1,7 @@
 import type {
   AgentRunEvent,
   AgentRunResult,
+  AgentSteeringProvider,
   ChecklistItem,
   Executor,
   ScopedMemorySnapshot,
@@ -40,6 +41,7 @@ export class OpenTagRuntime {
     thread: SourceThread;
     message: SourceMessage;
     abortSignal?: AbortSignal;
+    steering?: AgentSteeringProvider;
     onEvent?: (event: AgentRunEvent) => void | Promise<void>;
   }): Promise<AgentRunResult> {
     const now = () => (this.deps.clock ?? (() => new Date()))().toISOString();
@@ -148,6 +150,9 @@ export class OpenTagRuntime {
       };
       await progress.update(surfaceId, state);
 
+      const steering = input.steering
+        ? await input.steering.open(executor.steeringMode ?? 'next_turn')
+        : undefined;
       const result = await executor.run({
         runId: input.runId,
         workspace,
@@ -158,6 +163,7 @@ export class OpenTagRuntime {
         access,
         memory,
         memorySnapshot,
+        steering,
         abortSignal: input.abortSignal,
         onEvent,
       });

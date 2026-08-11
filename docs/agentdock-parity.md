@@ -14,7 +14,8 @@ many clients.
 | Scoped memory | SQLite-backed global, workspace, project, and thread documents; transactional cross-process writes; immutable remember/forget/import/restore revisions with trusted actor provenance; Lark groups route to project scope |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
 | Self-service pairing | Lark and Telegram `/pair` commands use expiring, single-use, platform-bound codes; salted hashes persist across restarts, successful pairing creates a configured project route, and operators can revoke invitations or unbind chats |
-| Topic continuation | Mention establishes a Lark or Telegram topic binding; later messages in that topic continue without repeating the mention |
+| Topic continuation | Mention establishes a Lark or Telegram topic binding; later messages continue without another mention and atomically steer one active thread instead of creating parallel runs |
+| Shared task control | Durable cross-process follow-up mailbox, same-thread single-flight claims, live executor channel, ordered next-turn fallback for one-shot CLIs, authorized thread `/stop`, and operator steering/cancel controls |
 | Project agent policy | File-backed per-project identity, instructions, Codex/Claude choice, tool grants, network policy, and audit history |
 | Workspace governance | SQLite-backed workspace members and project roles for client ingress, plus named operator tokens with workspace scopes, owner/admin/viewer control-plane roles, signed principal sessions, and authoritative operator audit identity |
 | Durable delivery | SQLite WAL outbox, turn delivery records, atomic cross-process claims, scoped cancel, stale recovery, and bindings; legacy file mode remains available |
@@ -33,7 +34,8 @@ many clients.
 | More native clients | Add Slack, GitHub comment, QQ, and Web adapters behind the shared platform contract |
 | Telegram production depth | Download inbound files and verify webhook/send/edit/file behavior against a live bot |
 | High-volume storage | Normalize the current transactional SQLite state documents or add Postgres before high-volume multi-replica deployment; add retention and compaction metrics |
-| Async run execution | Add production supervisor/deployment manifests and cross-process cancellation heartbeat |
+| Async run execution | Add production supervisor/deployment manifests; durable cross-process cancellation polling is implemented |
+| Provider-level live steering | Add a persistent Codex/Claude SDK or session runner that consumes the implemented live steering channel; bounded one-shot CLI adapters intentionally continue in the next turn |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |
 | Real Lark smoke | Verify app scopes, bot-in-chat permissions, text replies, and card patching against a live app |
 | Pairing and binding governance | Add binding audit/import/export and optional actor-restricted pairing invitations; project role enforcement already applies after a chat is routed, and pairing consumption plus binding creation are one SQLite transaction |

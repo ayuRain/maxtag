@@ -119,6 +119,7 @@ async function main(): Promise<void> {
       databasePath: process.env.OPENTAG_SQLITE_PATH,
       busyTimeoutMs: optionalNumberEnv('OPENTAG_SQLITE_BUSY_TIMEOUT_MS'),
     },
+    runControlPollMs: optionalNumberEnv('OPENTAG_RUN_CONTROL_POLL_MS'),
   });
 
   let stopping = false;

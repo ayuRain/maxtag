@@ -261,6 +261,7 @@ export interface AgentRunRequest {
   access: AccessBundle;
   memory: string;
   memorySnapshot?: ScopedMemorySnapshot;
+  steering?: AgentSteeringChannel;
   abortSignal?: AbortSignal;
   onEvent?: (event: AgentRunEvent) => void | Promise<void>;
 }
@@ -270,9 +271,33 @@ export interface AgentRunResult {
   artifacts: Artifact[];
 }
 
+export type ExecutorSteeringMode = 'live' | 'next_turn';
+
+export interface AgentSteeringInput {
+  id: string;
+  targetRunId: string;
+  receivedAt: string;
+  thread: SourceThread;
+  message: SourceMessage;
+}
+
+export interface AgentSteeringChannel {
+  mode: ExecutorSteeringMode;
+  receive(options?: {
+    waitMs?: number;
+    signal?: AbortSignal;
+  }): Promise<AgentSteeringInput | undefined>;
+  acknowledge(id: string, detail?: string): Promise<void>;
+}
+
+export interface AgentSteeringProvider {
+  open(mode: ExecutorSteeringMode): Promise<AgentSteeringChannel>;
+}
+
 export interface Executor {
   id: string;
   label: string;
+  steeringMode?: ExecutorSteeringMode;
   run(request: AgentRunRequest): Promise<AgentRunResult>;
 }
 

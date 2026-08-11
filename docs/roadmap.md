@@ -26,6 +26,9 @@
   restart-safe cross-process claims.
 - Durable run queue with inline worker claim, startup stale recovery, and manual
   worker/recovery API controls.
+- Durable same-thread steering mailbox with atomic create-or-steer arbitration,
+  executor live-input contract, ordered next-turn fallback, shared-thread stop
+  commands, and cross-process cancellation polling.
 - Standalone worker process that can claim the shared run queue while HTTP
   ingestion runs with `OPENTAG_AGENT_WORKER=manual`.
 - Generic client ingress that maps non-Lark envelopes into the same run queue,
@@ -89,8 +92,9 @@
   contract with provider event parsing and runtime evidence.
 - Add production supervisor/deployment manifests for independent worker and
   scheduler processes.
-- Add cross-process cancellation heartbeat for active runs.
-- Support turn steering while a run is active.
+- Add a persistent SDK/session executor that advertises live steering; the
+  current bounded Codex and Claude CLI adapters intentionally use ordered
+  next-turn continuation.
 - Attach artifacts: final message, file, patch, hosted report, PR link.
 - Add resumable execution checkpoints and lease heartbeats so a replacement
   worker can continue interrupted runs instead of restarting them from scratch.

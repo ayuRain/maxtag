@@ -417,5 +417,46 @@ test(
         .attempts,
       1,
     );
+
+    const steeringThread = {
+      id: 'telegram:steering-race',
+      platform: 'telegram',
+      externalId: 'steering-race',
+      workspaceId: 'workspace-race',
+      projectId: 'project-race',
+      visibility: 'public',
+    };
+    const steeringResults = await runContendingWorkers(
+      databasePath,
+      'create-or-steer',
+      ['a', 'b'].map((suffix) => ({
+        runId: `steering-run-${suffix}`,
+        thread: steeringThread,
+        message: {
+          id: `steering-message-${suffix}`,
+          threadId: steeringThread.id,
+          platform: 'telegram',
+          text: `message ${suffix}`,
+          actor: { id: `actor-${suffix}` },
+          mentionsAgent: true,
+        },
+      })),
+    );
+    assert.deepEqual(
+      steeringResults.map((result) => result.disposition).sort(),
+      ['created', 'steered'],
+    );
+    assert.equal(
+      (await store.deliveryStore.listAgentRuns({
+        threadId: steeringThread.id,
+      })).length,
+      1,
+    );
+    assert.equal(
+      (await store.deliveryStore.listAgentRunSteering({
+        threadId: steeringThread.id,
+      })).length,
+      1,
+    );
   },
 );

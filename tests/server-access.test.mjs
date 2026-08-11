@@ -267,7 +267,7 @@ test(
     assert.equal(contributorRun.response.status, 202);
     assert.equal(contributorRun.data.accepted, true);
     assert.equal(
-      contributorRun.data.run.metadata.actorAuthorization.projectRole,
+      contributorRun.data.authorization.projectRole,
       'contributor',
     );
 
@@ -279,11 +279,11 @@ test(
     assert.equal(nativeTelegramContributor.response.status, 202);
     assert.equal(nativeTelegramContributor.data.accepted, true);
     assert.equal(
-      nativeTelegramContributor.data.run.metadata.actorAuthorization.memberId,
+      nativeTelegramContributor.data.authorization.memberId,
       contributor.id,
     );
     assert.equal(
-      nativeTelegramContributor.data.run.metadata.actorAuthorization.projectRole,
+      nativeTelegramContributor.data.authorization.projectRole,
       'contributor',
     );
 
@@ -298,7 +298,7 @@ test(
     );
     assert.equal(contributorWorkspaceMemory.data.accepted, true);
     assert.equal(
-      contributorWorkspaceMemory.data.run.metadata.actorAuthorization.workspaceRole,
+      contributorWorkspaceMemory.data.authorization.workspaceRole,
       'member',
     );
 
@@ -336,7 +336,7 @@ test(
       clientEvent('access-owner', 'ou-owner', 'schedule every 30m: Check CI'),
     );
     assert.equal(ownerRoutine.data.accepted, true);
-    assert.equal(ownerRoutine.data.run.metadata.actorAuthorization.workspaceRole, 'owner');
+    assert.equal(ownerRoutine.data.authorization.workspaceRole, 'owner');
 
     const access = await fetch(`${baseUrl}/v1/access?workspaceId=dev-workspace`).then(
       (response) => response.json(),

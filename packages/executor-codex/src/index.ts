@@ -57,6 +57,7 @@ function hasWriteGrant(request: AgentRunRequest): boolean {
 export class CodexExecutor implements Executor {
   readonly id = 'codex';
   readonly label = 'Codex';
+  readonly steeringMode = 'next_turn' as const;
   private readonly options: CodexExecutorOptions;
 
   constructor(options?: CodexExecutorOptions) {

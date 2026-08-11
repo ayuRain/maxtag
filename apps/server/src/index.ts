@@ -39,6 +39,7 @@ import {
   runDeliveryWorkerPass,
   type CancelOutboxOptions,
   type AgentRunRecord,
+  type AgentRunSteeringRecord,
   type ConfigureThreadBindingInput,
   type RecoverStaleAgentRunsOptions,
   type RecoverStaleOutboxOptions,
@@ -85,6 +86,8 @@ import {
   type UpsertRoutineInput,
 } from '@opentag/routines';
 import {
+  createDurableSteeringProvider,
+  monitorDurableRunCancellation,
   RoutineSchedulerService,
   WorkflowCoordinatorService,
   type RoutineTickResult,
@@ -141,6 +144,10 @@ const pairingTtlSeconds = Math.max(
 const agentWorkerMode = process.env.OPENTAG_AGENT_WORKER || 'inline';
 const agentWorkerEnabled = agentWorkerMode !== 'manual';
 const agentWorkerIntervalMs = Number(process.env.OPENTAG_AGENT_WORKER_INTERVAL_MS || 2000);
+const runControlPollMs = Math.max(
+  25,
+  Number(process.env.OPENTAG_RUN_CONTROL_POLL_MS || 250),
+);
 const agentWorkerStaleMs = Number(process.env.OPENTAG_AGENT_WORKER_STALE_MS || 120_000);
 const agentWorkerId = `opentag-${process.pid}`;
 const executorMode =
@@ -456,7 +463,13 @@ const capabilityManifest = {
     {
       capability: 'Topic continuation',
       agentdock: 'mention starts a topic, follow-up messages continue the session',
-      opentag: 'observed thread binding lets established Lark topics continue without repeated mentions',
+      opentag: 'observed bindings plus a durable single-flight follow-up mailbox preserve thread order across processes',
+      status: 'ready',
+    },
+    {
+      capability: 'Shared task steering',
+      agentdock: 'active session input can steer the current runtime turn',
+      opentag: 'live steering executor contract; Codex and Claude one-shot CLIs continue follow-ups as durable next turns',
       status: 'partial',
     },
     {
@@ -563,12 +576,15 @@ function executorStatus(): Record<string, unknown> {
     codex: {
       command: codexCommand,
       model: codexModel,
+      steeringMode: 'next_turn',
     },
     claude: {
       command: claudeCommand,
       model: claudeModel,
       maxBudgetUsd: claudeMaxBudgetUsd,
+      steeringMode: 'next_turn',
     },
+    runControlPollMs,
   };
 }
 
@@ -924,13 +940,14 @@ async function deliverySnapshot(
   limit = 50,
   workspaceId?: string,
 ): Promise<Record<string, unknown>> {
-  const [summary, outbox, turnDeliveries, bindings, inboundEvents] =
+  const [summary, outbox, turnDeliveries, bindings, inboundEvents, steering] =
     await Promise.all([
       deliveryStore.summarize(workspaceId),
       deliveryStore.listOutbox({ limit, workspaceId }),
       deliveryStore.listTurnDeliveries({ limit, workspaceId }),
       deliveryStore.listThreadBindings(limit, workspaceId),
       deliveryStore.listInboundEvents({ limit, workspaceId }),
+      deliveryStore.listAgentRunSteering({ limit, workspaceId }),
     ]);
   return {
     workspaceId,
@@ -939,6 +956,7 @@ async function deliverySnapshot(
     turnDeliveries,
     bindings,
     inboundEvents,
+    steering,
   };
 }
 
@@ -1952,6 +1970,67 @@ async function sendControlMessage(
   }
 }
 
+function isStopCommand(text: string): boolean {
+  const trimmed = text
+    .trim()
+    .replace(/^<at\b[^>]*>.*?<\/at>\s*/iu, '')
+    .replace(/^@(?:opentag|_[a-z0-9]+)\s+/iu, '');
+  return (
+    /^\/(?:stop|cancel)(?:@[a-z0-9_]+)?$/iu.test(trimmed) ||
+    /^(?:stop|cancel|停止|停止任务|取消任务)$/iu.test(trimmed)
+  );
+}
+
+async function handleRunControlCommand(
+  input: { thread: SourceThread; message: SourceMessage },
+  inboundEventId: string,
+): Promise<Record<string, unknown> | undefined> {
+  if (!isStopCommand(input.message.text)) return undefined;
+  const reason = `thread:${input.thread.platform}:${input.message.actor.id}:stop`;
+  const cancelled = await deliveryStore.cancelActiveAgentRunsForThread(
+    input.thread,
+    reason,
+  );
+  for (const run of cancelled.runs) {
+    activeRuns.get(run.id)?.abort(reason);
+    await deliveryStore.cancelOutbox({ runId: run.id, reason });
+  }
+  const message = cancelled.runs.length
+    ? `Cancellation requested for ${cancelled.runs.length} active task${
+        cancelled.runs.length === 1 ? '' : 's'
+      }.${
+        cancelled.steering.length
+          ? ` Cleared ${cancelled.steering.length} queued follow-up${
+              cancelled.steering.length === 1 ? '' : 's'
+            }.`
+          : ''
+      }`
+    : 'No active task in this thread.';
+  const notice = await sendControlMessage(
+    input.thread,
+    input.message.id,
+    message,
+  );
+  await deliveryStore.markInboundEventProcessed(inboundEventId, {
+    workspaceId: input.thread.workspaceId,
+    projectId: input.thread.projectId,
+    threadId: input.thread.id,
+    messageId: input.message.id,
+    metadata: {
+      control: 'stop',
+      actorId: input.message.actor.id,
+      runIds: cancelled.runs.map((run) => run.id),
+      steeringIds: cancelled.steering.map((item) => item.id),
+    },
+  });
+  return {
+    accepted: true,
+    control: 'stop',
+    cancelled,
+    notice,
+  };
+}
+
 async function handlePairingCommand(
   input: { thread: SourceThread; message: SourceMessage },
   inboundEventId: string,
@@ -2227,7 +2306,10 @@ async function applyMemoryCommand(input: {
 }
 
 interface QueuedMessageRun {
+  disposition: 'created' | 'steered';
   run: AgentRunRecord;
+  steering?: AgentRunSteeringRecord;
+  authorization: Record<string, unknown>;
   route: Record<string, unknown>;
   memoryCommand?: {
     kind: ParsedMemoryCommand['kind'];
@@ -2301,7 +2383,10 @@ async function enqueueMessageRun(input: {
   });
   const routineCommand = routineCommandService.parse(routed.message.text);
   const resolvedPolicy = await threadConfigStore.resolveThreadPolicy(routed.thread);
-  const run = await deliveryStore.createAgentRun({
+  const authorization = options?.authorization
+    ? actorAuthorizationPayload(options.authorization)
+    : { allowed: true, reason: 'operator_or_internal' };
+  const staged = await deliveryStore.createAgentRunOrSteer({
     runId,
     thread: routed.thread,
     message: routed.message,
@@ -2313,11 +2398,10 @@ async function enqueueMessageRun(input: {
         ? 'memory-command'
         : resolvedPolicy.identity.defaultExecutorId,
     transportMode,
+    allowLiveSteering: !memoryCommand && !routineCommand,
     metadata: {
       ...options?.metadata,
-      actorAuthorization: options?.authorization
-        ? actorAuthorizationPayload(options.authorization)
-        : { allowed: true, reason: 'operator_or_internal' },
+      actorAuthorization: authorization,
       memoryCommand: memoryCommand
         ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
         : undefined,
@@ -2332,7 +2416,10 @@ async function enqueueMessageRun(input: {
   });
 
   return {
-    run,
+    disposition: staged.disposition,
+    run: staged.run,
+    steering: staged.steering,
+    authorization,
     route,
     memoryCommand: memoryCommand
       ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
@@ -2633,12 +2720,27 @@ async function executeAgentRun(
   const runtime = createRuntimeForPlatform(runPlatform.platform);
   const abortController = new AbortController();
   activeRuns.set(runId, abortController);
+  const stopCancellationMonitor = monitorDurableRunCancellation({
+    deliveryStore,
+    runId,
+    abortController,
+    pollMs: runControlPollMs,
+    onError: (error) => {
+      console.error(`OpenTag cancellation poll failed for ${runId}`, error);
+    },
+  });
   try {
     const result = await runtime.handleMessage({
       runId,
       thread: initialRun.thread,
       message: initialRun.message,
       abortSignal: abortController.signal,
+      steering: createDurableSteeringProvider({
+        deliveryStore,
+        runId,
+        workerId: agentWorkerId,
+        pollMs: runControlPollMs,
+      }),
       onEvent: async (event) => {
         await deliveryStore.appendAgentRunEvent(
           runId,
@@ -2684,6 +2786,7 @@ async function executeAgentRun(
     await markRunInboundFailed(initialRun, message);
     throw error;
   } finally {
+    stopCancellationMonitor();
     activeRuns.delete(runId);
   }
 }
@@ -2696,6 +2799,16 @@ async function runMessageSync(input: {
   authorization?: ActorAuthorizationDecision;
 }): Promise<Record<string, unknown>> {
   const queued = await enqueueMessageRun(input, options);
+  if (queued.disposition === 'steered') {
+    scheduleAgentWorkerPass();
+    return {
+      accepted: true,
+      queued: true,
+      steered: true,
+      ...queued,
+      delivery: await deliverySnapshot(20, queued.run.workspaceId),
+    };
+  }
   const result = await executeAgentRun(queued.run);
   return {
     ...result,
@@ -2738,11 +2851,18 @@ async function runAgentWorkerPass(
     }
     return result;
   })();
+  let result: AgentWorkerPassResult;
   try {
-    return await agentWorkerPass;
+    result = await agentWorkerPass;
   } finally {
     agentWorkerPass = undefined;
   }
+  const queued = await deliveryStore.listAgentRuns({
+    status: 'queued',
+    limit: 1,
+  });
+  if (queued.length > 0) scheduleAgentWorkerPass(10);
+  return result;
 }
 
 function scheduleAgentWorkerPass(delayMs = 0): void {
@@ -4190,6 +4310,96 @@ const server = createServer(async (request, response) => {
           id,
           Number(url.searchParams.get('limit') || 100),
         ),
+        steering: await deliveryStore.listAgentRunSteering({
+          runId: id,
+          limit: Number(url.searchParams.get('limit') || 100),
+        }),
+      });
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      url.pathname.startsWith('/v1/runs/') &&
+      url.pathname.endsWith('/steer')
+    ) {
+      const id = decodeURIComponent(
+        url.pathname.slice('/v1/runs/'.length, -'/steer'.length),
+      );
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const text = stringValue(body, 'text')?.trim();
+      if (!text) {
+        sendJson(response, 400, { error: 'steering_text_required' });
+        return;
+      }
+      const existing = await deliveryStore.getAgentRun(id);
+      if (!existing || !existing.thread) {
+        sendJson(response, 404, { error: 'run_not_found' });
+        return;
+      }
+      const runAllowed = existing.workspaceId
+        ? requireOperatorWorkspace(
+            response,
+            operatorAuthentication!,
+            existing.workspaceId,
+          )
+        : requireInstallationOperator(response, operatorAuthentication!);
+      if (!runAllowed) return;
+      if (existing.status !== 'queued' && existing.status !== 'running') {
+        sendJson(response, 409, { error: 'run_not_active', run: existing });
+        return;
+      }
+      const messageId = `operator-steer:${randomUUID()}`;
+      const inbound = await deliveryStore.recordInboundEvent({
+        platform: existing.platform,
+        externalId: messageId,
+        eventType: 'operator.steering',
+        workspaceId: existing.workspaceId,
+        projectId: existing.projectId,
+        threadId: existing.threadId,
+        messageId,
+        metadata: { targetRunId: id, ingress: 'operator' },
+      });
+      const steering = await deliveryStore.enqueueAgentRunSteering({
+        targetRunId: id,
+        inboundEventId: inbound.record.id,
+        bindingId: existing.bindingId,
+        executorId: existing.executorId,
+        transportMode: existing.transportMode,
+        message: {
+          id: messageId,
+          threadId: existing.threadId,
+          platform: existing.platform,
+          text,
+          actor: {
+            id: operatorActor(operatorAuthentication!),
+            displayName: operatorAuthentication!.principal?.displayName,
+          },
+          createdAt: new Date().toISOString(),
+          mentionsAgent: true,
+          metadata: { ingress: 'operator', targetRunId: id },
+        },
+        metadata: {
+          actorAuthorization: {
+            allowed: true,
+            reason: 'operator_control_plane',
+          },
+        },
+      });
+      if (!steering) {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'run_not_active',
+        );
+        sendJson(response, 409, { error: 'run_not_active' });
+        return;
+      }
+      scheduleAgentWorkerPass();
+      sendJson(response, 202, {
+        accepted: true,
+        steered: true,
+        run: await deliveryStore.getAgentRun(id),
+        steering,
       });
       return;
     }
@@ -4275,6 +4485,14 @@ const server = createServer(async (request, response) => {
         threadId: normalized.thread.id,
         messageId: normalized.message.id,
       });
+      const control = await handleRunControlCommand(
+        normalized,
+        inbound.record.id,
+      );
+      if (control) {
+        sendJson(response, 200, control);
+        return;
+      }
       if (asyncRequested) {
         const queued = await enqueueMessageRun(normalized, {
           inboundEventId: inbound.record.id,
@@ -4420,6 +4638,15 @@ const server = createServer(async (request, response) => {
             decision: authorization,
           }),
         );
+        return;
+      }
+
+      const control = await handleRunControlCommand(
+        routed,
+        inbound.record.id,
+      );
+      if (control) {
+        sendJson(response, 200, control);
         return;
       }
 
@@ -4589,6 +4816,15 @@ const server = createServer(async (request, response) => {
         return;
       }
 
+      const control = await handleRunControlCommand(
+        routed,
+        inbound.record.id,
+      );
+      if (control) {
+        sendJson(response, 200, control);
+        return;
+      }
+
       const queued = await enqueueMessageRun(routed, {
         inboundEventId: inbound.record.id,
         authorization,
@@ -4736,6 +4972,15 @@ const server = createServer(async (request, response) => {
             decision: authorization,
           }),
         );
+        return;
+      }
+
+      const control = await handleRunControlCommand(
+        routed,
+        inbound.record.id,
+      );
+      if (control) {
+        sendJson(response, 200, control);
         return;
       }
       const queued = await enqueueMessageRun(routed, {

@@ -68,6 +68,7 @@ function assistantText(event: JsonRecord): string | undefined {
 export class ClaudeExecutor implements Executor {
   readonly id = 'claude';
   readonly label = 'Claude';
+  readonly steeringMode = 'next_turn' as const;
   private readonly options: ClaudeExecutorOptions;
 
   constructor(options?: ClaudeExecutorOptions) {

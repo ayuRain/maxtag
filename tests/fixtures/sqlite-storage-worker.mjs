@@ -19,11 +19,13 @@ try {
               ...workerData.input,
               limit: 1,
             })
-          : workerData.action === 'workflow-claim'
+      : workerData.action === 'workflow-claim'
             ? await store.workflowStore.claimReadyNodes({
                 ...workerData.input,
                 limit: 1,
               })
+          : workerData.action === 'create-or-steer'
+            ? await store.deliveryStore.createAgentRunOrSteer(workerData.input)
         : await store.deliveryStore.claimReadyOutbox({ limit: 1 });
   parentPort.postMessage({ ok: true, result });
 } catch (error) {
