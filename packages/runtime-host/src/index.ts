@@ -14,6 +14,7 @@ import { FileThreadConfigStore } from '@opentag/config';
 import {
   FileDeliveryStore,
   TrackedLarkTransport,
+  TrackedTelegramTransport,
   TrackedTextPlatformAdapter,
   type AgentRunRecord,
   type RecoverStaleAgentRunsOptions,
@@ -32,12 +33,24 @@ import {
   type LarkOpenApiDomain,
   type LarkTransport,
 } from '@opentag/platform-lark';
+import {
+  HttpTelegramTransport,
+  MemoryTelegramTransport,
+  TelegramPlatformAdapter,
+  type TelegramTransport,
+} from '@opentag/platform-telegram';
 
 export interface RuntimeHostLarkConfig {
   transportMode?: string;
   appId?: string;
   appSecret?: string;
   domain?: LarkOpenApiDomain;
+  baseUrl?: string;
+}
+
+export interface RuntimeHostTelegramConfig {
+  transportMode?: string;
+  botToken?: string;
   baseUrl?: string;
 }
 
@@ -58,6 +71,7 @@ export interface RuntimeHostConfig {
   dataDir: string;
   workerId?: string;
   lark?: RuntimeHostLarkConfig;
+  telegram?: RuntimeHostTelegramConfig;
   executors?: RuntimeHostExecutorConfig;
 }
 
@@ -89,18 +103,28 @@ function larkTransportStatus(config: RuntimeHostLarkConfig = {}): {
   };
 }
 
+function telegramTransportStatus(config: RuntimeHostTelegramConfig = {}): {
+  requested: string;
+  mode: 'memory' | 'http';
+  hasToken: boolean;
+  baseUrl?: string;
+} {
+  const requested = config.transportMode || 'memory';
+  const hasToken = Boolean(config.botToken);
+  return {
+    requested,
+    mode:
+      requested === 'http' || (requested === 'auto' && hasToken)
+        ? 'http'
+        : 'memory',
+    hasToken,
+    baseUrl: config.baseUrl,
+  };
+}
+
 function genericClientCapabilities(
-  platform: PlatformKind,
+  _platform: PlatformKind,
 ): Partial<PlatformCapabilities> {
-  if (platform === 'telegram') {
-    return {
-      supportsThreads: false,
-      supportsCards: false,
-      supportsFiles: true,
-      supportsReactions: false,
-      supportsMentions: true,
-    };
-  }
   return {};
 }
 
@@ -195,6 +219,10 @@ export class OpenTagWorkerHost {
 
   larkTransportStatus(): ReturnType<typeof larkTransportStatus> {
     return larkTransportStatus(this.config.lark);
+  }
+
+  telegramTransportStatus(): ReturnType<typeof telegramTransportStatus> {
+    return telegramTransportStatus(this.config.telegram);
   }
 
   executorStatus(): Record<string, unknown> {
@@ -362,6 +390,10 @@ export class OpenTagWorkerHost {
           },
           larkTransport: runPlatform.larkTransport,
           larkDryRun: this.larkDryRunPayload(runPlatform.larkDryRun),
+          telegramTransport: runPlatform.telegramTransport,
+          telegramDryRun: this.telegramDryRunPayload(
+            runPlatform.telegramDryRun,
+          ),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -401,6 +433,10 @@ export class OpenTagWorkerHost {
         },
         larkTransport: runPlatform.larkTransport,
         larkDryRun: this.larkDryRunPayload(runPlatform.larkDryRun),
+        telegramTransport: runPlatform.telegramTransport,
+        telegramDryRun: this.telegramDryRunPayload(
+          runPlatform.telegramDryRun,
+        ),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -515,6 +551,8 @@ export class OpenTagWorkerHost {
     transportMode: string;
     larkDryRun?: MemoryLarkTransport;
     larkTransport?: { mode: 'memory' | 'http' };
+    telegramDryRun?: MemoryTelegramTransport;
+    telegramTransport?: { mode: 'memory' | 'http' };
   } {
     if (thread.platform === 'lark') {
       const larkTransport = this.createLarkTransportForRun();
@@ -525,6 +563,21 @@ export class OpenTagWorkerHost {
         transportMode: `lark-${larkTransport.mode}`,
         larkDryRun: larkTransport.dryRun,
         larkTransport: { mode: larkTransport.mode },
+      };
+    }
+
+    if (thread.platform === 'telegram') {
+      const telegramTransport = this.createTelegramTransportForRun();
+      return {
+        platform: new TelegramPlatformAdapter(
+          new TrackedTelegramTransport(
+            telegramTransport.transport,
+            this.deliveryStore,
+          ),
+        ),
+        transportMode: `telegram-${telegramTransport.mode}`,
+        telegramDryRun: telegramTransport.dryRun,
+        telegramTransport: { mode: telegramTransport.mode },
       };
     }
 
@@ -569,6 +622,31 @@ export class OpenTagWorkerHost {
     };
   }
 
+  private createTelegramTransportForRun(): {
+    transport: TelegramTransport;
+    dryRun?: MemoryTelegramTransport;
+    mode: 'memory' | 'http';
+  } {
+    const status = this.telegramTransportStatus();
+    if (status.mode === 'http') {
+      if (!this.config.telegram?.botToken) {
+        throw new Error(
+          'OPENTAG_TELEGRAM_TRANSPORT=http requires OPENTAG_TELEGRAM_BOT_TOKEN.',
+        );
+      }
+      return {
+        mode: 'http',
+        transport: new HttpTelegramTransport({
+          botToken: this.config.telegram.botToken,
+          baseUrl: status.baseUrl,
+        }),
+      };
+    }
+
+    const dryRun = new MemoryTelegramTransport();
+    return { mode: 'memory', transport: dryRun, dryRun };
+  }
+
   private larkDryRunPayload(
     dryRun: MemoryLarkTransport | undefined,
   ): Record<string, unknown> | undefined {
@@ -576,6 +654,18 @@ export class OpenTagWorkerHost {
       ? {
           texts: dryRun.texts,
           cards: dryRun.cards,
+        }
+      : undefined;
+  }
+
+  private telegramDryRunPayload(
+    dryRun: MemoryTelegramTransport | undefined,
+  ): Record<string, unknown> | undefined {
+    return dryRun
+      ? {
+          texts: dryRun.texts,
+          edits: dryRun.edits,
+          documents: dryRun.documents,
         }
       : undefined;
   }

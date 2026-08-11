@@ -13,6 +13,7 @@
     { "path": "../executor-claude" },
     { "path": "../executor-codex" },
     { "path": "../memory" },
-    { "path": "../platform-lark" }
+    { "path": "../platform-lark" },
+    { "path": "../platform-telegram" }
   ]
 }

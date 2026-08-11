@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@opentag/core": "0.1.0",
-    "@opentag/platform-lark": "0.1.0"
+    "@opentag/platform-lark": "0.1.0",
+    "@opentag/platform-telegram": "0.1.0"
   }
 }

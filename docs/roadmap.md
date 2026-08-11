@@ -20,6 +20,8 @@
   ingestion runs with `OPENTAG_AGENT_WORKER=manual`.
 - Generic client ingress that maps non-Lark envelopes into the same run queue,
   memory scopes, and tracked text delivery.
+- Native Telegram Bot API webhook/send/edit adapter with forum-topic routing,
+  update idempotency, outgoing files, and tracked delivery.
 - Shared file-backed workspace/project agent policy with per-project identity,
   instructions, executor selection, tool grants, network policy, and audit.
 - Opt-in local Codex and Claude CLI execution with bounded output, process-group
@@ -88,6 +90,7 @@
 ## Phase 5: Multi-Platform
 
 - Keep native platform webhooks thin by mapping them into `/v1/client/events`.
-- Telegram adapter reaches parity for messages, files, and progress receipts.
+- Harden Telegram with inbound file downloads, pairing/allowlists, and live bot
+  webhook/delivery smoke tests.
 - Slack adapter can map thread_ts to `SourceThread`.
 - GitHub issue/PR comments can become first-class work threads.

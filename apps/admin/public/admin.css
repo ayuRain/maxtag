@@ -364,7 +364,8 @@ h3 {
   display: none;
 }
 
-.summary-strip {
+.summary-strip,
+.connector-summary {
   min-height: 92px;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -380,6 +381,98 @@ h3 {
   display: grid;
   align-content: center;
   gap: 5px;
+}
+
+.client-table,
+.connector-binding-list {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.client-table-header,
+.client-table-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1.1fr) minmax(220px, 1.5fr) minmax(170px, 1.1fr) 76px;
+  gap: 18px;
+  align-items: center;
+  padding: 0 16px;
+}
+
+.client-table-header {
+  min-height: 34px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.client-table-row {
+  min-height: 72px;
+  border-bottom: 1px solid var(--line);
+}
+
+.client-table-row:last-child {
+  border-bottom: 0;
+}
+
+.client-identity,
+.client-cell,
+.connector-binding-row > div {
+  min-width: 0;
+}
+
+.client-identity,
+.client-cell,
+.connector-binding-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.client-identity strong,
+.connector-binding-row strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.client-identity small,
+.connector-binding-row small,
+.client-cell > span:last-of-type {
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.client-cell-label {
+  display: none;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.client-ingress code {
+  color: var(--ink);
+  font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.connector-bindings-heading {
+  margin-top: 18px;
+}
+
+.connector-binding-row {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.connector-binding-row:last-child {
+  border-bottom: 0;
 }
 
 .summary-metric:last-child {
@@ -1239,6 +1332,8 @@ pre {
 .dialog-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 20px;
 }
 
 .dialog-actions {
@@ -1280,6 +1375,15 @@ pre {
   place-items: center;
   color: var(--muted);
   font-size: 11px;
+}
+
+.telegram-receipt {
+  padding: 14px;
+  background: var(--surface-subtle);
+  white-space: pre-wrap;
+  overflow: auto;
+  color: var(--ink);
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .card-header {
@@ -1363,6 +1467,12 @@ pre {
   .run-table-header > :nth-child(4),
   .run-table-row > :nth-child(4) {
     display: none;
+  }
+
+  .client-table-header,
+  .client-table-row {
+    grid-template-columns: minmax(130px, 0.9fr) minmax(160px, 1fr) minmax(190px, 1.3fr) minmax(150px, 1fr) 70px;
+    gap: 12px;
   }
 }
 
@@ -1461,6 +1571,30 @@ pre {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
+
+  .client-table-header {
+    display: none;
+  }
+
+  .client-table-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 16px;
+    padding: 14px 16px;
+  }
+
+  .client-cell {
+    grid-column: 1 / -1;
+    grid-template-columns: 80px minmax(0, 1fr);
+    align-items: baseline;
+  }
+
+  .client-cell-label {
+    display: inline;
+  }
+
+  .client-ingress code {
+    grid-column: 2;
+  }
 }
 
 @media (max-width: 680px) {
@@ -1484,12 +1618,13 @@ pre {
   }
 
   .nav {
-    overflow: hidden;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
 
   .nav-item {
-    min-width: 0;
-    flex: 1 1 0;
+    min-width: 82px;
+    flex: 0 0 auto;
     justify-content: center;
     padding: 0 7px;
     font-size: 11px;
@@ -1503,16 +1638,29 @@ pre {
     padding: 20px 16px 36px;
   }
 
-  .summary-strip {
+  .summary-strip,
+  .connector-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .summary-metric:nth-child(2) {
+  .summary-strip .summary-metric:nth-child(2),
+  .connector-summary .summary-metric:nth-child(2) {
     border-right: 0;
   }
 
-  .summary-metric:nth-child(-n + 2) {
+  .summary-strip .summary-metric:nth-child(-n + 2),
+  .connector-summary .summary-metric:nth-child(-n + 2) {
     border-bottom: 1px solid var(--line);
+  }
+
+  .connector-binding-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+  }
+
+  .binding-project {
+    grid-column: 1 / -1;
+    grid-template-columns: 80px minmax(0, 1fr);
   }
 
   .project-grid,

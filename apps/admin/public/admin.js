@@ -23,6 +23,7 @@ const state = {
 const viewCopy = {
   overview: { eyebrow: 'Workspace', title: 'Overview' },
   projects: { eyebrow: 'Routing and access', title: 'Projects' },
+  connectors: { eyebrow: 'Client runtime', title: 'Connectors' },
   routines: { eyebrow: 'Proactive work', title: 'Routines' },
   activity: { eyebrow: 'Runs and delivery', title: 'Activity' },
   memory: { eyebrow: 'Scoped context', title: 'Memory' },
@@ -154,6 +155,10 @@ function renderWorkspaceHeader() {
   $('#workspace-name').textContent = workspace?.name || 'OpenTag Workspace';
   $('#workspace-id').textContent = workspace?.id || 'dev-workspace';
   $('#project-count').textContent = String(state.workspace?.projects?.length || 0);
+  const clients = state.capabilities?.clients || [];
+  $('#client-count').textContent = String(
+    clients.filter((client) => client.status !== 'planned').length,
+  );
   $('#routine-count').textContent = String(state.routines?.routines?.length || 0);
   const runSummary = state.delivery?.summary?.agentRuns || {};
   $('#active-count').textContent = String(
@@ -161,10 +166,10 @@ function renderWorkspaceHeader() {
       (runSummary.running || 0) +
       (runSummary.cancel_requested || 0),
   );
-  const transport = state.capabilities?.larkTransport?.mode || 'memory';
   const workerMode = state.capabilities?.runWorker?.mode || 'manual';
   const executorMode = state.capabilities?.executorRuntime?.mode || 'dry-run';
-  $('#runtime-label').textContent = `${transport} / ${executorMode} / ${workerMode}`;
+  const activeClients = clients.filter((client) => client.status !== 'planned').length;
+  $('#runtime-label').textContent = `${activeClients} clients / ${executorMode} / ${workerMode}`;
 }
 
 function metric(value, label) {
@@ -260,12 +265,123 @@ function renderConnectors() {
   for (const client of state.capabilities?.clients || []) {
     const row = element('div', 'connector-row');
     const copy = element('div');
+    const transport = clientTransport(client);
     copy.append(
       element('strong', '', client.label || client.id),
-      element('small', '', `${client.inbound || 'not wired'} / ${client.surface || 'no surface'}`),
+      element(
+        'small',
+        '',
+        `${client.inbound || 'not wired'} / ${transport?.mode || 'planned'}`,
+      ),
     );
     row.append(copy, statePill(client.status));
     root.append(row);
+  }
+}
+
+function clientTransport(client) {
+  if (client.id === 'lark') return state.capabilities?.larkTransport;
+  if (client.id === 'telegram') return state.capabilities?.telegramTransport;
+  return null;
+}
+
+function clientEndpoint(client) {
+  if (client.id === 'lark') return '/v1/lark/events';
+  if (client.id === 'telegram') return '/v1/telegram/events';
+  return '/v1/client/events';
+}
+
+function clientRuntimeLabel(client) {
+  const transport = clientTransport(client);
+  if (!transport) return client.status === 'planned' ? 'Not wired' : 'Generic receipt';
+  if (client.id === 'lark') {
+    return transport.mode === 'http'
+      ? 'HTTP / credentials set'
+      : `Memory / ${transport.hasCredentials ? 'credentials set' : 'no credentials'}`;
+  }
+  return transport.mode === 'http'
+    ? `HTTP / ${transport.webhookSecretConfigured ? 'secret set' : 'no secret'}`
+    : `Memory / ${transport.webhookSecretConfigured ? 'secret set' : 'no secret'}`;
+}
+
+function clientCell(label, value, className = '') {
+  const cell = element('div', `client-cell ${className}`.trim());
+  cell.append(
+    element('span', 'client-cell-label', label),
+    element('span', '', value),
+  );
+  return cell;
+}
+
+function renderConnectorConsole() {
+  const clients = state.capabilities?.clients || [];
+  const transports = clients
+    .map((client) => clientTransport(client))
+    .filter(Boolean);
+  const configuredBindings = state.bindings.filter(
+    (binding) => binding.source === 'configured',
+  );
+  $('#connector-summary').replaceChildren(
+    metric(clients.filter((client) => client.status === 'ready').length, 'Native clients'),
+    metric(transports.filter((transport) => transport.mode === 'http').length, 'Live transports'),
+    metric(configuredBindings.length, 'Configured routes'),
+    metric(clients.filter((client) => client.status === 'planned').length, 'Planned clients'),
+  );
+
+  const table = $('#client-table');
+  table.replaceChildren();
+  const header = element('div', 'client-table-header');
+  for (const label of ['Client', 'Ingress', 'Surface', 'Runtime', 'State']) {
+    header.append(element('span', '', label));
+  }
+  table.append(header);
+  for (const client of clients) {
+    const row = element('div', 'client-table-row');
+    const identity = element('div', 'client-identity');
+    identity.append(
+      element('strong', '', client.label || client.id),
+      element('small', '', client.id),
+    );
+    const ingress = clientCell('Ingress', client.inbound || 'Not wired', 'client-ingress');
+    ingress.append(element('code', '', clientEndpoint(client)));
+    row.append(
+      identity,
+      ingress,
+      clientCell('Surface', client.surface || 'Planned'),
+      clientCell('Runtime', clientRuntimeLabel(client)),
+      statePill(client.status),
+    );
+    table.append(row);
+  }
+
+  const bindingList = $('#connector-bindings');
+  bindingList.replaceChildren();
+  if (!state.bindings.length) {
+    bindingList.append(element('div', 'empty-state', 'No client routes'));
+    return;
+  }
+  for (const binding of state.bindings) {
+    const row = element('div', 'connector-binding-row');
+    const identity = element('div');
+    identity.append(
+      element('strong', '', binding.title || binding.externalId),
+      element(
+        'small',
+        '',
+        `${statusLabel(binding.platform)} / ${binding.scope || 'thread'} / ${binding.source || 'observed'}`,
+      ),
+    );
+    const project = element('div', 'binding-project');
+    project.append(
+      element('span', 'client-cell-label', 'Project'),
+      element('strong', '', binding.projectId || 'general'),
+    );
+    row.append(
+      identity,
+      project,
+      statePill(binding.activationMode, statusLabel(binding.activationMode)),
+    );
+    bindingList.append(row);
   }
 }
 
@@ -1175,6 +1291,7 @@ async function runTest(event) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         text: $('#test-prompt').value,
+        platform: $('#test-client').value,
         workspaceId: project?.workspaceId || currentWorkspaceId(),
         projectId: project?.projectId || 'opentag',
         projectName: project?.name,
@@ -1182,9 +1299,21 @@ async function runTest(event) {
     });
     const cards = data.larkDryRun?.cards || [];
     const texts = data.larkDryRun?.texts || [];
-    if (cards.length) renderCard(cards.at(-1).card);
+    const telegramTexts = data.telegramDryRun?.texts || [];
+    const telegramEdits = data.telegramDryRun?.edits || [];
+    if (cards.length) {
+      renderCard(cards.at(-1).card);
+    } else if (data.telegramDryRun) {
+      const receipt = $('#card');
+      receipt.className = 'lark-card telegram-receipt';
+      receipt.textContent =
+        telegramEdits.at(-1)?.text || telegramTexts[0]?.text || 'No progress receipt';
+    }
     $('#test-output').textContent =
-      texts.at(-1)?.text || data.result?.summary || JSON.stringify(data.result, null, 2);
+      telegramTexts.at(-1)?.text ||
+      texts.at(-1)?.text ||
+      data.result?.summary ||
+      JSON.stringify(data.result, null, 2);
     $('#test-route').textContent = `${data.route?.workspaceId || 'workspace'} / ${data.route?.projectId || 'project'}`;
     await refreshAll({ quiet: true });
   } catch (error) {
@@ -1218,6 +1347,7 @@ function renderAll() {
   renderSummary();
   renderOverviewProjects();
   renderConnectors();
+  renderConnectorConsole();
   renderOverviewRuns();
   renderProjectList();
   renderRoutines();

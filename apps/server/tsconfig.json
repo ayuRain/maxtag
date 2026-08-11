@@ -13,6 +13,7 @@
     { "path": "../../packages/executor-codex" },
     { "path": "../../packages/memory" },
     { "path": "../../packages/platform-lark" },
+    { "path": "../../packages/platform-telegram" },
     { "path": "../../packages/routines" }
   ],
   "include": ["src/**/*.ts"]

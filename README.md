@@ -2,10 +2,10 @@
 
 OpenTag is an open agent-mention runtime for work threads.
 
-The product principle is **Lark first, not Lark only**. The first adapter targets
-Feishu/Lark groups and topic threads, while the core runtime is deliberately
-platform-neutral so Telegram, Slack, GitHub issues, Linear, or other work surfaces
-can be added later.
+The product principle is **Lark first, not Lark only**. Feishu/Lark groups and
+topic threads remain the first product surface, Telegram is the second native
+client, and the core runtime stays platform-neutral for Slack, GitHub, Linear,
+or future work surfaces.
 
 ## Why This Repo
 
@@ -24,7 +24,7 @@ those lessons, but starts from a different product model:
 ## Target Shape
 
 ```text
-@OpenTag in a Lark topic
+@OpenTag in Lark or /opentag in a Telegram topic
   -> normalize platform event into SourceThread + SourceMessage
   -> resolve workspace/project/thread
   -> load agent identity, access bundle, scoped memory, and default executor
@@ -41,7 +41,7 @@ apps/admin                  Operator console for projects, routines, runs, and m
 packages/core               Platform-neutral domain model and runtime contract
 packages/config             Workspace/project agent policy and audit store
 packages/platform-lark      Feishu/Lark adapter
-packages/platform-telegram  Telegram adapter placeholder
+packages/platform-telegram  Telegram webhook and Bot API adapter
 packages/executor-cli       Bounded, cancellable local CLI process runtime
 packages/executor-codex     Codex dry-run and local CLI executor
 packages/executor-claude    Claude dry-run and local CLI executor
@@ -57,9 +57,13 @@ packages/ui-cards           Progress/checklist card models
 
 - Lark event ingestion path, progress card rendering, and selectable memory/http
   Lark transport are wired.
+- Telegram has native Bot API webhook ingestion, secret validation, update
+  idempotency, chat/forum-topic normalization, editable progress messages,
+  long-message chunking, topic replies, outgoing files, and memory/http
+  transports.
 - The core model is client-neutral: Lark, Telegram, Slack, and GitHub comments
   are clients of the same runtime contract.
-- Non-Lark clients can enter through `/v1/client/events`, which normalizes a
+- Other clients can enter through `/v1/client/events`, which normalizes a
   client envelope into the same run queue, scoped memory, and delivery ledger.
 - Memory is scoped into global, workspace, project, and thread files.
 - Workspace and project agent policies are persisted separately from memory,
@@ -93,8 +97,8 @@ packages/ui-cards           Progress/checklist card models
   thread.
 - Lark topic continuation is supported: a mention can establish a thread binding,
   then later messages in that topic continue without repeating the mention.
-- Non-Lark delivery uses tracked text receipts in the outbox until a real
-  platform transport is wired.
+- Clients without a native adapter use tracked text receipts in the outbox until
+  a real platform transport is wired.
 - Channel/project bindings can be configured through the admin API and console,
   including mention-only vs always-on activation.
 - Scoped memory can be viewed and updated through `/v1/memory`, the admin
@@ -184,26 +188,26 @@ requires deploying the worker in a container or OS sandbox.
 
 ## Generic Client Ingress
 
-Use `/v1/client/events` when wiring a new platform adapter before the native
-webhook transport is ready:
+Use `/v1/client/events` when prototyping a client before its native webhook
+transport is ready:
 
 ```bash
 curl -X POST 'http://127.0.0.1:3077/v1/client/events' \
   -H 'content-type: application/json' \
   -d '{
-    "platform": "telegram",
-    "eventId": "tg-event-1",
+    "platform": "custom-chat",
+    "eventId": "chat-event-1",
     "thread": {
-      "externalId": "tg-chat-42",
-      "channelId": "tg-chat-42",
+      "externalId": "chat-42",
+      "channelId": "chat-42",
       "workspaceId": "dev-workspace",
       "projectId": "opentag",
       "visibility": "public"
     },
     "message": {
-      "id": "tg-message-1",
+      "id": "chat-message-1",
       "text": "/opentag summarize this repo",
-      "actor": { "id": "tg-user-1", "displayName": "Ada" }
+      "actor": { "id": "user-1", "displayName": "Ada" }
     }
   }'
 ```
@@ -228,3 +232,27 @@ OPENTAG_LARK_APP_SECRET=xxx
 
 Use `OPENTAG_LARK_DOMAIN=lark` for `open.larksuite.com`, or
 `OPENTAG_LARK_BASE_URL=https://...` for a custom OpenAPI host.
+
+## Telegram Delivery Mode
+
+Local development defaults to `OPENTAG_TELEGRAM_TRANSPORT=memory`, so native
+updates can be exercised without calling Telegram. For a real bot:
+
+```bash
+OPENTAG_TELEGRAM_TRANSPORT=http
+OPENTAG_TELEGRAM_BOT_TOKEN=123456:token
+OPENTAG_TELEGRAM_BOT_USERNAME=OpenTagBot
+OPENTAG_TELEGRAM_WEBHOOK_SECRET=replace-with-a-random-secret
+OPENTAG_TELEGRAM_WORKSPACE_ID=dev-workspace
+```
+
+Register `https://your-host/v1/telegram/events` as the bot webhook and pass the
+same secret as `secret_token` when calling Telegram `setWebhook`. Set
+`OPENTAG_TELEGRAM_REQUIRE_BINDING=true` when only chats explicitly configured in
+the OpenTag **Connectors** view should be accepted. Supergroup forum
+`message_thread_id` values become stable OpenTag threads; channel bindings map
+those topics to project-scoped identity, grants, and memory.
+
+Incoming Telegram file IDs are retained in attachment metadata. Automatic file
+download is still pending; local outbound artifacts are already uploaded with
+`sendDocument`.

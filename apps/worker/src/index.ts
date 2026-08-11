@@ -87,6 +87,11 @@ async function main(): Promise<void> {
       domain: larkDomainValue(process.env.OPENTAG_LARK_DOMAIN),
       baseUrl: process.env.OPENTAG_LARK_BASE_URL,
     },
+    telegram: {
+      transportMode: process.env.OPENTAG_TELEGRAM_TRANSPORT,
+      botToken: process.env.OPENTAG_TELEGRAM_BOT_TOKEN,
+      baseUrl: process.env.OPENTAG_TELEGRAM_BASE_URL,
+    },
     executors: {
       mode: executorMode(),
       workspaceRoot: process.env.OPENTAG_EXECUTOR_WORKSPACE_ROOT,
@@ -116,6 +121,7 @@ async function main(): Promise<void> {
     staleMs,
     once,
     larkTransport: host.larkTransportStatus(),
+    telegramTransport: host.telegramTransportStatus(),
     executors: host.executorStatus(),
   });
 

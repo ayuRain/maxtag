@@ -24,6 +24,7 @@ import {
 import {
   FileDeliveryStore,
   TrackedLarkTransport,
+  TrackedTelegramTransport,
   TrackedTextPlatformAdapter,
   runDeliveryWorkerPass,
   type CancelOutboxOptions,
@@ -55,6 +56,17 @@ import {
   type LarkTransport,
 } from '@opentag/platform-lark';
 import {
+  HttpTelegramTransport,
+  MemoryTelegramTransport,
+  TelegramPlatformAdapter,
+  normalizeTelegramUpdate,
+  parseAndValidateTelegramCallback,
+  telegramCallbackEventType,
+  telegramCallbackExternalId,
+  type TelegramTransport,
+  type TelegramUpdate,
+} from '@opentag/platform-telegram';
+import {
   FileRoutineStore,
   type Routine,
   type RoutineClaim,
@@ -76,6 +88,16 @@ const larkBaseUrl = process.env.OPENTAG_LARK_BASE_URL;
 const larkVerificationToken = process.env.OPENTAG_LARK_VERIFICATION_TOKEN;
 const larkCallbackMaxSkewSeconds = Number(
   process.env.OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS || 300,
+);
+const telegramTransportMode = process.env.OPENTAG_TELEGRAM_TRANSPORT || 'memory';
+const telegramBotToken = process.env.OPENTAG_TELEGRAM_BOT_TOKEN;
+const telegramBotUsername = process.env.OPENTAG_TELEGRAM_BOT_USERNAME;
+const telegramWebhookSecret = process.env.OPENTAG_TELEGRAM_WEBHOOK_SECRET;
+const telegramBaseUrl = process.env.OPENTAG_TELEGRAM_BASE_URL;
+const telegramWorkspaceId =
+  process.env.OPENTAG_TELEGRAM_WORKSPACE_ID || 'dev-workspace';
+const telegramRequireBinding = ['1', 'true', 'yes'].includes(
+  String(process.env.OPENTAG_TELEGRAM_REQUIRE_BINDING || 'false').toLowerCase(),
 );
 const agentWorkerMode = process.env.OPENTAG_AGENT_WORKER || 'inline';
 const agentWorkerEnabled = agentWorkerMode !== 'manual';
@@ -146,7 +168,7 @@ const capabilityManifest = {
     status: 'partial',
     model: 'one workspace bot routes every client event into the same thread-agent runtime',
   },
-  platforms: ['lark', 'telegram-generic', 'slack-planned', 'github-planned'],
+  platforms: ['lark', 'telegram', 'slack-planned', 'github-planned'],
   executors: [`codex-${executorMode}`, `claude-${executorMode}`],
   clients: [
     {
@@ -159,9 +181,9 @@ const capabilityManifest = {
     {
       id: 'telegram',
       label: 'Telegram',
-      status: 'partial',
-      inbound: 'generic client event envelope',
-      surface: 'tracked text receipt',
+      status: 'ready',
+      inbound: 'native Bot API webhook',
+      surface: 'editable progress message + topic reply + files',
     },
     {
       id: 'slack',
@@ -208,7 +230,7 @@ const capabilityManifest = {
     {
       capability: 'Multi-client routing',
       agentdock: 'Feishu, Telegram, QQ, Web adapters',
-      opentag: 'shared client event ingress, Lark callback, Telegram-style tracked text delivery',
+      opentag: 'shared client ingress plus native Lark and Telegram adapters',
       status: 'partial',
     },
     {
@@ -316,6 +338,33 @@ function larkTransportStatus(): Record<string, unknown> {
   };
 }
 
+function telegramTransportStatus(): {
+  requested: string;
+  mode: 'memory' | 'http';
+  hasToken: boolean;
+  botUsername?: string;
+  baseUrl?: string;
+  webhookSecretConfigured: boolean;
+  workspaceId: string;
+  requireBinding: boolean;
+} {
+  const requested = telegramTransportMode;
+  const hasToken = Boolean(telegramBotToken);
+  return {
+    requested,
+    mode:
+      requested === 'http' || (requested === 'auto' && hasToken)
+        ? 'http'
+        : 'memory',
+    hasToken,
+    botUsername: telegramBotUsername,
+    baseUrl: telegramBaseUrl || undefined,
+    webhookSecretConfigured: Boolean(telegramWebhookSecret),
+    workspaceId: telegramWorkspaceId,
+    requireBinding: telegramRequireBinding,
+  };
+}
+
 async function readTextBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
@@ -387,18 +436,34 @@ function createLarkTransportForRun(): {
   };
 }
 
-function genericClientCapabilities(
-  platform: PlatformKind,
-): Partial<PlatformCapabilities> {
-  if (platform === 'telegram') {
+function createTelegramTransportForRun(): {
+  transport: TelegramTransport;
+  dryRun?: MemoryTelegramTransport;
+  mode: 'memory' | 'http';
+} {
+  const status = telegramTransportStatus();
+  if (status.mode === 'http') {
+    if (!telegramBotToken) {
+      throw new Error(
+        'OPENTAG_TELEGRAM_TRANSPORT=http requires OPENTAG_TELEGRAM_BOT_TOKEN.',
+      );
+    }
     return {
-      supportsThreads: false,
-      supportsCards: false,
-      supportsFiles: true,
-      supportsReactions: false,
-      supportsMentions: true,
+      mode: 'http',
+      transport: new HttpTelegramTransport({
+        botToken: telegramBotToken,
+        baseUrl: telegramBaseUrl,
+      }),
     };
   }
+
+  const dryRun = new MemoryTelegramTransport();
+  return { mode: 'memory', transport: dryRun, dryRun };
+}
+
+function genericClientCapabilities(
+  _platform: PlatformKind,
+): Partial<PlatformCapabilities> {
   return {};
 }
 
@@ -407,6 +472,8 @@ function createPlatformForRun(thread: SourceThread): {
   transportMode: string;
   larkDryRun?: MemoryLarkTransport;
   larkTransport?: { mode: 'memory' | 'http' };
+  telegramDryRun?: MemoryTelegramTransport;
+  telegramTransport?: { mode: 'memory' | 'http' };
 } {
   if (thread.platform === 'lark') {
     const larkTransport = createLarkTransportForRun();
@@ -417,6 +484,21 @@ function createPlatformForRun(thread: SourceThread): {
       transportMode: `lark-${larkTransport.mode}`,
       larkDryRun: larkTransport.dryRun,
       larkTransport: { mode: larkTransport.mode },
+    };
+  }
+
+  if (thread.platform === 'telegram') {
+    const telegramTransport = createTelegramTransportForRun();
+    return {
+      platform: new TelegramPlatformAdapter(
+        new TrackedTelegramTransport(
+          telegramTransport.transport,
+          deliveryStore,
+        ),
+      ),
+      transportMode: `telegram-${telegramTransport.mode}`,
+      telegramDryRun: telegramTransport.dryRun,
+      telegramTransport: { mode: telegramTransport.mode },
     };
   }
 
@@ -540,16 +622,19 @@ function coerceDevMessage(body: Record<string, unknown>): {
   const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
   const projectId = stringValue(body, 'projectId', 'opentag');
   const projectName = stringValue(body, 'projectName', projectId);
+  const platform = (stringValue(body, 'platform', 'lark') || 'lark') as PlatformKind;
   const channelId = `dev-${projectId}`;
+  const topicId = platform === 'telegram' ? '1' : 'root';
+  const externalId = `${channelId}:${topicId}`;
   const thread: SourceThread = {
-    id: `lark:${channelId}:root`,
-    platform: 'lark',
-    externalId: `${channelId}:root`,
+    id: `${platform}:${externalId}`,
+    platform,
+    externalId,
     workspaceId,
     projectId,
     channelId,
-    rootMessageId: 'root',
-    topicId: 'root',
+    rootMessageId: platform === 'lark' ? 'root' : undefined,
+    topicId,
     title: projectName,
     visibility: 'public',
     metadata: {
@@ -561,7 +646,7 @@ function coerceDevMessage(body: Record<string, unknown>): {
     message: {
       id: `dev-${Date.now()}`,
       threadId: thread.id,
-      platform: 'lark',
+      platform,
       text,
       actor: {
         id: 'dev-user',
@@ -1296,6 +1381,9 @@ interface QueuedMessageRun {
   larkTransport?: {
     mode: 'memory' | 'http';
   };
+  telegramTransport?: {
+    mode: 'memory' | 'http';
+  };
 }
 
 interface AgentWorkerPassResult {
@@ -1336,9 +1424,15 @@ async function enqueueMessageRun(input: {
   const routeBinding = routed.binding ?? observedBinding;
   const larkTransport =
     routed.thread.platform === 'lark' ? larkTransportStatus() : undefined;
+  const telegramTransport =
+    routed.thread.platform === 'telegram'
+      ? telegramTransportStatus()
+      : undefined;
   const transportMode = larkTransport
     ? `lark-${String(larkTransport.mode)}`
-    : 'tracked-text';
+    : telegramTransport
+      ? `telegram-${telegramTransport.mode}`
+      : 'tracked-text';
   const route = {
     workspaceId: routed.thread.workspaceId,
     projectId: routed.thread.projectId,
@@ -1388,6 +1482,9 @@ async function enqueueMessageRun(input: {
     },
     larkTransport: larkTransport
       ? { mode: larkTransport.mode as 'memory' | 'http' }
+      : undefined,
+    telegramTransport: telegramTransport
+      ? { mode: telegramTransport.mode }
       : undefined,
   };
 }
@@ -1697,6 +1794,14 @@ async function executeAgentRun(
               cards: runPlatform.larkDryRun.cards,
             }
           : undefined,
+        telegramTransport: runPlatform.telegramTransport,
+        telegramDryRun: runPlatform.telegramDryRun
+          ? {
+              texts: runPlatform.telegramDryRun.texts,
+              edits: runPlatform.telegramDryRun.edits,
+              documents: runPlatform.telegramDryRun.documents,
+            }
+          : undefined,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1739,6 +1844,14 @@ async function executeAgentRun(
         ? {
             texts: runPlatform.larkDryRun.texts,
             cards: runPlatform.larkDryRun.cards,
+          }
+        : undefined,
+      telegramTransport: runPlatform.telegramTransport,
+      telegramDryRun: runPlatform.telegramDryRun
+        ? {
+            texts: runPlatform.telegramDryRun.texts,
+            edits: runPlatform.telegramDryRun.edits,
+            documents: runPlatform.telegramDryRun.documents,
           }
         : undefined,
     };
@@ -1831,6 +1944,10 @@ const server = createServer(async (request, response) => {
           passRunning: Boolean(agentWorkerPass),
         },
         executors: executorStatus(),
+        clients: {
+          lark: larkTransportStatus(),
+          telegram: telegramTransportStatus(),
+        },
         routines: {
           enabled: routinesEnabled,
           running: Boolean(routineTickPass),
@@ -1859,6 +1976,7 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         ...capabilityManifest,
         larkTransport: larkTransportStatus(),
+        telegramTransport: telegramTransportStatus(),
         runWorker: {
           mode: agentWorkerMode,
           enabled: agentWorkerEnabled,
@@ -2243,7 +2361,7 @@ const server = createServer(async (request, response) => {
         stringValue(body, 'mode') === 'async';
       const normalized = coerceDevMessage(body);
       const inbound = await deliveryStore.recordInboundEvent({
-        platform: 'lark',
+        platform: normalized.thread.platform,
         externalId: normalized.message.id,
         eventType: 'dev.message',
         workspaceId: normalized.thread.workspaceId,
@@ -2350,6 +2468,135 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, await runMessageSync(routed, {
         inboundEventId: inbound.record.id,
       }));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/telegram/events') {
+      const rawBody = await readTextBody(request);
+      const parsed = parseAndValidateTelegramCallback(
+        rawBody,
+        request.headers,
+        { webhookSecret: telegramWebhookSecret },
+      );
+      const body = parsed.body;
+      const externalId = telegramCallbackExternalId(body);
+      const eventType = telegramCallbackEventType(body);
+      if (!parsed.validation.ok) {
+        const rejected = await deliveryStore.recordInboundEvent({
+          platform: 'telegram',
+          externalId: `rejected:${externalId}:${randomUUID()}`,
+          eventType,
+          metadata: {
+            ingress: 'telegram-webhook',
+            originalExternalId: externalId,
+            reason: parsed.validation.reason,
+          },
+        });
+        await deliveryStore.markInboundEventRejected(
+          rejected.record.id,
+          parsed.validation.reason,
+        );
+        sendJson(response, parsed.validation.statusCode, {
+          accepted: false,
+          reason: parsed.validation.reason,
+        });
+        return;
+      }
+
+      const normalized = normalizeTelegramUpdate(body as TelegramUpdate, {
+        botUsername: telegramBotUsername,
+        workspaceId: telegramWorkspaceId,
+      });
+      const inbound = await deliveryStore.recordInboundEvent({
+        platform: 'telegram',
+        externalId,
+        eventType,
+        workspaceId: normalized?.thread.workspaceId,
+        projectId: normalized?.thread.projectId,
+        threadId: normalized?.thread.id,
+        messageId: normalized?.message.id,
+        metadata: { ingress: 'telegram-webhook' },
+      });
+      if (inbound.duplicate) {
+        sendJson(response, 200, {
+          accepted: true,
+          duplicate: true,
+          inbound: inbound.record,
+        });
+        return;
+      }
+      if (!normalized) {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'unsupported_telegram_update',
+        );
+        sendJson(response, 202, {
+          accepted: false,
+          reason: 'unsupported_telegram_update',
+        });
+        return;
+      }
+
+      const routed = await routeMessage(normalized);
+      if (telegramRequireBinding && routed.binding?.source !== 'configured') {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'binding_required',
+          {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            messageId: routed.message.id,
+          },
+        );
+        sendJson(response, 202, {
+          accepted: false,
+          reason: 'binding_required',
+          route: {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            platform: routed.thread.platform,
+          },
+        });
+        return;
+      }
+      if (!shouldHandleMessage(routed)) {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'mention_required',
+          {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            messageId: routed.message.id,
+          },
+        );
+        sendJson(response, 202, {
+          accepted: false,
+          reason: 'mention_required',
+          route: {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            platform: routed.thread.platform,
+            bindingId: routed.binding?.id,
+            establishedThreadBindingId: routed.establishedThreadBinding?.id,
+          },
+        });
+        return;
+      }
+
+      const queued = await enqueueMessageRun(routed, {
+        inboundEventId: inbound.record.id,
+      });
+      scheduleAgentWorkerPass();
+      sendJson(response, 202, {
+        accepted: true,
+        queued: true,
+        ...queued,
+        delivery: await deliverySnapshot(20),
+      });
       return;
     }
 

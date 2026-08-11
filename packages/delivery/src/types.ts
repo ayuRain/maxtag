@@ -51,6 +51,7 @@ export type InboundEventStatus =
 export interface OutboundTarget {
   platform: PlatformKind;
   chatId?: string;
+  topicId?: string;
   cardId?: string;
   rootId?: string;
   replyToMessageId?: string;

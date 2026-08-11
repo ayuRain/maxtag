@@ -28,6 +28,10 @@
             Projects
             <span class="nav-count" id="project-count">0</span>
           </button>
+          <button class="nav-item" data-view="connectors" type="button">
+            Connectors
+            <span class="nav-count" id="client-count">0</span>
+          </button>
           <button class="nav-item" data-view="routines" type="button">
             Routines
             <span class="nav-count" id="routine-count">0</span>
@@ -223,6 +227,27 @@
               </div>
             </form>
           </div>
+        </section>
+
+        <section class="view" id="view-connectors" data-view-panel="connectors" hidden>
+          <div class="connector-summary" id="connector-summary"></div>
+
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Client runtime</span>
+              <h2>Adapters</h2>
+            </div>
+          </div>
+          <div class="client-table" id="client-table"></div>
+
+          <div class="section-heading connector-bindings-heading">
+            <div>
+              <span class="eyebrow">Project routing</span>
+              <h2>Bindings</h2>
+            </div>
+            <button class="text-button" data-go-view="projects" type="button">Manage</button>
+          </div>
+          <div class="connector-binding-list" id="connector-bindings"></div>
         </section>
 
         <section class="view" id="view-routines" data-view-panel="routines" hidden>
@@ -444,12 +469,19 @@
       <form method="dialog" class="dialog-shell" id="test-form">
         <div class="dialog-header">
           <div>
-            <span class="eyebrow">Lark preview</span>
+            <span class="eyebrow">Client preview</span>
             <h2>Test agent</h2>
           </div>
           <button class="square-button" value="cancel" type="submit" aria-label="Close">x</button>
         </div>
         <div class="dialog-controls">
+          <label class="field compact-select">
+            <span>Client</span>
+            <select id="test-client">
+              <option value="lark">Lark / Feishu</option>
+              <option value="telegram">Telegram</option>
+            </select>
+          </label>
           <label class="field compact-select">
             <span>Project</span>
             <select id="test-project"></select>
