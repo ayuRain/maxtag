@@ -109,6 +109,17 @@ async function main(): Promise<void> {
       claudeCommand: process.env.OPENTAG_CLAUDE_COMMAND,
       claudeModel: process.env.OPENTAG_CLAUDE_MODEL,
       claudeMaxBudgetUsd: optionalNumberEnv('OPENTAG_CLAUDE_MAX_BUDGET_USD'),
+      sessionMode:
+        process.env.OPENTAG_EXECUTOR_SESSION_MODE === 'transcript'
+          ? 'transcript'
+          : 'provider',
+      sessionNamespace: process.env.OPENTAG_EXECUTOR_SESSION_NAMESPACE,
+      transcriptMaxEntries: optionalNumberEnv(
+        'OPENTAG_THREAD_CONTEXT_MAX_ENTRIES',
+      ),
+      transcriptMaxChars: optionalNumberEnv(
+        'OPENTAG_THREAD_CONTEXT_MAX_CHARS',
+      ),
     },
     routines: {
       defaultTimeZone:

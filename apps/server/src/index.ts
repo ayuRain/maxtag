@@ -87,6 +87,9 @@ import {
 } from '@opentag/routines';
 import {
   createDurableSteeringProvider,
+  createDurableProviderSessionContext,
+  defaultProviderSessionNamespace,
+  loadDurableConversationContext,
   monitorDurableRunCancellation,
   RoutineSchedulerService,
   WorkflowCoordinatorService,
@@ -163,6 +166,21 @@ const executorMaxOutputBytes = numberEnvironmentValue(
   2_000_000,
 );
 const executorInheritEnv = listEnvironmentValue('OPENTAG_EXECUTOR_INHERIT_ENV');
+const executorSessionMode =
+  process.env.OPENTAG_EXECUTOR_SESSION_MODE === 'transcript'
+    ? 'transcript'
+    : 'provider';
+const executorSessionNamespace =
+  process.env.OPENTAG_EXECUTOR_SESSION_NAMESPACE ||
+  defaultProviderSessionNamespace();
+const transcriptMaxEntries = numberEnvironmentValue(
+  'OPENTAG_THREAD_CONTEXT_MAX_ENTRIES',
+  40,
+);
+const transcriptMaxChars = numberEnvironmentValue(
+  'OPENTAG_THREAD_CONTEXT_MAX_CHARS',
+  40_000,
+);
 const codexCommand = process.env.OPENTAG_CODEX_COMMAND || 'codex';
 const codexModel = process.env.OPENTAG_CODEX_MODEL;
 const claudeCommand = process.env.OPENTAG_CLAUDE_COMMAND || 'claude';
@@ -463,13 +481,13 @@ const capabilityManifest = {
     {
       capability: 'Topic continuation',
       agentdock: 'mention starts a topic, follow-up messages continue the session',
-      opentag: 'observed bindings plus a durable single-flight follow-up mailbox preserve thread order across processes',
+      opentag: 'durable thread transcript plus provider session resume and a single-flight follow-up mailbox across processes',
       status: 'ready',
     },
     {
       capability: 'Shared task steering',
       agentdock: 'active session input can steer the current runtime turn',
-      opentag: 'live steering executor contract; Codex and Claude one-shot CLIs continue follow-ups as durable next turns',
+      opentag: 'Claude receives live stream input; Codex resumes the same provider session on the next durable turn',
       status: 'partial',
     },
     {
@@ -573,6 +591,10 @@ function executorStatus(): Record<string, unknown> {
     workspaceRoot: path.resolve(executorWorkspaceRoot),
     timeoutMs: executorTimeoutMs,
     maxOutputBytes: executorMaxOutputBytes,
+    sessionMode: executorSessionMode,
+    sessionNamespace: executorSessionNamespace,
+    transcriptMaxEntries,
+    transcriptMaxChars,
     codex: {
       command: codexCommand,
       model: codexModel,
@@ -582,7 +604,7 @@ function executorStatus(): Record<string, unknown> {
       command: claudeCommand,
       model: claudeModel,
       maxBudgetUsd: claudeMaxBudgetUsd,
-      steeringMode: 'next_turn',
+      steeringMode: executorMode === 'local-cli' ? 'live' : 'next_turn',
     },
     runControlPollMs,
   };
@@ -940,7 +962,15 @@ async function deliverySnapshot(
   limit = 50,
   workspaceId?: string,
 ): Promise<Record<string, unknown>> {
-  const [summary, outbox, turnDeliveries, bindings, inboundEvents, steering] =
+  const [
+    summary,
+    outbox,
+    turnDeliveries,
+    bindings,
+    inboundEvents,
+    steering,
+    sessions,
+  ] =
     await Promise.all([
       deliveryStore.summarize(workspaceId),
       deliveryStore.listOutbox({ limit, workspaceId }),
@@ -948,6 +978,7 @@ async function deliverySnapshot(
       deliveryStore.listThreadBindings(limit, workspaceId),
       deliveryStore.listInboundEvents({ limit, workspaceId }),
       deliveryStore.listAgentRunSteering({ limit, workspaceId }),
+      deliveryStore.listAgentThreadSessions({ limit, workspaceId }),
     ]);
   return {
     workspaceId,
@@ -957,6 +988,7 @@ async function deliverySnapshot(
     bindings,
     inboundEvents,
     steering,
+    sessions,
   };
 }
 
@@ -1047,6 +1079,7 @@ function createRuntimeForPlatform(platform: PlatformAdapter): OpenTagRuntime {
     timeoutMs: executorTimeoutMs,
     maxOutputBytes: executorMaxOutputBytes,
     inheritEnv: executorInheritEnv,
+    sessionMode: executorSessionMode,
   } as const;
   const codex = createCodexExecutor({
     ...common,
@@ -2730,10 +2763,28 @@ async function executeAgentRun(
     },
   });
   try {
+    const transcript = await loadDurableConversationContext({
+      deliveryStore,
+      run: initialRun,
+      transcriptMaxEntries,
+      transcriptMaxChars,
+    });
+    const providerSession =
+      executorMode === 'local-cli' && executorSessionMode === 'provider'
+        ? await createDurableProviderSessionContext({
+            deliveryStore,
+            run: initialRun,
+            providerId: initialRun.executorId || 'codex',
+            namespace: executorSessionNamespace,
+          })
+        : undefined;
     const result = await runtime.handleMessage({
       runId,
+      executorId: initialRun.executorId,
       thread: initialRun.thread,
       message: initialRun.message,
+      transcript,
+      providerSession,
       abortSignal: abortController.signal,
       steering: createDurableSteeringProvider({
         deliveryStore,
@@ -4313,6 +4364,12 @@ const server = createServer(async (request, response) => {
         steering: await deliveryStore.listAgentRunSteering({
           runId: id,
           limit: Number(url.searchParams.get('limit') || 100),
+        }),
+        sessions: await deliveryStore.listAgentThreadSessions({
+          workspaceId: run.workspaceId,
+          projectId: run.projectId,
+          threadId: run.threadId,
+          limit: 20,
         }),
       });
       return;

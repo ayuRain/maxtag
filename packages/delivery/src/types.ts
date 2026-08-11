@@ -3,6 +3,7 @@ import type {
   PlatformKind,
   SourceMessage,
   SourceThread,
+  ThreadTranscriptSnapshot,
 } from '@opentag/core';
 
 export type OutboundStatus =
@@ -41,6 +42,8 @@ export type AgentRunSteeringStatus =
   | 'failed'
   | 'cancelled';
 
+export type AgentThreadSessionStatus = 'active' | 'invalidated';
+
 export type AgentRunEventType =
   | 'created'
   | 'started'
@@ -59,6 +62,10 @@ export type AgentRunEventType =
   | 'steering_applied'
   | 'steering_failed'
   | 'steering_cancelled'
+  | 'transcript_loaded'
+  | 'session_started'
+  | 'session_resumed'
+  | 'session_invalidated'
   | 'memory_command'
   | 'routine_command';
 
@@ -260,6 +267,45 @@ export interface ListAgentRunSteeringOptions {
   limit?: number;
 }
 
+export interface AgentThreadSessionRecord {
+  id: string;
+  providerId: string;
+  namespace: string;
+  sessionId: string;
+  status: AgentThreadSessionStatus;
+  platform: PlatformKind;
+  threadId: string;
+  workspaceId?: string;
+  projectId?: string;
+  startedByRunId: string;
+  lastRunId: string;
+  createdAt: string;
+  updatedAt: string;
+  invalidatedAt?: string;
+  invalidationReason?: string;
+}
+
+export interface AgentThreadSessionQuery {
+  providerId: string;
+  namespace: string;
+  thread: SourceThread;
+}
+
+export interface RecordAgentThreadSessionInput
+  extends AgentThreadSessionQuery {
+  sessionId: string;
+  runId: string;
+}
+
+export interface LoadThreadTranscriptOptions {
+  thread: SourceThread;
+  excludeRunId?: string;
+  maxEntries?: number;
+  maxChars?: number;
+}
+
+export type LoadedThreadTranscript = ThreadTranscriptSnapshot;
+
 export interface CancelThreadAgentRunsResult {
   runs: AgentRunRecord[];
   steering: AgentRunSteeringRecord[];
@@ -394,6 +440,7 @@ export interface DeliverySummary {
   inboundEvents: Record<InboundEventStatus, number> & { duplicates: number };
   agentRuns: Record<AgentRunStatus, number>;
   steering: Record<AgentRunSteeringStatus, number>;
+  sessions: Record<AgentThreadSessionStatus, number>;
   bindings: number;
 }
 
@@ -407,4 +454,5 @@ export interface FileDeliveryState {
   agentRuns: AgentRunRecord[];
   agentRunEvents: AgentRunTimelineEvent[];
   agentRunSteering: AgentRunSteeringRecord[];
+  agentThreadSessions: AgentThreadSessionRecord[];
 }

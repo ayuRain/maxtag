@@ -92,9 +92,9 @@
   contract with provider event parsing and runtime evidence.
 - Add production supervisor/deployment manifests for independent worker and
   scheduler processes.
-- Add a persistent SDK/session executor that advertises live steering; the
-  current bounded Codex and Claude CLI adapters intentionally use ordered
-  next-turn continuation.
+- Add true mid-turn Codex steering when its provider exposes a stable streaming
+  input API. Claude already accepts live `stream-json` follow-ups, and both CLI
+  adapters resume provider sessions with durable transcript recovery.
 - Attach artifacts: final message, file, patch, hosted report, PR link.
 - Add resumable execution checkpoints and lease heartbeats so a replacement
   worker can continue interrupted runs instead of restarting them from scratch.

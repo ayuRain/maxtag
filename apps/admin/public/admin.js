@@ -2178,13 +2178,28 @@ async function openRun(runId) {
   detail.replaceChildren(element('div', 'empty-state', 'Loading run'));
   try {
     const data = await getJson(`/v1/runs/${encodeURIComponent(runId)}/events?limit=100`);
-    renderRunDetail(data.run, data.events || [], data.steering || []);
+    renderRunDetail(
+      data.run,
+      data.events || [],
+      data.steering || [],
+      data.sessions || [],
+    );
   } catch (error) {
     detail.replaceChildren(element('div', 'empty-state', error.message));
   }
 }
 
-function renderRunDetail(run, events, steering = []) {
+function runContextItem(label, value, detail) {
+  const item = element('div', 'run-context-item');
+  item.append(
+    element('span', '', label),
+    element('strong', '', value),
+    element('small', '', detail),
+  );
+  return item;
+}
+
+function renderRunDetail(run, events, steering = [], sessions = []) {
   const detail = $('#run-detail');
   detail.replaceChildren();
   const head = element('div', 'run-detail-head');
@@ -2194,11 +2209,62 @@ function renderRunDetail(run, events, steering = []) {
     element(
       'small',
       '',
-      `${shortId(run.id)} / ${run.executorId || 'executor'} / ${run.metadata?.steeringMode ? statusLabel(run.metadata.steeringMode) : 'Steering pending'} / ${run.workerId || 'unclaimed'}`,
+      `${shortId(run.id)} / ${run.executorId || 'executor'} / ${run.workerId || 'unclaimed'}`,
     ),
   );
   head.append(copy, statePill(run.status));
   detail.append(head);
+
+  const transcriptEvent = [...events]
+    .reverse()
+    .find((event) => event.type === 'transcript_loaded');
+  const transcript = transcriptEvent?.metadata || {};
+  const session =
+    sessions.find(
+      (item) =>
+        run.metadata?.providerSessionId &&
+        item.sessionId === run.metadata.providerSessionId,
+    ) ||
+    sessions.find(
+      (item) =>
+        item.status === 'active' &&
+        (!run.executorId || item.providerId === run.executorId),
+    ) ||
+    sessions.find((item) => !run.executorId || item.providerId === run.executorId);
+  const providerSessionId = run.metadata?.providerSessionId || session?.sessionId;
+  const contextStrip = element('div', 'run-context-strip');
+  contextStrip.append(
+    runContextItem(
+      'Thread context',
+      transcriptEvent
+        ? `${transcript.loadedEntries || 0} / ${transcript.totalEntries || 0} entries`
+        : 'Not loaded',
+      transcript.omittedEntries
+        ? `${transcript.omittedEntries} older entries omitted`
+        : transcriptEvent
+          ? transcript.truncated
+            ? 'Context budget applied'
+            : 'Full durable history window'
+          : 'No context event recorded',
+    ),
+    runContextItem(
+      'Provider session',
+      providerSessionId
+        ? `${statusLabel(session?.providerId || run.executorId)} / ${statusLabel(session?.status || 'active')}`
+        : 'Transcript fallback',
+      providerSessionId
+        ? `${shortId(providerSessionId)}${run.metadata?.providerSessionResumed ? ' / resumed' : ''}`
+        : 'No local provider state required',
+    ),
+    runContextItem(
+      'Follow-ups',
+      run.metadata?.steeringMode
+        ? statusLabel(run.metadata.steeringMode)
+        : 'Pending mode',
+      `${steering.length} shared-thread follow-up${steering.length === 1 ? '' : 's'}`,
+    ),
+  );
+  detail.append(contextStrip);
   if (run.summary) detail.append(element('div', 'run-summary', run.summary));
 
   if (['queued', 'running', 'cancel_requested'].includes(run.status)) {

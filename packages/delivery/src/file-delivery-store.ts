@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {
@@ -8,6 +8,8 @@ import type {
   AgentRunSteeringStatus,
   AgentRunStatus,
   AgentRunTimelineEvent,
+  AgentThreadSessionQuery,
+  AgentThreadSessionRecord,
   CancelOutboxOptions,
   CancelOutboxResult,
   ClaimAgentRunsOptions,
@@ -24,11 +26,14 @@ import type {
   InboundEventStatus,
   EnqueueAgentRunSteeringInput,
   ListAgentRunSteeringOptions,
+  LoadThreadTranscriptOptions,
+  LoadedThreadTranscript,
   OutboxScopeFilter,
   OutboundEnvelope,
   OutboundStatus,
   RecordInboundEventInput,
   RecordInboundEventResult,
+  RecordAgentThreadSessionInput,
   RecoverStaleOutboxOptions,
   RecoverStaleOutboxResult,
   RecoverStaleAgentRunsOptions,
@@ -52,6 +57,7 @@ const EMPTY_STATE: FileDeliveryState = {
   agentRuns: [],
   agentRunEvents: [],
   agentRunSteering: [],
+  agentThreadSessions: [],
 };
 
 function now(): string {
@@ -69,6 +75,7 @@ export function createEmptyDeliveryState(): FileDeliveryState {
     agentRuns: [],
     agentRunEvents: [],
     agentRunSteering: [],
+    agentThreadSessions: [],
   };
 }
 
@@ -85,6 +92,7 @@ export function normalizeDeliveryState(
     agentRuns: parsed.agentRuns ?? [],
     agentRunEvents: parsed.agentRunEvents ?? [],
     agentRunSteering: parsed.agentRunSteering ?? [],
+    agentThreadSessions: parsed.agentThreadSessions ?? [],
   };
 }
 
@@ -208,6 +216,24 @@ function copySteering(
   };
 }
 
+function copySession(
+  session: AgentThreadSessionRecord,
+): AgentThreadSessionRecord {
+  return { ...session };
+}
+
+function threadSessionId(input: AgentThreadSessionQuery): string {
+  const scope = JSON.stringify([
+    input.providerId,
+    input.namespace,
+    input.thread.platform,
+    input.thread.workspaceId || '',
+    input.thread.projectId || '',
+    input.thread.id,
+  ]);
+  return `session:${createHash('sha256').update(scope).digest('hex').slice(0, 32)}`;
+}
+
 function isTerminalRunStatus(status: AgentRunStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
@@ -310,6 +336,10 @@ function emptySummary(): DeliverySummary {
       applied: 0,
       failed: 0,
       cancelled: 0,
+    },
+    sessions: {
+      active: 0,
+      invalidated: 0,
     },
     bindings: 0,
   };
@@ -830,6 +860,297 @@ export class FileDeliveryStore {
       .sort((a, b) => b.sequence - a.sequence)
       .slice(0, limit)
       .map(copySteering);
+  }
+
+  async loadThreadTranscript(
+    options: LoadThreadTranscriptOptions,
+  ): Promise<LoadedThreadTranscript> {
+    const state = await this.readState();
+    const maxEntries = Math.max(2, Math.min(options.maxEntries ?? 40, 200));
+    const maxChars = Math.max(1_000, Math.min(options.maxChars ?? 40_000, 200_000));
+    const entries: LoadedThreadTranscript['entries'] = [];
+    const excludedRun = options.excludeRunId
+      ? state.agentRuns.find((run) => run.id === options.excludeRunId)
+      : undefined;
+    const runs = state.agentRuns
+      .filter(
+        (run) =>
+          run.id !== options.excludeRunId &&
+          run.platform === options.thread.platform &&
+          run.threadId === options.thread.id &&
+          run.workspaceId === options.thread.workspaceId &&
+          run.projectId === options.thread.projectId &&
+          (!excludedRun || run.createdAt <= excludedRun.createdAt) &&
+          Boolean(run.message),
+      )
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const liveSteeringByRun = new Map<string, AgentRunSteeringRecord[]>();
+    for (const steering of state.agentRunSteering) {
+      if (
+        steering.status !== 'applied' ||
+        steering.mode !== 'live' ||
+        steering.platform !== options.thread.platform ||
+        steering.threadId !== options.thread.id ||
+        steering.workspaceId !== options.thread.workspaceId ||
+        steering.projectId !== options.thread.projectId ||
+        (excludedRun && steering.receivedAt > excludedRun.createdAt)
+      ) {
+        continue;
+      }
+      const items = liveSteeringByRun.get(steering.targetRunId) ?? [];
+      items.push(steering);
+      liveSteeringByRun.set(steering.targetRunId, items);
+    }
+
+    for (const run of runs) {
+      const attachmentText = run.message?.attachments
+        ?.map((attachment) =>
+          [attachment.kind, attachment.name, attachment.localPath || attachment.url]
+            .filter(Boolean)
+            .join(': '),
+        )
+        .filter(Boolean);
+      const messageText = [
+        run.message?.text || '(no text)',
+        attachmentText?.length ? `Attachments:\n${attachmentText.join('\n')}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+      entries.push({
+        id: `transcript:${run.id}:user`,
+        runId: run.id,
+        role: 'user',
+        text: messageText,
+        at: run.message?.createdAt || run.createdAt,
+        source: 'run',
+        actor: run.message?.actor,
+        messageId: run.message?.id,
+      });
+      for (const steering of (liveSteeringByRun.get(run.id) ?? []).sort(
+        (a, b) => a.sequence - b.sequence,
+      )) {
+        const steeringAttachments = steering.message.attachments
+          ?.map((attachment) =>
+            [
+              attachment.kind,
+              attachment.name,
+              attachment.localPath || attachment.url,
+            ]
+              .filter(Boolean)
+              .join(': '),
+          )
+          .filter(Boolean);
+        entries.push({
+          id: `transcript:${steering.id}:live`,
+          runId: steering.targetRunId,
+          role: 'user',
+          text: [
+            steering.message.text || '(no text)',
+            steeringAttachments?.length
+              ? `Attachments:\n${steeringAttachments.join('\n')}`
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+          at: steering.receivedAt,
+          source: 'live_steering',
+          actor: steering.message.actor,
+          messageId: steering.message.id,
+        });
+      }
+      if (run.status === 'completed' && run.summary) {
+        entries.push({
+          id: `transcript:${run.id}:assistant`,
+          runId: run.id,
+          role: 'assistant',
+          text: run.summary,
+          at: run.completedAt || run.updatedAt,
+          source: 'run',
+          actor: {
+            id:
+              typeof run.metadata?.agentId === 'string'
+                ? run.metadata.agentId
+                : 'opentag',
+            displayName:
+              typeof run.metadata?.agentDisplayName === 'string'
+                ? run.metadata.agentDisplayName
+                : 'OpenTag',
+            isBot: true,
+          },
+        });
+      }
+    }
+    let truncated = false;
+    const bounded = entries.map((entry) => {
+      if (entry.text.length <= 12_000) return entry;
+      truncated = true;
+      return { ...entry, text: `${entry.text.slice(0, 12_000)}\n[truncated]` };
+    });
+    const selected: LoadedThreadTranscript['entries'] = [];
+    let chars = 0;
+    for (let index = bounded.length - 1; index >= 0; index -= 1) {
+      if (selected.length >= maxEntries) break;
+      const entry = bounded[index];
+      if (chars + entry.text.length > maxChars) {
+        if (selected.length === 0) {
+          const suffix = '\n[truncated]';
+          selected.push({
+            ...entry,
+            text: `${entry.text.slice(0, Math.max(0, maxChars - suffix.length))}${suffix}`,
+          });
+          truncated = true;
+        }
+        break;
+      }
+      selected.push(entry);
+      chars += entry.text.length;
+    }
+    selected.reverse();
+    const omittedEntries = entries.length - selected.length;
+    return {
+      threadId: options.thread.id,
+      loadedAt: now(),
+      entries: selected,
+      totalEntries: entries.length,
+      omittedEntries,
+      truncated: truncated || omittedEntries > 0,
+    };
+  }
+
+  async getAgentThreadSession(
+    query: AgentThreadSessionQuery,
+  ): Promise<AgentThreadSessionRecord | undefined> {
+    const state = await this.readState();
+    const session = state.agentThreadSessions.find(
+      (item) => item.id === threadSessionId(query) && item.status === 'active',
+    );
+    return session ? copySession(session) : undefined;
+  }
+
+  async recordAgentThreadSession(
+    input: RecordAgentThreadSessionInput,
+  ): Promise<AgentThreadSessionRecord> {
+    return this.mutate((state) => {
+      const id = threadSessionId(input);
+      const timestamp = now();
+      const existing = state.agentThreadSessions.find((item) => item.id === id);
+      const resumed =
+        existing?.status === 'active' && existing.sessionId === input.sessionId;
+      const session: AgentThreadSessionRecord = existing ?? {
+        id,
+        providerId: input.providerId,
+        namespace: input.namespace,
+        sessionId: input.sessionId,
+        status: 'active',
+        platform: input.thread.platform,
+        threadId: input.thread.id,
+        workspaceId: input.thread.workspaceId,
+        projectId: input.thread.projectId,
+        startedByRunId: input.runId,
+        lastRunId: input.runId,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      session.sessionId = input.sessionId;
+      session.status = 'active';
+      if (!resumed) {
+        session.startedByRunId = input.runId;
+        session.createdAt = timestamp;
+      }
+      session.lastRunId = input.runId;
+      session.updatedAt = timestamp;
+      session.invalidatedAt = undefined;
+      session.invalidationReason = undefined;
+      if (!existing) state.agentThreadSessions.push(session);
+
+      const run = state.agentRuns.find((item) => item.id === input.runId);
+      if (run) {
+        run.metadata = {
+          ...run.metadata,
+          providerSessionId: input.sessionId,
+          providerSessionNamespace: input.namespace,
+          providerSessionResumed: resumed,
+        };
+        run.updatedAt = timestamp;
+        this.appendAgentRunEventInState(
+          state,
+          run.id,
+          resumed ? 'session_resumed' : 'session_started',
+          {
+            message: resumed
+              ? `${input.providerId} session resumed`
+              : `${input.providerId} session recorded`,
+            metadata: {
+              providerId: input.providerId,
+              namespace: input.namespace,
+              sessionId: input.sessionId,
+            },
+          },
+        );
+      }
+      return copySession(session);
+    });
+  }
+
+  async invalidateAgentThreadSession(input: AgentThreadSessionQuery & {
+    runId?: string;
+    reason: string;
+  }): Promise<AgentThreadSessionRecord | undefined> {
+    return this.mutate((state) => {
+      const session = state.agentThreadSessions.find(
+        (item) => item.id === threadSessionId(input),
+      );
+      if (!session || session.status === 'invalidated') {
+        return session ? copySession(session) : undefined;
+      }
+      const timestamp = now();
+      session.status = 'invalidated';
+      session.invalidatedAt = timestamp;
+      session.invalidationReason = input.reason;
+      session.updatedAt = timestamp;
+      if (input.runId) {
+        const run = state.agentRuns.find((item) => item.id === input.runId);
+        if (run) {
+          run.metadata = {
+            ...run.metadata,
+            providerSessionInvalidated: input.reason,
+          };
+          run.updatedAt = timestamp;
+          this.appendAgentRunEventInState(
+            state,
+            run.id,
+            'session_invalidated',
+            {
+              message: input.reason,
+              metadata: {
+                providerId: input.providerId,
+                namespace: input.namespace,
+                sessionId: session.sessionId,
+              },
+            },
+          );
+        }
+      }
+      return copySession(session);
+    });
+  }
+
+  async listAgentThreadSessions(options: {
+    workspaceId?: string;
+    projectId?: string;
+    threadId?: string;
+    status?: 'active' | 'invalidated';
+    limit?: number;
+  } = {}): Promise<AgentThreadSessionRecord[]> {
+    const state = await this.readState();
+    return state.agentThreadSessions
+      .filter((item) => !options.workspaceId || item.workspaceId === options.workspaceId)
+      .filter((item) => !options.projectId || item.projectId === options.projectId)
+      .filter((item) => !options.threadId || item.threadId === options.threadId)
+      .filter((item) => !options.status || item.status === options.status)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, options.limit ?? 50)
+      .map(copySession);
   }
 
   async recoverStaleAgentRuns(
@@ -1403,6 +1724,11 @@ export class FileDeliveryStore {
     for (const item of state.agentRunSteering) {
       if (!workspaceId || item.workspaceId === workspaceId) {
         summary.steering[item.status] += 1;
+      }
+    }
+    for (const item of state.agentThreadSessions) {
+      if (!workspaceId || item.workspaceId === workspaceId) {
+        summary.sessions[item.status] += 1;
       }
     }
     summary.bindings = state.threadBindings.filter(

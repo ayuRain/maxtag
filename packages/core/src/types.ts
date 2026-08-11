@@ -166,6 +166,26 @@ export interface SourceMessage {
   metadata?: Record<string, unknown>;
 }
 
+export interface ThreadTranscriptEntry {
+  id: string;
+  runId: string;
+  role: 'user' | 'assistant';
+  text: string;
+  at: string;
+  source: 'run' | 'live_steering';
+  actor?: SourceActor;
+  messageId?: string;
+}
+
+export interface ThreadTranscriptSnapshot {
+  threadId: string;
+  loadedAt: string;
+  entries: ThreadTranscriptEntry[];
+  totalEntries: number;
+  omittedEntries: number;
+  truncated: boolean;
+}
+
 export interface AgentIdentity {
   id: string;
   displayName: string;
@@ -261,6 +281,8 @@ export interface AgentRunRequest {
   access: AccessBundle;
   memory: string;
   memorySnapshot?: ScopedMemorySnapshot;
+  transcript?: ThreadTranscriptSnapshot;
+  providerSession?: ProviderSessionContext;
   steering?: AgentSteeringChannel;
   abortSignal?: AbortSignal;
   onEvent?: (event: AgentRunEvent) => void | Promise<void>;
@@ -292,6 +314,15 @@ export interface AgentSteeringChannel {
 
 export interface AgentSteeringProvider {
   open(mode: ExecutorSteeringMode): Promise<AgentSteeringChannel>;
+}
+
+export interface ProviderSessionContext {
+  providerId: string;
+  namespace: string;
+  sessionId?: string;
+  resumedFromRunId?: string;
+  record(sessionId: string): Promise<void>;
+  invalidate(reason: string): Promise<void>;
 }
 
 export interface Executor {

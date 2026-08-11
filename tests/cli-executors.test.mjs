@@ -81,6 +81,26 @@ function request(overrides = {}) {
   };
 }
 
+function providerSession(providerId, sessionId) {
+  const records = [];
+  const invalidations = [];
+  return {
+    records,
+    invalidations,
+    value: {
+      providerId,
+      namespace: 'test:local',
+      sessionId,
+      async record(value) {
+        records.push(value);
+      },
+      async invalidate(reason) {
+        invalidations.push(reason);
+      },
+    },
+  };
+}
+
 test('command runner streams lines and bounds retained output', async () => {
   const lines = [];
   const result = await runCliCommand({
@@ -159,6 +179,39 @@ test('command runner enforces its timeout', async () => {
   );
 });
 
+test('command runner can keep stdin open for live messages', async () => {
+  const files = await fixture();
+  const fakeCli = await files.script(
+    'streaming-stdin.mjs',
+    `import { createInterface } from 'node:readline';
+const lines = createInterface({ input: process.stdin });
+let count = 0;
+for await (const line of lines) {
+  console.log(line);
+  count += 1;
+  if (count === 2) process.exit(0);
+}
+`,
+  );
+  const seen = [];
+  const result = await runCliCommand({
+    command: process.execPath,
+    args: [fakeCli],
+    cwd: process.cwd(),
+    input: 'first\n',
+    stdinMode: 'stream',
+    async onStdinReady(writer) {
+      await writer.writeLine('second');
+    },
+    onStdoutLine(line) {
+      seen.push(line);
+    },
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(seen, ['first', 'second']);
+});
+
 test('Codex local CLI parses JSONL and does not inherit service secrets', async () => {
   const files = await fixture();
   const fakeCli = await files.script(
@@ -178,7 +231,8 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10 }
   const originalSecret = process.env.OPENTAG_LARK_APP_SECRET;
   process.env.OPENTAG_LARK_APP_SECRET = 'must-not-leak';
   try {
-    const input = request();
+    const session = providerSession('codex');
+    const input = request({ providerSession: session.value });
     const executor = createCodexExecutor({
       mode: 'local-cli',
       command: process.execPath,
@@ -194,6 +248,8 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10 }
     assert.equal(detail.hasPrompt, true);
     assert.ok(detail.args.includes('--sandbox'));
     assert.ok(detail.args.includes('read-only'));
+    assert.equal(detail.args.includes('--ephemeral'), false);
+    assert.deepEqual(session.records, ['thread-1']);
     assert.ok(
       input.events.some(
         (event) =>
@@ -218,11 +274,124 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10 }
   }
 });
 
+test('Codex resumes a persisted provider session without replaying transcript', async () => {
+  const files = await fixture();
+  const fakeCli = await files.script(
+    'fake-codex-resume.mjs',
+    `let prompt = '';
+process.stdin.setEncoding('utf8');
+for await (const chunk of process.stdin) prompt += chunk;
+const detail = JSON.stringify({ args: process.argv.slice(2), replayed: prompt.includes('old transcript marker') });
+console.log(JSON.stringify({ type: 'thread.started', thread_id: 'codex-session-1' }));
+console.log(JSON.stringify({ type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: detail } }));
+console.log(JSON.stringify({ type: 'turn.completed' }));
+`,
+  );
+  const session = providerSession('codex', 'codex-session-1');
+  const input = request({
+    providerSession: session.value,
+    transcript: {
+      threadId: 'lark:payments:root',
+      loadedAt: new Date().toISOString(),
+      entries: [{
+        id: 'old-user',
+        runId: 'old-run',
+        role: 'user',
+        text: 'old transcript marker',
+        at: new Date().toISOString(),
+        source: 'run',
+      }],
+      totalEntries: 1,
+      omittedEntries: 0,
+      truncated: false,
+    },
+  });
+  const executor = createCodexExecutor({
+    mode: 'local-cli',
+    sessionMode: 'provider',
+    command: process.execPath,
+    commandPrefixArgs: [fakeCli],
+    workspaceRoot: files.root,
+    timeoutMs: 2_000,
+  });
+  const result = await executor.run(input.value);
+  const detail = JSON.parse(result.summary);
+  const resumeIndex = detail.args.indexOf('resume');
+
+  assert.ok(resumeIndex > 0);
+  assert.equal(detail.args[resumeIndex + 1], 'codex-session-1');
+  assert.equal(detail.replayed, false);
+  assert.deepEqual(session.records, ['codex-session-1']);
+});
+
+test('Codex rebuilds a missing provider session from durable transcript once', async () => {
+  const files = await fixture();
+  const fakeCli = await files.script(
+    'fake-codex-missing-session.mjs',
+    `let prompt = '';
+process.stdin.setEncoding('utf8');
+for await (const chunk of process.stdin) prompt += chunk;
+const args = process.argv.slice(2);
+if (args.includes('resume')) {
+  console.error('session not found');
+  process.exit(1);
+}
+const detail = JSON.stringify({ args, rebuiltFromTranscript: prompt.includes('durable transcript marker') });
+console.log(JSON.stringify({ type: 'thread.started', thread_id: 'codex-session-new' }));
+console.log(JSON.stringify({ type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: detail } }));
+console.log(JSON.stringify({ type: 'turn.completed' }));
+`,
+  );
+  const session = providerSession('codex', 'codex-session-missing');
+  const input = request({
+    providerSession: session.value,
+    transcript: {
+      threadId: 'lark:payments:root',
+      loadedAt: new Date().toISOString(),
+      entries: [{
+        id: 'durable-user',
+        runId: 'durable-run',
+        role: 'user',
+        text: 'durable transcript marker',
+        at: new Date().toISOString(),
+        source: 'run',
+      }],
+      totalEntries: 1,
+      omittedEntries: 0,
+      truncated: false,
+    },
+  });
+  const executor = createCodexExecutor({
+    mode: 'local-cli',
+    sessionMode: 'provider',
+    command: process.execPath,
+    commandPrefixArgs: [fakeCli],
+    workspaceRoot: files.root,
+    timeoutMs: 2_000,
+  });
+  const result = await executor.run(input.value);
+  const detail = JSON.parse(result.summary);
+
+  assert.equal(detail.args.includes('resume'), false);
+  assert.equal(detail.rebuiltFromTranscript, true);
+  assert.equal(session.invalidations.length, 1);
+  assert.deepEqual(session.records, ['codex-session-new']);
+  assert.ok(
+    input.events.some(
+      (event) =>
+        event.type === 'log' &&
+        event.message.includes('retrying once with durable shared-thread context'),
+    ),
+  );
+});
+
 test('Claude local CLI parses streamed results and emits bounded deltas', async () => {
   const files = await fixture();
   const fakeCli = await files.script(
     'fake-claude.mjs',
-    `for await (const _chunk of process.stdin) {}
+    `import { createInterface } from 'node:readline';
+const lines = createInterface({ input: process.stdin });
+await new Promise((resolve) => lines.once('line', resolve));
 console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'session-1' }));
 console.log(JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Working on it. ' } } }));
 console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Candidate response' }] } }));
@@ -266,7 +435,9 @@ test('Claude local CLI surfaces the provider error instead of raw JSONL', async 
   const files = await fixture();
   const fakeCli = await files.script(
     'fake-claude-error.mjs',
-    `for await (const _chunk of process.stdin) {}
+    `import { createInterface } from 'node:readline';
+const lines = createInterface({ input: process.stdin });
+await new Promise((resolve) => lines.once('line', resolve));
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'Claude auth required' }));
 process.exitCode = 1;
 `,
@@ -281,6 +452,157 @@ process.exitCode = 1;
   });
 
   await assert.rejects(executor.run(input.value), /Claude auth required/);
+});
+
+test('Claude streams live steering into the active provider session', async () => {
+  const files = await fixture();
+  const fakeCli = await files.script(
+    'fake-claude-live.mjs',
+    `import { createInterface } from 'node:readline';
+const lines = createInterface({ input: process.stdin });
+const messages = [];
+for await (const line of lines) {
+  messages.push(JSON.parse(line));
+  if (messages.length === 1) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'claude-session-1' }));
+  }
+  if (messages.length === 2) {
+    const result = JSON.stringify({ args: process.argv.slice(2), messages });
+    console.log(JSON.stringify({ type: 'result', subtype: 'success', result }));
+    break;
+  }
+}
+`,
+  );
+  const session = providerSession('claude');
+  const acknowledgements = [];
+  let delivered = false;
+  const input = request({
+    providerSession: session.value,
+    steering: {
+      mode: 'live',
+      async receive() {
+        if (delivered) {
+          await delay(10);
+          return undefined;
+        }
+        delivered = true;
+        return {
+          id: 'steer-1',
+          targetRunId: 'run-cli-1',
+          receivedAt: new Date().toISOString(),
+          thread: request().value.thread,
+          message: {
+            id: 'follow-up-1',
+            threadId: 'lark:payments:root',
+            platform: 'lark',
+            text: 'Also check the retry path.',
+            actor: { id: 'user-2', displayName: 'Lin' },
+            createdAt: new Date().toISOString(),
+            mentionsAgent: false,
+          },
+        };
+      },
+      async acknowledge(id, detail) {
+        acknowledgements.push({ id, detail });
+      },
+    },
+  });
+  const executor = createClaudeExecutor({
+    mode: 'local-cli',
+    sessionMode: 'provider',
+    command: process.execPath,
+    commandPrefixArgs: [fakeCli],
+    workspaceRoot: files.root,
+    timeoutMs: 2_000,
+  });
+  const result = await executor.run(input.value);
+  const detail = JSON.parse(result.summary);
+  const inputFormatIndex = detail.args.indexOf('--input-format');
+
+  assert.equal(executor.steeringMode, 'live');
+  assert.equal(detail.args[inputFormatIndex + 1], 'stream-json');
+  assert.equal(detail.args.includes('--no-session-persistence'), false);
+  assert.equal(detail.messages[0].type, 'user');
+  assert.match(detail.messages[1].message.content[0].text, /retry path/);
+  assert.match(detail.messages[1].message.content[0].text, /Lin/);
+  assert.deepEqual(session.records, ['claude-session-1']);
+  assert.deepEqual(acknowledgements, [
+    { id: 'steer-1', detail: 'Forwarded to the active Claude stream' },
+  ]);
+});
+
+test('Claude defers a follow-up that races with stream completion', async () => {
+  const files = await fixture();
+  const fakeCli = await files.script(
+    'fake-claude-race.mjs',
+    `import { createInterface } from 'node:readline';
+const lines = createInterface({ input: process.stdin });
+await new Promise((resolve) => lines.once('line', resolve));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'Initial turn completed.' }));
+`,
+  );
+  const events = [];
+  const acknowledgements = [];
+  let delivered = false;
+  const input = request({
+    async onEvent(event) {
+      events.push(event);
+      if (
+        event.type === 'progress' &&
+        event.item.id === 'claude-steering-steer-race' &&
+        event.item.status === 'running'
+      ) {
+        await delay(50);
+      }
+    },
+    steering: {
+      mode: 'live',
+      async receive() {
+        if (delivered) {
+          await delay(10);
+          return undefined;
+        }
+        delivered = true;
+        return {
+          id: 'steer-race',
+          targetRunId: 'run-cli-1',
+          receivedAt: new Date().toISOString(),
+          thread: request().value.thread,
+          message: {
+            id: 'follow-up-race',
+            threadId: 'lark:payments:root',
+            platform: 'lark',
+            text: 'Late follow-up.',
+            actor: { id: 'user-2', displayName: 'Lin' },
+            createdAt: new Date().toISOString(),
+            mentionsAgent: false,
+          },
+        };
+      },
+      async acknowledge(id) {
+        acknowledgements.push(id);
+      },
+    },
+  });
+  const executor = createClaudeExecutor({
+    mode: 'local-cli',
+    command: process.execPath,
+    commandPrefixArgs: [fakeCli],
+    workspaceRoot: files.root,
+    timeoutMs: 2_000,
+  });
+  const result = await executor.run(input.value);
+
+  assert.equal(result.summary, 'Initial turn completed.');
+  assert.deepEqual(acknowledgements, []);
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === 'log' &&
+        event.message.includes('durable mailbox will continue it'),
+    ),
+  );
 });
 
 test('CLI environment only includes provider auth and explicit inherited keys', () => {

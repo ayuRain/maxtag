@@ -55,9 +55,15 @@ import {
   createDurableSteeringProvider,
   monitorDurableRunCancellation,
 } from './run-control.js';
+import {
+  createDurableProviderSessionContext,
+  defaultProviderSessionNamespace,
+  loadDurableConversationContext,
+} from './conversation-context.js';
 
 export * from './routine-scheduler.js';
 export * from './run-control.js';
+export * from './conversation-context.js';
 export * from './workflow-coordinator.js';
 
 export interface RuntimeHostLarkConfig {
@@ -85,6 +91,10 @@ export interface RuntimeHostExecutorConfig {
   claudeCommand?: string;
   claudeModel?: string;
   claudeMaxBudgetUsd?: number;
+  sessionMode?: 'provider' | 'transcript';
+  sessionNamespace?: string;
+  transcriptMaxEntries?: number;
+  transcriptMaxChars?: number;
 }
 
 export interface RuntimeHostRoutineConfig {
@@ -366,6 +376,11 @@ export class OpenTagWorkerHost {
       workspaceRoot: path.resolve(config.workspaceRoot || process.cwd()),
       timeoutMs: config.timeoutMs ?? 20 * 60_000,
       maxOutputBytes: config.maxOutputBytes ?? 2_000_000,
+      sessionMode: config.sessionMode ?? 'provider',
+      sessionNamespace:
+        config.sessionNamespace || defaultProviderSessionNamespace(),
+      transcriptMaxEntries: config.transcriptMaxEntries ?? 40,
+      transcriptMaxChars: config.transcriptMaxChars ?? 40_000,
       codex: {
         command: config.codexCommand || 'codex',
         model: config.codexModel,
@@ -375,7 +390,8 @@ export class OpenTagWorkerHost {
         command: config.claudeCommand || 'claude',
         model: config.claudeModel,
         maxBudgetUsd: config.claudeMaxBudgetUsd,
-        steeringMode: 'next_turn',
+        steeringMode:
+          (config.mode ?? 'dry-run') === 'local-cli' ? 'live' : 'next_turn',
       },
       runControlPollMs: this.config.runControlPollMs ?? 250,
     };
@@ -388,7 +404,15 @@ export class OpenTagWorkerHost {
   }
 
   async deliverySnapshot(limit = 50): Promise<Record<string, unknown>> {
-    const [summary, outbox, turnDeliveries, bindings, inboundEvents, steering] =
+    const [
+      summary,
+      outbox,
+      turnDeliveries,
+      bindings,
+      inboundEvents,
+      steering,
+      sessions,
+    ] =
       await Promise.all([
         this.deliveryStore.summarize(),
         this.deliveryStore.listOutbox({ limit }),
@@ -396,6 +420,7 @@ export class OpenTagWorkerHost {
         this.deliveryStore.listThreadBindings(limit),
         this.deliveryStore.listInboundEvents({ limit }),
         this.deliveryStore.listAgentRunSteering({ limit }),
+        this.deliveryStore.listAgentThreadSessions({ limit }),
       ]);
     return {
       summary,
@@ -404,6 +429,7 @@ export class OpenTagWorkerHost {
       bindings,
       inboundEvents,
       steering,
+      sessions,
     };
   }
 
@@ -623,10 +649,31 @@ export class OpenTagWorkerHost {
       pollMs: this.config.runControlPollMs,
     });
     try {
+      const transcript = await loadDurableConversationContext({
+        deliveryStore: this.deliveryStore,
+        run: initialRun,
+        transcriptMaxEntries: this.config.executors?.transcriptMaxEntries,
+        transcriptMaxChars: this.config.executors?.transcriptMaxChars,
+      });
+      const providerSession =
+        (this.config.executors?.mode ?? 'dry-run') === 'local-cli' &&
+        (this.config.executors?.sessionMode ?? 'provider') === 'provider'
+          ? await createDurableProviderSessionContext({
+              deliveryStore: this.deliveryStore,
+              run: initialRun,
+              providerId: initialRun.executorId || 'codex',
+              namespace:
+                this.config.executors?.sessionNamespace ||
+                defaultProviderSessionNamespace(),
+            })
+          : undefined;
       const result = await runtime.handleMessage({
         runId,
+        executorId: initialRun.executorId,
         thread: initialRun.thread,
         message: initialRun.message,
+        transcript,
+        providerSession,
         abortSignal: abortController.signal,
         steering: createDurableSteeringProvider({
           deliveryStore: this.deliveryStore,
@@ -754,6 +801,7 @@ export class OpenTagWorkerHost {
       timeoutMs: config.timeoutMs,
       maxOutputBytes: config.maxOutputBytes,
       inheritEnv: config.inheritEnv,
+      sessionMode: config.sessionMode,
     } as const;
     const codex = createCodexExecutor({
       ...common,

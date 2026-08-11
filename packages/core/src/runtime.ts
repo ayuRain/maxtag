@@ -2,6 +2,7 @@ import type {
   AgentRunEvent,
   AgentRunResult,
   AgentSteeringProvider,
+  ProviderSessionContext,
   ChecklistItem,
   Executor,
   ScopedMemorySnapshot,
@@ -9,6 +10,7 @@ import type {
   RuntimeDependencies,
   SourceMessage,
   SourceThread,
+  ThreadTranscriptSnapshot,
 } from './types.js';
 
 function createDefaultChecklist(): ChecklistItem[] {
@@ -38,10 +40,13 @@ export class OpenTagRuntime {
 
   async handleMessage(input: {
     runId: string;
+    executorId?: string;
     thread: SourceThread;
     message: SourceMessage;
     abortSignal?: AbortSignal;
     steering?: AgentSteeringProvider;
+    transcript?: ThreadTranscriptSnapshot;
+    providerSession?: ProviderSessionContext;
     onEvent?: (event: AgentRunEvent) => void | Promise<void>;
   }): Promise<AgentRunResult> {
     const now = () => (this.deps.clock ?? (() => new Date()))().toISOString();
@@ -77,11 +82,12 @@ export class OpenTagRuntime {
         workspace,
         project,
       });
+      const executorId = input.executorId ?? identity.defaultExecutorId;
       executor = this.deps.executors
-        ? this.deps.executors[identity.defaultExecutorId]
+        ? this.deps.executors[executorId]
         : this.deps.executor;
       if (!executor) {
-        throw new Error(`executor_not_available:${identity.defaultExecutorId}`);
+        throw new Error(`executor_not_available:${executorId}`);
       }
 
       state = {
@@ -153,6 +159,10 @@ export class OpenTagRuntime {
       const steering = input.steering
         ? await input.steering.open(executor.steeringMode ?? 'next_turn')
         : undefined;
+      const providerSession =
+        input.providerSession?.providerId === executor.id
+          ? input.providerSession
+          : undefined;
       const result = await executor.run({
         runId: input.runId,
         workspace,
@@ -163,6 +173,8 @@ export class OpenTagRuntime {
         access,
         memory,
         memorySnapshot,
+        transcript: input.transcript,
+        providerSession,
         steering,
         abortSignal: input.abortSignal,
         onEvent,

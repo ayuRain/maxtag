@@ -1597,6 +1597,41 @@ input:disabled {
   font-size: 10px;
 }
 
+.run-context-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+}
+
+.run-context-item {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 11px 12px 11px 0;
+  border-right: 1px solid var(--line);
+}
+
+.run-context-item + .run-context-item {
+  padding-left: 12px;
+}
+
+.run-context-item:last-child {
+  border-right: 0;
+  padding-right: 0;
+}
+
+.run-context-item span,
+.run-context-item small {
+  color: var(--muted);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+.run-context-item strong {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
 .run-summary {
   margin: 14px 0;
   color: var(--ink);
@@ -2438,6 +2473,22 @@ pre {
 
   .run-table-row > :last-child {
     grid-column: 1 / -1;
+  }
+
+  .run-context-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .run-context-item,
+  .run-context-item + .run-context-item,
+  .run-context-item:last-child {
+    padding: 9px 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .run-context-item:last-child {
+    border-bottom: 0;
   }
 
   .compact-select {

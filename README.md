@@ -93,8 +93,11 @@ packages/ui-cards           Progress/checklist card models
   events, and cancel requests.
 - Authorized follow-ups in one active thread enter an atomic SQLite steering
   mailbox instead of starting concurrent runs. Live-capable executors can claim
-  them in-place; the current one-shot Codex and Claude CLIs preserve order by
-  continuing each follow-up as the next durable turn.
+  them in-place. Claude consumes follow-ups through its active stream; Codex
+  resumes the same provider session in the next durable turn.
+- Every run also loads a bounded, provenance-preserving transcript from the run
+  ledger. It bootstraps new provider sessions and remains the continuity fallback
+  when provider-local session state is unavailable.
 - `/stop`, `/cancel`, `stop`, and `停止任务` in an authorized thread cancel only
   that thread's active run and queued follow-ups. A durable poll carries control
   requests to an independently running worker process.
@@ -426,6 +429,9 @@ authenticated for the service account running OpenTag:
 OPENTAG_EXECUTOR_MODE=local-cli
 OPENTAG_EXECUTOR_WORKSPACE_ROOT=/srv/opentag/workspaces
 OPENTAG_EXECUTOR_TIMEOUT_MS=1200000
+OPENTAG_EXECUTOR_SESSION_MODE=provider
+OPENTAG_THREAD_CONTEXT_MAX_ENTRIES=40
+OPENTAG_THREAD_CONTEXT_MAX_CHARS=40000
 ```
 
 OpenTag uses `<workspace root>/<project id>` when that directory exists, falling
@@ -436,10 +442,19 @@ stdout/stderr, and filters service secrets such as Lark credentials from the CLI
 environment. Additional variables must be named explicitly through
 `OPENTAG_EXECUTOR_INHERIT_ENV`.
 
-Both local CLI adapters currently advertise `next_turn` steering because they
-run as bounded one-shot processes without a persistent provider session. The
-runtime contract and durable mailbox already support a future SDK/session
-executor advertising `live` without changing client ingress or storage.
+Provider session continuity is enabled by default. OpenTag records the Codex
+thread id or Claude session id against the platform/workspace/project/thread and
+resumes it on the next run. Claude uses `stream-json` input and advertises
+`live`; Codex advertises `next_turn` and resumes the same session after the
+current bounded process exits. If a recorded provider session is missing,
+OpenTag invalidates it and retries once using the durable thread transcript.
+Set `OPENTAG_EXECUTOR_SESSION_MODE=transcript` to disable provider persistence.
+
+The default session namespace includes the host name and service UID because
+CLI session files are local to that service account. Set
+`OPENTAG_EXECUTOR_SESSION_NAMESPACE` explicitly only when workers share the same
+provider session storage. Activity shows the loaded transcript window, provider
+session status, and steering mode for each run.
 
 `deny-by-default` and `allow-all` network policy map onto the Codex workspace
 sandbox. Claude built-in web tools are enabled only for an `allow-all` project

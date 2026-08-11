@@ -3,6 +3,7 @@ import {
   buildAgentPrompt,
   createCliEnvironment,
   finalResponse,
+  isMissingCliSession,
   resolveProjectWorkingDirectory,
   runCliCommand,
   type CliExecutorOptions,
@@ -83,19 +84,25 @@ export class CodexExecutor implements Executor {
       request,
     );
     const sandbox = hasWriteGrant(request) ? 'workspace-write' : 'read-only';
+    const providerSession =
+      this.options.sessionMode !== 'transcript' &&
+      request.providerSession?.providerId === this.id
+        ? request.providerSession
+        : undefined;
+    const resumeSessionId = providerSession?.sessionId;
     const args = [
       ...(this.options.commandPrefixArgs ?? []),
       'exec',
       '--json',
       '--color',
       'never',
-      '--ephemeral',
       '--skip-git-repo-check',
       '--sandbox',
       sandbox,
       '--cd',
       cwd,
     ];
+    if (!providerSession) args.push('--ephemeral');
     if (sandbox === 'workspace-write') {
       args.push(
         '-c',
@@ -105,7 +112,8 @@ export class CodexExecutor implements Executor {
       );
     }
     if (this.options.model) args.push('--model', this.options.model);
-    args.push('-');
+    if (resumeSessionId) args.push('resume', resumeSessionId, '-');
+    else args.push('-');
 
     await request.onEvent?.({
       type: 'progress',
@@ -113,7 +121,7 @@ export class CodexExecutor implements Executor {
         id: 'codex-cli',
         label: 'Run Codex CLI',
         status: 'running',
-        detail: `${sandbox} / ${cwd}`,
+        detail: `${resumeSessionId ? 'resume session' : 'new turn'} / ${sandbox} / ${cwd}`,
       },
     });
 
@@ -121,6 +129,7 @@ export class CodexExecutor implements Executor {
     let providerError = '';
     let unstructuredLogCount = 0;
     let stderrLogCount = 0;
+    let recordedProviderSession = false;
     const runningItems = new Map<string, string>();
     const onStdoutLine = async (line: string): Promise<void> => {
       let event: JsonRecord;
@@ -146,10 +155,15 @@ export class CodexExecutor implements Executor {
       const eventType = text(event.type) || '';
       const item = record(event.item);
       if (eventType === 'thread.started') {
+        const sessionId = text(event.thread_id);
+        if (sessionId && providerSession) {
+          await providerSession.record(sessionId);
+          recordedProviderSession = true;
+        }
         await request.onEvent?.({
           type: 'log',
           level: 'info',
-          message: `Codex thread ${text(event.thread_id) || 'started'}`,
+          message: `Codex thread ${sessionId || 'started'}`,
         });
         return;
       }
@@ -238,8 +252,24 @@ export class CodexExecutor implements Executor {
         },
       });
     } catch (error) {
+      if (resumeSessionId && isMissingCliSession(error)) {
+        await providerSession.invalidate('Codex provider session is unavailable; rebuilding from durable transcript.');
+        await request.onEvent?.({
+          type: 'log',
+          level: 'warn',
+          message: 'Codex session unavailable; retrying once with durable shared-thread context.',
+        });
+        return this.run({
+          ...request,
+          providerSession: { ...providerSession, sessionId: undefined },
+        });
+      }
       if (providerError) throw new Error(providerError, { cause: error });
       throw error;
+    }
+
+    if (resumeSessionId && providerSession && !recordedProviderSession) {
+      await providerSession.record(resumeSessionId);
     }
 
     if (providerError) throw new Error(providerError);

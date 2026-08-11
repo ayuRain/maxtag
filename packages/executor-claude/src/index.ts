@@ -1,12 +1,19 @@
-import type { AgentRunRequest, AgentRunResult, Executor } from '@opentag/core';
+import type {
+  AgentRunRequest,
+  AgentRunResult,
+  AgentSteeringInput,
+  Executor,
+} from '@opentag/core';
 import {
   buildAgentSystemPrompt,
   buildAgentUserPrompt,
   createCliEnvironment,
   finalResponse,
+  isMissingCliSession,
   resolveProjectWorkingDirectory,
   runCliCommand,
   type CliExecutorOptions,
+  type CliStdinWriter,
 } from '@opentag/executor-cli';
 
 export interface ClaudeExecutorOptions extends CliExecutorOptions {
@@ -65,11 +72,42 @@ function assistantText(event: JsonRecord): string | undefined {
   return parts.length ? parts.join('\n') : undefined;
 }
 
+function streamJsonUserMessage(value: string): string {
+  return JSON.stringify({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text: value }],
+    },
+  });
+}
+
+function buildLiveSteeringPrompt(input: AgentSteeringInput): string {
+  const attachments = input.message.attachments?.map((attachment) =>
+    [attachment.kind, attachment.name, attachment.localPath || attachment.url]
+      .filter(Boolean)
+      .join(': '),
+  );
+  return [
+    `Live follow-up from ${input.message.actor.displayName || input.message.actor.id}:`,
+    input.message.text.trim() || '(no text)',
+    attachments?.length ? `Attachments:\n${attachments.join('\n')}` : '',
+    'Incorporate this follow-up into the work already in progress.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 export class ClaudeExecutor implements Executor {
   readonly id = 'claude';
   readonly label = 'Claude';
-  readonly steeringMode = 'next_turn' as const;
   private readonly options: ClaudeExecutorOptions;
+
+  get steeringMode(): 'live' | 'next_turn' {
+    return (this.options.mode ?? 'dry-run') === 'local-cli'
+      ? 'live'
+      : 'next_turn';
+  }
 
   constructor(options?: ClaudeExecutorOptions) {
     this.options = options ?? {};
@@ -94,14 +132,21 @@ export class ClaudeExecutor implements Executor {
       request,
     );
     const tools = claudeTools(request);
+    const providerSession =
+      this.options.sessionMode !== 'transcript' &&
+      request.providerSession?.providerId === this.id
+        ? request.providerSession
+        : undefined;
+    const resumeSessionId = providerSession?.sessionId;
     const args = [
       ...(this.options.commandPrefixArgs ?? []),
       '-p',
       '--verbose',
+      '--input-format',
+      'stream-json',
       '--output-format',
       'stream-json',
       '--include-partial-messages',
-      '--no-session-persistence',
       '--permission-mode',
       'dontAsk',
       '--tools',
@@ -111,6 +156,8 @@ export class ClaudeExecutor implements Executor {
       '--append-system-prompt',
       buildAgentSystemPrompt(request),
     ];
+    if (!providerSession) args.push('--no-session-persistence');
+    if (resumeSessionId) args.push('--resume', resumeSessionId);
     if (this.options.model) args.push('--model', this.options.model);
     if (this.options.maxBudgetUsd !== undefined) {
       args.push('--max-budget-usd', String(this.options.maxBudgetUsd));
@@ -122,7 +169,7 @@ export class ClaudeExecutor implements Executor {
         id: 'claude-cli',
         label: 'Run Claude CLI',
         status: 'running',
-        detail: `${tools.allowed.length} allowed tool rule(s) / ${cwd}`,
+        detail: `${resumeSessionId ? 'resume session' : 'new turn'} / ${tools.allowed.length} allowed tool rule(s) / ${cwd}`,
       },
     });
 
@@ -131,6 +178,12 @@ export class ClaudeExecutor implements Executor {
     let deltaBuffer = '';
     let unstructuredLogCount = 0;
     let stderrLogCount = 0;
+    let recordedProviderSession = false;
+    let resultSeen = false;
+    let stdinWriter: CliStdinWriter | undefined;
+    const steeringAbort = new AbortController();
+    const abortSteering = (): void => steeringAbort.abort();
+    request.abortSignal?.addEventListener('abort', abortSteering, { once: true });
     const runningTools = new Map<number, { id: string; label: string }>();
     const flushDelta = async (force = false): Promise<void> => {
       if (!deltaBuffer || (!force && deltaBuffer.length < 300)) return;
@@ -161,10 +214,15 @@ export class ClaudeExecutor implements Executor {
       }
       const eventType = text(event.type) || '';
       if (eventType === 'system' && event.subtype === 'init') {
+        const sessionId = text(event.session_id);
+        if (sessionId && providerSession) {
+          await providerSession.record(sessionId);
+          recordedProviderSession = true;
+        }
         await request.onEvent?.({
           type: 'log',
           level: 'info',
-          message: `Claude session ${text(event.session_id) || 'started'}`,
+          message: `Claude session ${sessionId || 'started'}`,
         });
         return;
       }
@@ -215,6 +273,9 @@ export class ClaudeExecutor implements Executor {
         }
       }
       if (eventType === 'result') {
+        resultSeen = true;
+        steeringAbort.abort();
+        stdinWriter?.end();
         await flushDelta(true);
         const value = text(event.result);
         if (value) finalMessage = value;
@@ -233,12 +294,84 @@ export class ClaudeExecutor implements Executor {
       }
     };
 
+    const pumpSteering = async (writer: CliStdinWriter): Promise<void> => {
+      if (!request.steering || request.steering.mode !== 'live') return;
+      while (!steeringAbort.signal.aborted && !writer.signal.aborted) {
+        const followUp = await request.steering.receive({
+          waitMs: 250,
+          signal: steeringAbort.signal,
+        });
+        if (!followUp) continue;
+        await request.onEvent?.({
+          type: 'progress',
+          item: {
+            id: `claude-steering-${followUp.id}`,
+            label: 'Apply live follow-up',
+            status: 'running',
+            detail: followUp.message.actor.displayName || followUp.message.actor.id,
+          },
+        });
+        try {
+          await writer.writeLine(
+            streamJsonUserMessage(buildLiveSteeringPrompt(followUp)),
+          );
+        } catch (error) {
+          if (
+            resultSeen ||
+            steeringAbort.signal.aborted ||
+            writer.signal.aborted
+          ) {
+            await request.onEvent?.({
+              type: 'log',
+              level: 'info',
+              message:
+                'Claude stream closed before the follow-up was applied; the durable mailbox will continue it in the next turn.',
+            });
+            return;
+          }
+          throw error;
+        }
+        if (resultSeen || steeringAbort.signal.aborted || writer.signal.aborted) {
+          await request.onEvent?.({
+            type: 'log',
+            level: 'info',
+            message:
+              'Claude completed while forwarding a follow-up; the durable mailbox will continue it in the next turn.',
+          });
+          return;
+        }
+        await request.steering.acknowledge(
+          followUp.id,
+          'Forwarded to the active Claude stream',
+        );
+        await request.onEvent?.({
+          type: 'progress',
+          item: {
+            id: `claude-steering-${followUp.id}`,
+            label: 'Apply live follow-up',
+            status: 'done',
+            detail: 'Applied to active session',
+          },
+        });
+      }
+    };
+
     try {
       await runCliCommand({
         command: this.options.command || 'claude',
         args,
         cwd,
-        input: buildAgentUserPrompt(request),
+        input: `${streamJsonUserMessage(buildAgentUserPrompt(request))}\n`,
+        stdinMode: 'stream',
+        async onStdinReady(writer) {
+          stdinWriter = writer;
+          writer.signal.addEventListener('abort', abortSteering, { once: true });
+          if (resultSeen) {
+            writer.end();
+            return;
+          }
+          await pumpSteering(writer);
+        },
         env: createCliEnvironment({
           provider: 'claude',
           request,
@@ -266,8 +399,27 @@ export class ClaudeExecutor implements Executor {
         },
       });
     } catch (error) {
+      if (resumeSessionId && isMissingCliSession(error)) {
+        await providerSession.invalidate('Claude provider session is unavailable; rebuilding from durable transcript.');
+        await request.onEvent?.({
+          type: 'log',
+          level: 'warn',
+          message: 'Claude session unavailable; retrying once with durable shared-thread context.',
+        });
+        return this.run({
+          ...request,
+          providerSession: { ...providerSession, sessionId: undefined },
+        });
+      }
       if (providerError) throw new Error(providerError, { cause: error });
       throw error;
+    } finally {
+      steeringAbort.abort();
+      stdinWriter?.end();
+      request.abortSignal?.removeEventListener('abort', abortSteering);
+    }
+    if (resumeSessionId && providerSession && !recordedProviderSession) {
+      await providerSession.record(resumeSessionId);
     }
     await flushDelta(true);
 
