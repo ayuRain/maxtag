@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenTag Admin</title>
+    <link rel="stylesheet" href="/admin.css" />
+  </head>
+  <body>
+    <aside class="rail">
+      <div class="brand">
+        <div class="mark">OT</div>
+        <div>
+          <strong>OpenTag</strong>
+          <span>Lark first, not Lark only</span>
+        </div>
+      </div>
+      <nav>
+        <button class="nav-active">Threads</button>
+        <button>Agents</button>
+        <button>Access</button>
+        <button>Memory</button>
+        <button>Runs</button>
+      </nav>
+    </aside>
+
+    <main class="page">
+      <header class="topbar">
+        <div>
+          <h1>Open agent mentions for work threads</h1>
+          <p>Platform-neutral core with a Lark adapter running first.</p>
+        </div>
+        <div class="status-pill" id="health">Checking server...</div>
+      </header>
+
+      <section class="metrics" id="capabilities">
+        <article>
+          <span>Platforms</span>
+          <strong>...</strong>
+        </article>
+        <article>
+          <span>Executors</span>
+          <strong>...</strong>
+        </article>
+        <article>
+          <span>Policy</span>
+          <strong>Deny by default</strong>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <div class="panel composer">
+          <div class="panel-head">
+            <div>
+              <h2>Dry-run Thread</h2>
+              <p>Simulate an @OpenTag message and preview the Lark progress card.</p>
+            </div>
+            <button id="run">Run</button>
+          </div>
+          <textarea id="prompt" spellcheck="false">@OpenTag 帮我看看这个 repo 怎么接飞书</textarea>
+          <div class="timeline">
+            <div class="step done">Normalize SourceThread</div>
+            <div class="step done">Load identity + access bundle</div>
+            <div class="step active">Render progress surface</div>
+            <div class="step">Publish artifacts</div>
+          </div>
+        </div>
+
+        <div class="panel preview">
+          <div class="panel-head">
+            <div>
+              <h2>Lark Card Preview</h2>
+              <p>Rendered from the same card model the Lark adapter will send.</p>
+            </div>
+          </div>
+          <div id="card" class="card-preview empty">Run a dry-run to render a card.</div>
+        </div>
+      </section>
+
+      <section class="panel output">
+        <div class="panel-head">
+          <div>
+            <h2>Outbound Text</h2>
+            <p>What the platform adapter would send back into the work thread.</p>
+          </div>
+        </div>
+        <pre id="output">No message yet.</pre>
+      </section>
+    </main>
+
+    <script type="module" src="/admin.js"></script>
+  </body>
+</html>

@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import {
   OpenTagRuntime,
   StaticThreadConfigStore,
@@ -19,6 +20,7 @@ import {
 const port = Number(process.env.OPENTAG_PORT || 3077);
 const host = process.env.OPENTAG_HOST || '127.0.0.1';
 const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
+const adminDir = path.resolve('apps/admin/public');
 const botOpenId = process.env.OPENTAG_LARK_BOT_OPEN_ID;
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
@@ -38,6 +40,16 @@ function sendJson(
 ): void {
   response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body, null, 2));
+}
+
+async function sendFileResponse(
+  response: ServerResponse,
+  filePath: string,
+  contentType: string,
+): Promise<void> {
+  const content = await readFile(filePath);
+  response.writeHead(200, { 'content-type': contentType });
+  response.end(content);
 }
 
 function createRuntimeForDryRun(transport: MemoryLarkTransport): OpenTagRuntime {
@@ -113,6 +125,21 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/health') {
       sendJson(response, 200, { ok: true, service: 'opentag-server' });
+      return;
+    }
+
+    if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+      await sendFileResponse(response, path.join(adminDir, 'index.html'), 'text/html; charset=utf-8');
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/admin.css') {
+      await sendFileResponse(response, path.join(adminDir, 'admin.css'), 'text/css; charset=utf-8');
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/admin.js') {
+      await sendFileResponse(response, path.join(adminDir, 'admin.js'), 'text/javascript; charset=utf-8');
       return;
     }
 
