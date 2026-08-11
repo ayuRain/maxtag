@@ -1,4 +1,5 @@
 import type {
+  Artifact,
   PlatformAdapter,
   PlatformCapabilities,
   ProgressSurface,
@@ -33,8 +34,12 @@ export class TelegramPlatformAdapter implements PlatformAdapter {
     return new TelegramReceiptSurface();
   }
 
-  async sendMessage(_thread: SourceThread, _text: string): Promise<void> {
+  async sendMessage(
+    _thread: SourceThread,
+    _text: string,
+    _artifacts?: Artifact[],
+    _options?: { runId?: string },
+  ): Promise<void> {
     throw new Error('Telegram transport is not implemented yet.');
   }
 }
-

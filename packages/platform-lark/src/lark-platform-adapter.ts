@@ -23,6 +23,11 @@ class LarkProgressSurface implements ProgressSurface {
       chatId: this.thread.channelId || this.thread.externalId,
       rootId: this.thread.rootMessageId,
       card: buildLarkProgressCard(state) as unknown as Record<string, unknown>,
+      metadata: {
+        runId: state.runId,
+        thread: this.thread,
+        stage: 'progress-card',
+      },
     });
     return { surfaceId: result.cardId };
   }
@@ -31,6 +36,11 @@ class LarkProgressSurface implements ProgressSurface {
     await this.transport.updateCard({
       cardId: surfaceId,
       card: buildLarkProgressCard(state) as unknown as Record<string, unknown>,
+      metadata: {
+        runId: state.runId,
+        thread: this.thread,
+        stage: 'progress-card',
+      },
     });
   }
 
@@ -63,6 +73,7 @@ export class LarkPlatformAdapter implements PlatformAdapter {
     thread: SourceThread,
     text: string,
     artifacts?: Artifact[],
+    options?: { runId?: string },
   ): Promise<void> {
     const artifactLines = (artifacts || [])
       .filter((artifact) => artifact.url)
@@ -72,7 +83,11 @@ export class LarkPlatformAdapter implements PlatformAdapter {
       chatId: thread.channelId || thread.externalId,
       rootId: thread.rootMessageId,
       text: artifactLines ? `${text}\n\nArtifacts:\n${artifactLines}` : text,
+      metadata: {
+        runId: options?.runId,
+        thread,
+        stage: 'thread-reply',
+      },
     });
   }
 }
-

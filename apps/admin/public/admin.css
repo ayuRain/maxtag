@@ -190,13 +190,15 @@ textarea:focus {
 
 .client-list,
 .scope-list,
-.parity-list {
+.parity-list,
+.delivery-list {
   display: grid;
 }
 
 .client-row,
 .scope-row,
-.parity-row {
+.parity-row,
+.delivery-row {
   display: grid;
   align-items: center;
   gap: 12px;
@@ -215,6 +217,43 @@ textarea:focus {
 
 .parity-row {
   grid-template-columns: minmax(130px, 0.8fr) 92px minmax(220px, 1.5fr);
+}
+
+.delivery-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.metric {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px;
+}
+
+.metric strong,
+.metric span {
+  display: block;
+}
+
+.metric strong {
+  font-size: 18px;
+}
+
+.metric span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.delivery-row {
+  grid-template-columns: minmax(120px, 0.8fr) 92px minmax(220px, 1.5fr);
+  padding: 9px 0;
 }
 
 .row-main {
@@ -247,8 +286,24 @@ textarea:focus {
   color: var(--green);
 }
 
+.state.delivered,
+.state.completed {
+  color: var(--green);
+}
+
 .state.partial {
   color: var(--amber);
+}
+
+.state.pending,
+.state.sending,
+.state.queued,
+.state.accepted {
+  color: var(--amber);
+}
+
+.state.failed {
+  color: var(--red);
 }
 
 .state.planned {
@@ -377,9 +432,14 @@ pre {
 
   .client-row,
   .scope-row,
-  .parity-row {
+  .parity-row,
+  .delivery-row {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+
+  .metric-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

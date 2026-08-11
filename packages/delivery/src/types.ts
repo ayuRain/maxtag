@@ -1,0 +1,98 @@
+import type { PlatformKind, SourceThread } from '@opentag/core';
+
+export type OutboundStatus = 'pending' | 'sending' | 'delivered' | 'failed';
+
+export type TurnDeliveryStatus = 'queued' | 'accepted' | 'completed' | 'failed';
+
+export type ThreadActivationMode = 'mention' | 'always';
+
+export interface OutboundTarget {
+  platform: PlatformKind;
+  chatId?: string;
+  cardId?: string;
+  rootId?: string;
+  replyToMessageId?: string;
+}
+
+export interface OutboundEnvelope {
+  id: string;
+  sequence: number;
+  kind: string;
+  target: OutboundTarget;
+  payload: Record<string, unknown>;
+  status: OutboundStatus;
+  attempts: number;
+  maxAttempts: number;
+  nextAttemptAt: string;
+  runId?: string;
+  threadId?: string;
+  workspaceId?: string;
+  projectId?: string;
+  externalId?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateOutboundInput {
+  kind: string;
+  target: OutboundTarget;
+  payload: Record<string, unknown>;
+  runId?: string;
+  thread?: SourceThread;
+  maxAttempts?: number;
+}
+
+export interface TurnDeliveryRecord {
+  id: string;
+  runId: string;
+  outboxId: string;
+  kind: string;
+  platform: PlatformKind;
+  threadId?: string;
+  workspaceId?: string;
+  projectId?: string;
+  targetId: string;
+  status: TurnDeliveryStatus;
+  queuedAt: string;
+  acceptedAt?: string;
+  completedAt?: string;
+  failedAt?: string;
+  lastError?: string;
+  updatedAt: string;
+}
+
+export interface ThreadBinding {
+  id: string;
+  platform: PlatformKind;
+  externalId: string;
+  workspaceId: string;
+  projectId: string;
+  title?: string;
+  activationMode: ThreadActivationMode;
+  requireMention: boolean;
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpsertThreadBindingInput {
+  thread: SourceThread;
+  workspaceId: string;
+  projectId: string;
+  activationMode?: ThreadActivationMode;
+  requireMention?: boolean;
+}
+
+export interface DeliverySummary {
+  outbox: Record<OutboundStatus, number>;
+  turnDeliveries: Record<TurnDeliveryStatus, number>;
+  bindings: number;
+}
+
+export interface FileDeliveryState {
+  nextSequence: number;
+  outbox: OutboundEnvelope[];
+  turnDeliveries: TurnDeliveryRecord[];
+  threadBindings: ThreadBinding[];
+}

@@ -236,7 +236,12 @@ export interface PlatformAdapter {
   kind: PlatformKind;
   capabilities: PlatformCapabilities;
   createProgressSurface(thread: SourceThread): ProgressSurface;
-  sendMessage(thread: SourceThread, text: string, artifacts?: Artifact[]): Promise<void>;
+  sendMessage(
+    thread: SourceThread,
+    text: string,
+    artifacts?: Artifact[],
+    options?: { runId?: string },
+  ): Promise<void>;
 }
 
 export interface MemoryStore {

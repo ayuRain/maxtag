@@ -1,4 +1,5 @@
 import type { LarkTransport } from './types.js';
+import type { LarkDeliveryMetadata } from './types.js';
 
 export class MemoryLarkTransport implements LarkTransport {
   readonly texts: Array<Record<string, unknown>> = [];
@@ -9,6 +10,7 @@ export class MemoryLarkTransport implements LarkTransport {
     text: string;
     rootId?: string;
     replyToMessageId?: string;
+    metadata?: LarkDeliveryMetadata;
   }): Promise<void> {
     this.texts.push(input);
   }
@@ -18,6 +20,7 @@ export class MemoryLarkTransport implements LarkTransport {
     card: Record<string, unknown>;
     rootId?: string;
     replyToMessageId?: string;
+    metadata?: LarkDeliveryMetadata;
   }): Promise<{ cardId: string }> {
     const id = `card_${this.cards.length + 1}`;
     this.cards.push({ id, card: input.card });
@@ -27,6 +30,7 @@ export class MemoryLarkTransport implements LarkTransport {
   async updateCard(input: {
     cardId: string;
     card: Record<string, unknown>;
+    metadata?: LarkDeliveryMetadata;
   }): Promise<void> {
     const existing = this.cards.find((card) => card.id === input.cardId);
     if (existing) {
@@ -36,4 +40,3 @@ export class MemoryLarkTransport implements LarkTransport {
     this.cards.push({ id: input.cardId, card: input.card });
   }
 }
-

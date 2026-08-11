@@ -7,10 +7,10 @@
   },
   "references": [
     { "path": "../../packages/core" },
+    { "path": "../../packages/delivery" },
     { "path": "../../packages/executor-codex" },
     { "path": "../../packages/memory" },
     { "path": "../../packages/platform-lark" }
   ],
   "include": ["src/**/*.ts"]
 }
-

@@ -8,6 +8,7 @@ const clients = document.querySelector('#clients');
 const memoryScopes = document.querySelector('#memory-scopes');
 const parity = document.querySelector('#parity');
 const routeLine = document.querySelector('#route-line');
+const delivery = document.querySelector('#delivery');
 
 async function getJson(url, options) {
   const response = await fetch(url, options);
@@ -129,6 +130,40 @@ function renderParity(items) {
   });
 }
 
+function renderDelivery(data) {
+  delivery.replaceChildren();
+  const summary = data?.summary?.outbox || {};
+  const metrics = document.createElement('div');
+  metrics.className = 'metric-strip';
+  for (const key of ['delivered', 'pending', 'sending', 'failed']) {
+    const metric = document.createElement('div');
+    metric.className = 'metric';
+    const value = document.createElement('strong');
+    value.textContent = String(summary[key] || 0);
+    const label = document.createElement('span');
+    label.textContent = key;
+    metric.append(value, label);
+    metrics.append(metric);
+  }
+
+  const list = document.createElement('div');
+  list.className = 'delivery-list';
+  for (const item of data?.outbox || []) {
+    const row = document.createElement('div');
+    row.className = 'delivery-row';
+    appendText(row, 'row-main', item.kind);
+    appendState(row, item.status);
+    appendText(
+      row,
+      'row-detail',
+      `${item.target?.chatId || item.target?.cardId || 'target'} · #${item.sequence}`,
+    );
+    list.append(row);
+  }
+
+  delivery.append(metrics, list);
+}
+
 async function refreshHealth() {
   try {
     await getJson('/health');
@@ -151,6 +186,14 @@ async function refreshCapabilities() {
   renderParity(data.parity || []);
 }
 
+async function refreshDelivery() {
+  try {
+    renderDelivery(await getJson('/v1/deliveries'));
+  } catch (error) {
+    delivery.textContent = error.message;
+  }
+}
+
 async function runDryRun() {
   runButton.disabled = true;
   runButton.textContent = 'Running';
@@ -166,6 +209,7 @@ async function runDryRun() {
     const firstText = data.larkDryRun?.texts?.[0]?.text;
     if (firstCard) renderCard(firstCard);
     output.textContent = firstText || JSON.stringify(data.result, null, 2);
+    renderDelivery(data.delivery);
     routeLine.textContent = data.route
       ? `${data.route.workspaceId || 'workspace'} / ${data.route.projectId || 'project'}`
       : 'completed';
@@ -184,3 +228,4 @@ runButton.addEventListener('click', () => {
 
 await refreshHealth();
 await refreshCapabilities();
+await refreshDelivery();

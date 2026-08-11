@@ -1,3 +1,11 @@
+import type { SourceThread } from '@opentag/core';
+
+export interface LarkDeliveryMetadata {
+  runId?: string;
+  thread?: SourceThread;
+  stage?: 'progress-card' | 'thread-reply';
+}
+
 export interface LarkIncomingEvent {
   event_id?: string;
   event?: {
@@ -29,16 +37,18 @@ export interface LarkTransport {
     text: string;
     rootId?: string;
     replyToMessageId?: string;
+    metadata?: LarkDeliveryMetadata;
   }): Promise<void>;
   createCard(input: {
     chatId: string;
     card: Record<string, unknown>;
     rootId?: string;
     replyToMessageId?: string;
+    metadata?: LarkDeliveryMetadata;
   }): Promise<{ cardId: string }>;
   updateCard(input: {
     cardId: string;
     card: Record<string, unknown>;
+    metadata?: LarkDeliveryMetadata;
   }): Promise<void>;
 }
-

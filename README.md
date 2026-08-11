@@ -45,6 +45,7 @@ packages/executor-codex     Codex executor placeholder
 packages/executor-claude    Claude executor placeholder
 packages/tools-github       GitHub tool contract placeholder
 packages/memory             Global/workspace/project/thread memory stores
+packages/delivery           Durable outbox, delivery tracking, bindings
 packages/ui-cards           Progress/checklist card models
 ```
 
@@ -54,6 +55,8 @@ packages/ui-cards           Progress/checklist card models
 - The core model is client-neutral: Lark, Telegram, Slack, and GitHub comments
   are clients of the same runtime contract.
 - Memory is scoped into global, workspace, project, and thread files.
+- Dry-run Lark delivery now runs through a file-backed outbox, per-run delivery
+  records, and thread-to-project bindings.
 - The admin preview exposes client readiness, memory scopes, and AgentDock parity
   gaps.
 

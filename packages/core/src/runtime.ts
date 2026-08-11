@@ -164,6 +164,7 @@ export class OpenTagRuntime {
         input.thread,
         result.summary,
         result.artifacts,
+        { runId: input.runId },
       );
 
       state = {

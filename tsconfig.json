@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/core" },
+    { "path": "packages/delivery" },
     { "path": "packages/ui-cards" },
     { "path": "packages/memory" },
     { "path": "packages/platform-lark" },
@@ -13,4 +14,3 @@
     { "path": "apps/admin" }
   ]
 }
-

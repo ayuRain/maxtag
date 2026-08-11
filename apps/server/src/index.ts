@@ -8,6 +8,7 @@ import {
   type SourceMessage,
   type SourceThread,
 } from '@opentag/core';
+import { FileDeliveryStore, TrackedLarkTransport } from '@opentag/delivery';
 import { createCodexExecutor } from '@opentag/executor-codex';
 import { ScopedFileMemoryStore } from '@opentag/memory';
 import {
@@ -15,6 +16,7 @@ import {
   MemoryLarkTransport,
   normalizeLarkEvent,
   type LarkIncomingEvent,
+  type LarkTransport,
 } from '@opentag/platform-lark';
 
 const port = Number(process.env.OPENTAG_PORT || 3077);
@@ -22,6 +24,7 @@ const host = process.env.OPENTAG_HOST || '127.0.0.1';
 const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
 const adminDir = path.resolve('apps/admin/public');
 const botOpenId = process.env.OPENTAG_LARK_BOT_OPEN_ID;
+const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
 
 const capabilityManifest = {
   product: 'OpenTag',
@@ -104,8 +107,8 @@ const capabilityManifest = {
     {
       capability: 'Reliable delivery',
       agentdock: 'SQLite outbox and turn delivery tracking',
-      opentag: 'direct dry-run transport only',
-      status: 'planned',
+      opentag: 'file-backed outbox and turn delivery tracker',
+      status: 'partial',
     },
     {
       capability: 'Long-running work',
@@ -145,7 +148,7 @@ async function sendFileResponse(
   response.end(content);
 }
 
-function createRuntimeForDryRun(transport: MemoryLarkTransport): OpenTagRuntime {
+function createRuntimeForDryRun(transport: LarkTransport): OpenTagRuntime {
   const platform = new LarkPlatformAdapter(transport);
   return new OpenTagRuntime({
     platform,
@@ -208,13 +211,26 @@ async function runDryMessage(input: {
   thread: SourceThread;
   message: SourceMessage;
 }): Promise<Record<string, unknown>> {
-  const transport = new MemoryLarkTransport();
-  const runtime = createRuntimeForDryRun(transport);
+  const memoryTransport = new MemoryLarkTransport();
+  const trackedTransport = new TrackedLarkTransport(memoryTransport, deliveryStore);
+  const runtime = createRuntimeForDryRun(trackedTransport);
+  const runId = randomUUID();
+  await deliveryStore.upsertThreadBinding({
+    thread: input.thread,
+    workspaceId: input.thread.workspaceId ?? 'default-workspace',
+    projectId: input.thread.projectId ?? 'general',
+  });
   const result = await runtime.handleMessage({
-    runId: randomUUID(),
+    runId,
     thread: input.thread,
     message: input.message,
   });
+  const [summary, outbox, turnDeliveries, bindings] = await Promise.all([
+    deliveryStore.summarize(),
+    deliveryStore.listOutbox({ runId, limit: 20 }),
+    deliveryStore.listTurnDeliveries({ runId, limit: 20 }),
+    deliveryStore.listThreadBindings(20),
+  ]);
   return {
     result,
     route: {
@@ -223,9 +239,15 @@ async function runDryMessage(input: {
       threadId: input.thread.id,
       platform: input.thread.platform,
     },
+    delivery: {
+      summary,
+      outbox: outbox.map(({ payload: _payload, ...item }) => item),
+      turnDeliveries,
+      bindings,
+    },
     larkDryRun: {
-      texts: transport.texts,
-      cards: transport.cards,
+      texts: memoryTransport.texts,
+      cards: memoryTransport.cards,
     },
   };
 }
@@ -256,6 +278,22 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
       sendJson(response, 200, capabilityManifest);
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/deliveries') {
+      const [summary, outbox, turnDeliveries, bindings] = await Promise.all([
+        deliveryStore.summarize(),
+        deliveryStore.listOutbox({ limit: 50 }),
+        deliveryStore.listTurnDeliveries({ limit: 50 }),
+        deliveryStore.listThreadBindings(50),
+      ]);
+      sendJson(response, 200, {
+        summary,
+        outbox: outbox.map(({ payload: _payload, ...item }) => item),
+        turnDeliveries,
+        bindings,
+      });
       return;
     }
 
