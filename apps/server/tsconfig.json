@@ -16,7 +16,8 @@
     { "path": "../../packages/platform-telegram" },
     { "path": "../../packages/routines" },
     { "path": "../../packages/runtime-host" },
-    { "path": "../../packages/storage-sqlite" }
+    { "path": "../../packages/storage-sqlite" },
+    { "path": "../../packages/workflows" }
   ],
   "include": ["src/**/*.ts"]
 }

@@ -41,7 +41,10 @@
   history, deterministic bridging into the shared agent run queue, and
   inline/external/manual scheduler modes. Lark and Telegram topics can create,
   list, pause, resume, and delete scoped standing work with requester audit.
-- Operator console organized around projects, access, routines, activity,
+- SQLite WAL-backed project workflow DAGs with immutable execution snapshots,
+  manual and typed-event triggers, event-id deduplication, atomic node claims,
+  dependency failure propagation, and deterministic shared-run-queue bridging.
+- Operator console organized around projects, access, routines, workflows, activity,
   scoped memory, delivery, and project-aware agent previews.
 - Optional operator authentication with Bearer automation, signed HttpOnly
   browser sessions, named multi-token principals, workspace-scoped collection
@@ -105,9 +108,14 @@
 - Routine foundation: scheduled summaries, channel digests, and recurring checks
   can run through the shared executor and delivery path; each thread has a
   bilingual standing-work command surface.
+- Workflow foundation: saved agent DAGs can run manually or from authenticated,
+  idempotent typed events; intermediate nodes remain internal and sink nodes
+  publish through a configured client destination.
 - Supervised scheduler deployment, queue-depth/lease metrics, and live Lark
   delivery/restart smoke evidence.
-- Watchers: PR, CI, issue, alert, and document monitors.
+- Native watcher producers: PR, CI, issue, alert, and document monitors.
+- Add branching/parallel workflow editing, execution cancellation, node retry,
+  and per-workflow queue metrics without allowing arbitrary in-process scripts.
 - Add richer routine status and recent-result summaries to each thread.
 
 ## Phase 5: Multi-Platform

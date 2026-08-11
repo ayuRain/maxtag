@@ -36,6 +36,13 @@ import {
   trimRoutineState,
   type RoutineState,
 } from '@opentag/routines';
+import {
+  FileWorkflowStore,
+  createEmptyWorkflowState,
+  normalizeWorkflowState,
+  trimWorkflowState,
+  type WorkflowState,
+} from '@opentag/workflows';
 
 const SCHEMA_VERSION = 1;
 const DELIVERY_DOCUMENT = 'delivery';
@@ -43,6 +50,7 @@ const PAIRING_DOCUMENT = 'pairing';
 const ACCESS_DOCUMENT = 'access';
 const MEMORY_DOCUMENT = 'memory';
 const ROUTINES_DOCUMENT = 'routines';
+const WORKFLOWS_DOCUMENT = 'workflows';
 
 interface StateDocumentRow {
   schema_version: number;
@@ -55,6 +63,7 @@ export interface SqliteMigrationSummary {
   accessImported: boolean;
   memoryImported: boolean;
   routinesImported: boolean;
+  workflowsImported: boolean;
 }
 
 export interface SqliteOpenTagStoreOptions {
@@ -66,6 +75,7 @@ export interface SqliteOpenTagStoreOptions {
   legacyAccessFile?: string;
   legacyMemoryDir?: string;
   legacyRoutineFile?: string;
+  legacyWorkflowFile?: string;
 }
 
 export interface AtomicPairingBindingInput extends ConsumePairingCodeInput {
@@ -186,6 +196,14 @@ class SqliteStateBackend {
     );
   }
 
+  readWorkflows(): WorkflowState {
+    return this.readDocument(
+      WORKFLOWS_DOCUMENT,
+      normalizeWorkflowState,
+      createEmptyWorkflowState,
+    );
+  }
+
   mutateDelivery<T>(operation: (state: FileDeliveryState) => T): T {
     return this.immediateTransaction(() => {
       const state = this.readDelivery();
@@ -233,6 +251,16 @@ class SqliteStateBackend {
     });
   }
 
+  mutateWorkflows<T>(operation: (state: WorkflowState) => T): T {
+    return this.immediateTransaction(() => {
+      const state = this.readWorkflows();
+      const result = operation(state);
+      trimWorkflowState(state);
+      this.writeDocument(WORKFLOWS_DOCUMENT, state);
+      return result;
+    });
+  }
+
   mutatePairingAndDelivery<T>(
     operation: (pairing: PairingState, delivery: FileDeliveryState) => T,
   ): T {
@@ -256,6 +284,7 @@ class SqliteStateBackend {
       let accessImported = false;
       let memoryImported = false;
       let routinesImported = false;
+      let workflowsImported = false;
       if (!this.hasDocument(DELIVERY_DOCUMENT)) {
         const legacy = readLegacyState(
           options.legacyDeliveryFile,
@@ -299,6 +328,15 @@ class SqliteStateBackend {
         routinesImported = legacy.imported;
         this.writeDocument(ROUTINES_DOCUMENT, legacy.state);
       }
+      if (!this.hasDocument(WORKFLOWS_DOCUMENT)) {
+        const legacy = readLegacyState(
+          options.legacyWorkflowFile,
+          (input) => normalizeWorkflowState(input),
+          createEmptyWorkflowState,
+        );
+        workflowsImported = legacy.imported;
+        this.writeDocument(WORKFLOWS_DOCUMENT, legacy.state);
+      }
       this.database.pragma(`user_version = ${SCHEMA_VERSION}`);
       return {
         deliveryImported,
@@ -306,6 +344,7 @@ class SqliteStateBackend {
         accessImported,
         memoryImported,
         routinesImported,
+        workflowsImported,
       };
     });
   }
@@ -438,12 +477,29 @@ class SqliteRoutineStore extends FileRoutineStore {
   }
 }
 
+class SqliteWorkflowStore extends FileWorkflowStore {
+  constructor(private readonly backend: SqliteStateBackend) {
+    super(path.dirname(backend.databasePath));
+  }
+
+  protected override async readState(): Promise<WorkflowState> {
+    return this.backend.readWorkflows();
+  }
+
+  protected override async mutate<T>(
+    operation: (state: WorkflowState) => T,
+  ): Promise<T> {
+    return this.backend.mutateWorkflows(operation);
+  }
+}
+
 export class SqliteOpenTagStore {
   readonly deliveryStore: SqliteDeliveryStore;
   readonly pairingStore: SqlitePairingStore;
   readonly accessStore: SqliteWorkspaceAccessStore;
   readonly memoryStore: SqliteMemoryStore;
   readonly routineStore: SqliteRoutineStore;
+  readonly workflowStore: SqliteWorkflowStore;
   readonly migration: SqliteMigrationSummary;
   readonly databasePath: string;
   private readonly backend: SqliteStateBackend;
@@ -460,6 +516,7 @@ export class SqliteOpenTagStore {
     this.accessStore = new SqliteWorkspaceAccessStore(this.backend);
     this.memoryStore = new SqliteMemoryStore(this.backend);
     this.routineStore = new SqliteRoutineStore(this.backend);
+    this.workflowStore = new SqliteWorkflowStore(this.backend);
   }
 
   async consumePairingAndConfigureBinding(

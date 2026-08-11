@@ -16,6 +16,7 @@
     { "path": "../platform-lark" },
     { "path": "../platform-telegram" },
     { "path": "../routines" },
-    { "path": "../storage-sqlite" }
+    { "path": "../storage-sqlite" },
+    { "path": "../workflows" }
   ]
 }

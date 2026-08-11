@@ -177,6 +177,7 @@ test(
       accessImported: false,
       memoryImported: false,
       routinesImported: false,
+      workflowsImported: false,
     });
     const afterRestart = await fetch(
       `${secondServer.baseUrl}/v1/runs?limit=20`,

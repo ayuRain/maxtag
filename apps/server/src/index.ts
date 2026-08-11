@@ -86,9 +86,18 @@ import {
 } from '@opentag/routines';
 import {
   RoutineSchedulerService,
+  WorkflowCoordinatorService,
   type RoutineTickResult,
+  type WorkflowCoordinatorTickResult,
 } from '@opentag/runtime-host';
 import { SqliteOpenTagStore } from '@opentag/storage-sqlite';
+import {
+  FileWorkflowStore,
+  type UpsertWorkflowInput,
+  type WorkflowDestination,
+  type WorkflowNode,
+  type WorkflowTrigger,
+} from '@opentag/workflows';
 import {
   OperatorAuth,
   bearerTokenMatches,
@@ -177,6 +186,27 @@ const routineBatchSize = Math.min(
 );
 const defaultRoutineTimeZone =
   process.env.OPENTAG_DEFAULT_TIME_ZONE || 'Asia/Shanghai';
+const workflowsEnabled = !['0', 'false', 'no'].includes(
+  String(process.env.OPENTAG_WORKFLOWS_ENABLED || 'true').toLowerCase(),
+);
+const workflowCoordinatorMode = workflowCoordinatorModeValue(
+  process.env.OPENTAG_WORKFLOW_COORDINATOR,
+  workflowsEnabled,
+);
+const workflowCoordinatorInline =
+  workflowsEnabled && workflowCoordinatorMode === 'inline';
+const workflowTickIntervalMs = numberEnvironmentValue(
+  'OPENTAG_WORKFLOW_TICK_INTERVAL_MS',
+  2_000,
+);
+const workflowClaimStaleMs = numberEnvironmentValue(
+  'OPENTAG_WORKFLOW_CLAIM_STALE_MS',
+  120_000,
+);
+const workflowBatchSize = Math.min(
+  100,
+  numberEnvironmentValue('OPENTAG_WORKFLOW_BATCH_SIZE', 20),
+);
 const legacyOperatorWorkspaceIds = listEnvironmentValue(
   'OPENTAG_ADMIN_WORKSPACE_IDS',
 ) ?? [];
@@ -204,6 +234,9 @@ const operatorAuth = new OperatorAuth({
   ),
 });
 const clientIngressToken = process.env.OPENTAG_CLIENT_INGRESS_TOKEN;
+const workflowIngressToken = process.env.OPENTAG_WORKFLOW_INGRESS_TOKEN;
+const workflowIngressActor =
+  process.env.OPENTAG_WORKFLOW_INGRESS_ACTOR?.trim() || 'workflow-ingress';
 const storageDriver = storageDriverValue(process.env.OPENTAG_STORAGE_DRIVER);
 const sqliteStorage =
   storageDriver === 'sqlite'
@@ -236,6 +269,11 @@ const sqliteStorage =
           'routines',
           'routine-state.json',
         ),
+        legacyWorkflowFile: path.join(
+          dataDir,
+          'workflows',
+          'workflow-state.json',
+        ),
       })
     : undefined;
 const routineSchedulerId = `opentag-routines-${process.pid}`;
@@ -248,6 +286,9 @@ const memoryStore =
 const routineStore =
   sqliteStorage?.routineStore ??
   new FileRoutineStore(path.join(dataDir, 'routines'));
+const workflowStore =
+  sqliteStorage?.workflowStore ??
+  new FileWorkflowStore(path.join(dataDir, 'workflows'));
 const routineCommandService = new RoutineCommandService(routineStore, {
   defaultTimeZone: defaultRoutineTimeZone,
 });
@@ -290,6 +331,22 @@ const routineScheduler = new RoutineSchedulerService({
       return `telegram-${telegramTransportStatus().mode}`;
     }
     return 'tracked-text';
+  },
+  onRunQueued: () => scheduleAgentWorkerPass(),
+});
+const workflowCoordinator = new WorkflowCoordinatorService({
+  workflowStore,
+  deliveryStore,
+  threadConfigStore,
+  coordinatorId: `opentag-workflows-${process.pid}`,
+  claimStaleMs: workflowClaimStaleMs,
+  batchSize: workflowBatchSize,
+  transportModeForPlatform: (platform) => {
+    if (platform === 'lark') return `lark-${String(larkTransportStatus().mode)}`;
+    if (platform === 'telegram') {
+      return `telegram-${telegramTransportStatus().mode}`;
+    }
+    return platform === 'workflow' ? 'workflow-internal' : 'tracked-text';
   },
   onRunQueued: () => scheduleAgentWorkerPass(),
 });
@@ -417,7 +474,7 @@ const capabilityManifest = {
     {
       capability: 'Long-running work',
       agentdock: 'scheduled tasks and dynamic workflows',
-      opentag: 'SQLite routines plus inline or independent scheduling into the durable run queue',
+      opentag: 'SQLite routines and workflow DAGs with inline or independent coordination into the durable run queue',
       status: 'partial',
     },
   ],
@@ -448,6 +505,24 @@ function routineSchedulerModeValue(
   }
   throw new Error(
     'OPENTAG_ROUTINE_SCHEDULER must be inline, external, or manual.',
+  );
+}
+
+function workflowCoordinatorModeValue(
+  value: string | undefined,
+  enabled: boolean,
+): 'inline' | 'external' | 'manual' {
+  if (!enabled) return 'manual';
+  const normalized = (value || 'inline').trim().toLowerCase();
+  if (
+    normalized === 'inline' ||
+    normalized === 'external' ||
+    normalized === 'manual'
+  ) {
+    return normalized;
+  }
+  throw new Error(
+    'OPENTAG_WORKFLOW_COORDINATOR must be inline, external, or manual.',
   );
 }
 
@@ -699,6 +774,11 @@ function operatorCollectionWorkspace(
 
 function genericClientIngressMode(): 'local-open' | 'bearer' | 'disabled' {
   if (clientIngressToken) return 'bearer';
+  return operatorAuth.configured ? 'disabled' : 'local-open';
+}
+
+function workflowIngressMode(): 'local-open' | 'bearer' | 'disabled' {
+  if (workflowIngressToken) return 'bearer';
   return operatorAuth.configured ? 'disabled' : 'local-open';
 }
 
@@ -1194,6 +1274,76 @@ function coerceRoutineInput(
       visibility: visibilityValue(destination.visibility) || 'public',
       title: stringValue(destination, 'title', name),
     },
+  };
+}
+
+function coerceWorkflowInput(
+  body: Record<string, unknown>,
+): UpsertWorkflowInput | { error: string } {
+  const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+  const projectId = stringValue(body, 'projectId');
+  const name = stringValue(body, 'name');
+  const triggerBody = recordValue(body, 'trigger') || {};
+  const triggerKind = stringValue(triggerBody, 'kind', 'manual');
+  let trigger: WorkflowTrigger;
+  if (triggerKind === 'manual') {
+    trigger = { kind: 'manual' };
+  } else if (triggerKind === 'event') {
+    const eventType = stringValue(triggerBody, 'eventType');
+    if (!eventType) return { error: 'workflow_event_type_required' };
+    trigger = { kind: 'event', eventType };
+  } else {
+    return { error: 'workflow_trigger_invalid' };
+  }
+  const rawNodes = body.nodes;
+  if (!Array.isArray(rawNodes)) return { error: 'workflow_nodes_required' };
+  const nodes: WorkflowNode[] = [];
+  for (const rawNode of rawNodes) {
+    if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) {
+      return { error: 'workflow_node_invalid' };
+    }
+    const node = rawNode as Record<string, unknown>;
+    const id = stringValue(node, 'id');
+    const instructions = stringValue(node, 'instructions');
+    if (!id || !instructions) {
+      return { error: 'workflow_node_id_instructions_required' };
+    }
+    nodes.push({
+      id,
+      name: stringValue(node, 'name'),
+      instructions,
+      dependsOn: stringArrayValue(node, 'dependsOn'),
+      publish: booleanValue(node, 'publish'),
+    });
+  }
+  const destinationBody = recordValue(body, 'destination') || {};
+  const platform = stringValue(destinationBody, 'platform', 'lark');
+  const externalId = stringValue(destinationBody, 'externalId');
+  if (!workspaceId || !projectId || !name || !platform || !externalId) {
+    return {
+      error: 'workflow_workspace_project_name_platform_destination_required',
+    };
+  }
+  const destination: WorkflowDestination = {
+    platform: platform as PlatformKind,
+    externalId,
+    channelId: stringValue(destinationBody, 'channelId', externalId),
+    threadId: stringValue(destinationBody, 'threadId'),
+    rootMessageId: stringValue(destinationBody, 'rootMessageId'),
+    topicId: stringValue(destinationBody, 'topicId'),
+    visibility: visibilityValue(destinationBody.visibility) || 'public',
+    title: stringValue(destinationBody, 'title', name),
+  };
+  return {
+    id: stringValue(body, 'id'),
+    workspaceId,
+    projectId,
+    name,
+    description: stringValue(body, 'description'),
+    enabled: booleanValue(body, 'enabled', true),
+    trigger,
+    nodes,
+    destination,
   };
 }
 
@@ -2243,6 +2393,39 @@ async function routineSnapshot(
   };
 }
 
+async function runWorkflowCoordinatorTick(): Promise<WorkflowCoordinatorTickResult> {
+  return workflowCoordinator.tick();
+}
+
+async function workflowSnapshot(
+  workspaceId = 'dev-workspace',
+  projectId?: string,
+): Promise<Record<string, unknown>> {
+  await workflowCoordinator.reconcileNodeRuns({ workspaceId, projectId });
+  const [workflows, executions, summary, audit] = await Promise.all([
+    workflowStore.listWorkflows({ workspaceId, projectId }),
+    workflowStore.listExecutions({ workspaceId, projectId, limit: 200 }),
+    workflowStore.summarize(workspaceId, projectId),
+    workflowStore.listAudit({ workspaceId, projectId, limit: 50 }),
+  ]);
+  return {
+    workflows,
+    executions,
+    summary,
+    audit,
+    coordinator: {
+      enabled: workflowsEnabled,
+      mode: workflowCoordinatorMode,
+      tickIntervalMs: workflowTickIntervalMs,
+      claimStaleMs: workflowClaimStaleMs,
+      batchSize: workflowBatchSize,
+      running: workflowCoordinator.running,
+      lastTickAt: workflowCoordinator.lastTickAt,
+      lastTickResult: workflowCoordinator.lastTickResult,
+    },
+  };
+}
+
 async function markRunInboundProcessed(run: AgentRunRecord): Promise<void> {
   if (!run.inboundEventId || !run.thread || !run.message) return;
   await deliveryStore.markInboundEventProcessed(run.inboundEventId, {
@@ -2544,6 +2727,13 @@ async function runAgentWorkerPass(
       } finally {
         const latest = await deliveryStore.getAgentRun(run.id);
         if (latest) result.runs.push(latest);
+        if (run.metadata?.source === 'workflow') {
+          try {
+            await workflowCoordinator.tick();
+          } catch (error) {
+            console.error('OpenTag workflow coordinator wake failed', error);
+          }
+        }
       }
     }
     return result;
@@ -2597,6 +2787,13 @@ const server = createServer(async (request, response) => {
           running: routineScheduler.running,
           lastTickAt: routineScheduler.lastTickAt,
         },
+        workflows: {
+          enabled: workflowsEnabled,
+          mode: workflowCoordinatorMode,
+          batchSize: workflowBatchSize,
+          running: workflowCoordinator.running,
+          lastTickAt: workflowCoordinator.lastTickAt,
+        },
         storage: {
           driver: storageDriver,
           wal: Boolean(sqliteStorage),
@@ -2610,6 +2807,9 @@ const server = createServer(async (request, response) => {
           },
           clientIngress: {
             mode: genericClientIngressMode(),
+          },
+          workflowIngress: {
+            mode: workflowIngressMode(),
           },
         },
       });
@@ -2717,6 +2917,8 @@ const server = createServer(async (request, response) => {
       request.method === 'POST' && url.pathname === '/v1/telegram/events';
     const isGenericClientIngress =
       request.method === 'POST' && url.pathname === '/v1/client/events';
+    const isWorkflowIngress =
+      request.method === 'POST' && url.pathname === '/v1/workflow-events';
 
     if (isGenericClientIngress) {
       const ingressMode = genericClientIngressMode();
@@ -2742,11 +2944,36 @@ const server = createServer(async (request, response) => {
       }
     }
 
+    if (isWorkflowIngress) {
+      const ingressMode = workflowIngressMode();
+      if (ingressMode === 'disabled') {
+        sendJson(response, 503, {
+          error: 'workflow_ingress_token_required',
+          message:
+            'Set OPENTAG_WORKFLOW_INGRESS_TOKEN before enabling workflow event ingress.',
+        });
+        return;
+      }
+      if (
+        ingressMode === 'bearer' &&
+        !bearerTokenMatches(request, workflowIngressToken)
+      ) {
+        sendJson(
+          response,
+          401,
+          { error: 'workflow_ingress_auth_required' },
+          { 'www-authenticate': 'Bearer realm="OpenTag workflow ingress"' },
+        );
+        return;
+      }
+    }
+
     if (
       url.pathname.startsWith('/v1/') &&
       !isLarkIngress &&
       !isTelegramIngress &&
-      !isGenericClientIngress
+      !isGenericClientIngress &&
+      !isWorkflowIngress
     ) {
       operatorAuthentication = requireOperator(request, response);
       if (!operatorAuthentication) return;
@@ -2786,6 +3013,17 @@ const server = createServer(async (request, response) => {
           running: routineScheduler.running,
           lastTickAt: routineScheduler.lastTickAt,
           lastTickResult: routineScheduler.lastTickResult,
+        },
+        workflows: {
+          enabled: workflowsEnabled,
+          mode: workflowCoordinatorMode,
+          tickIntervalMs: workflowTickIntervalMs,
+          claimStaleMs: workflowClaimStaleMs,
+          batchSize: workflowBatchSize,
+          running: workflowCoordinator.running,
+          lastTickAt: workflowCoordinator.lastTickAt,
+          lastTickResult: workflowCoordinator.lastTickResult,
+          ingressMode: workflowIngressMode(),
         },
         storage: {
           driver: storageDriver,
@@ -3110,6 +3348,176 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         workspaceId: selection.workspaceId,
         audit,
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/workflows') {
+      const workspaceId =
+        url.searchParams.get('workspaceId') ||
+        scopedOperatorWorkspace(operatorAuthentication!) ||
+        'dev-workspace';
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          workspaceId,
+        )
+      ) {
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        await workflowSnapshot(
+          workspaceId,
+          url.searchParams.get('projectId') || undefined,
+        ),
+      );
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/workflows/tick') {
+      if (!requireInstallationOperator(response, operatorAuthentication!)) {
+        return;
+      }
+      const result = await runWorkflowCoordinatorTick();
+      sendJson(response, 200, {
+        result,
+        workflows: await workflowSnapshot(),
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/workflows') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const input = coerceWorkflowInput(body);
+      if ('error' in input) {
+        sendJson(response, 400, { error: input.error });
+        return;
+      }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          input.workspaceId,
+        )
+      ) {
+        return;
+      }
+      try {
+        if (input.id) {
+          const existing = await workflowStore.getWorkflow(input.id);
+          if (!existing || existing.status === 'archived') {
+            sendJson(response, 404, { error: 'workflow_not_found' });
+            return;
+          }
+          if (
+            !requireOperatorWorkspace(
+              response,
+              operatorAuthentication!,
+              existing.workspaceId,
+            )
+          ) {
+            return;
+          }
+          if (existing.workspaceId !== input.workspaceId) {
+            sendJson(response, 400, { error: 'workflow_workspace_immutable' });
+            return;
+          }
+        }
+        const workflow = await workflowStore.upsertWorkflow({
+          ...input,
+          actor: operatorActor(operatorAuthentication!),
+        });
+        sendJson(response, 200, {
+          workflow,
+          workflows: await workflowSnapshot(workflow.workspaceId),
+        });
+      } catch (error) {
+        sendJson(response, 400, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      url.pathname.startsWith('/v1/workflows/') &&
+      url.pathname.endsWith('/trigger')
+    ) {
+      const id = decodeURIComponent(
+        url.pathname.slice('/v1/workflows/'.length, -'/trigger'.length),
+      );
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      try {
+        const workflow = await workflowStore.getWorkflow(id);
+        if (!workflow || workflow.status === 'archived') {
+          sendJson(response, 404, { error: 'workflow_not_found' });
+          return;
+        }
+        if (
+          !requireOperatorWorkspace(
+            response,
+            operatorAuthentication!,
+            workflow.workspaceId,
+          )
+        ) {
+          return;
+        }
+        const execution = await workflowStore.triggerWorkflow(id, {
+          actor: operatorActor(operatorAuthentication!),
+          payload: recordValue(body, 'input') || recordValue(body, 'payload'),
+        });
+        const tick = workflowCoordinatorInline
+          ? await runWorkflowCoordinatorTick()
+          : undefined;
+        sendJson(response, 202, {
+          accepted: true,
+          execution:
+            (await workflowStore.getExecution(execution.id)) || execution,
+          tick,
+          coordinatorMode: workflowCoordinatorMode,
+          workflows: await workflowSnapshot(workflow.workspaceId),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        sendJson(response, message === 'workflow_not_found' ? 404 : 400, {
+          error: message,
+        });
+      }
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      url.pathname.startsWith('/v1/workflows/')
+    ) {
+      const id = decodeURIComponent(
+        url.pathname.slice('/v1/workflows/'.length),
+      );
+      const existing = await workflowStore.getWorkflow(id);
+      if (!existing || existing.status === 'archived') {
+        sendJson(response, 404, { error: 'workflow_not_found' });
+        return;
+      }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          existing.workspaceId,
+        )
+      ) {
+        return;
+      }
+      const workflow = await workflowStore.archiveWorkflow(
+        id,
+        operatorActor(operatorAuthentication!),
+      );
+      sendJson(response, 200, {
+        workflow,
+        workflows: await workflowSnapshot(existing.workspaceId),
       });
       return;
     }
@@ -3886,6 +4294,58 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'POST' && url.pathname === '/v1/workflow-events') {
+      if (!workflowsEnabled) {
+        sendJson(response, 503, { error: 'workflows_disabled' });
+        return;
+      }
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const workspaceId = stringValue(body, 'workspaceId');
+      const projectId = stringValue(body, 'projectId');
+      const eventType = stringValue(body, 'eventType');
+      const eventId = stringValue(body, 'eventId');
+      if (!workspaceId || !projectId || !eventType || !eventId) {
+        sendJson(response, 400, {
+          error: 'workflow_event_workspace_project_type_id_required',
+        });
+        return;
+      }
+      try {
+        const staged = await workflowStore.triggerEvent({
+          workspaceId,
+          projectId,
+          eventType,
+          eventId,
+          payload: recordValue(body, 'payload'),
+          actor: `${workflowIngressActor.slice(0, 120)}:${eventType}`,
+        });
+        const tick = workflowCoordinatorInline && staged.staged.length > 0
+          ? await runWorkflowCoordinatorTick()
+          : undefined;
+        sendJson(response, 202, {
+          accepted: true,
+          matched: staged.matched,
+          staged: staged.staged.map((execution) => ({
+            id: execution.id,
+            workflowId: execution.workflowId,
+            status: execution.status,
+          })),
+          duplicates: staged.duplicates.map((execution) => ({
+            id: execution.id,
+            workflowId: execution.workflowId,
+            status: execution.status,
+          })),
+          coordinatorMode: workflowCoordinatorMode,
+          tick,
+        });
+      } catch (error) {
+        sendJson(response, 400, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
     if (request.method === 'POST' && url.pathname === '/v1/client/events') {
       const body = (await readJsonBody(request)) as Record<string, unknown>;
       const normalized = coerceClientEvent(body);
@@ -4306,7 +4766,7 @@ server.listen(port, host, () => {
   console.log(
     `OpenTag storage driver=${storageDriver}${
       sqliteStorage
-        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_pairing=${sqliteStorage.migration.pairingImported} migrated_access=${sqliteStorage.migration.accessImported} migrated_memory=${sqliteStorage.migration.memoryImported} migrated_routines=${sqliteStorage.migration.routinesImported}`
+        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_pairing=${sqliteStorage.migration.pairingImported} migrated_access=${sqliteStorage.migration.accessImported} migrated_memory=${sqliteStorage.migration.memoryImported} migrated_routines=${sqliteStorage.migration.routinesImported} migrated_workflows=${sqliteStorage.migration.workflowsImported}`
         : ''
     }`,
   );
@@ -4347,5 +4807,16 @@ server.listen(port, host, () => {
       });
     }, routineTickIntervalMs);
     routineInterval.unref?.();
+  }
+  if (workflowCoordinatorInline) {
+    void runWorkflowCoordinatorTick().catch((error) => {
+      console.error('OpenTag workflow coordinator startup tick failed', error);
+    });
+    const workflowInterval = setInterval(() => {
+      void runWorkflowCoordinatorTick().catch((error) => {
+        console.error('OpenTag workflow coordinator tick failed', error);
+      });
+    }, workflowTickIntervalMs);
+    workflowInterval.unref?.();
   }
 });

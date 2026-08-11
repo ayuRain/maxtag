@@ -9,12 +9,14 @@ const state = {
   access: null,
   delivery: null,
   routines: null,
+  workflows: null,
   pairings: null,
   runs: [],
   bindings: [],
   selectedProjectId: null,
   selectedAccessProjectId: null,
   selectedRoutineId: null,
+  selectedWorkflowId: null,
   selectedRunId: null,
   runFilter: '',
   memoryScope: 'project',
@@ -24,6 +26,10 @@ const state = {
   latestPairing: null,
   projectDirty: false,
   routineDirty: false,
+  workflowDirty: false,
+  workflowTriggerKind: 'manual',
+  workflowDraftSteps: [],
+  workflowGraphMode: 'sequential',
 };
 
 const viewCopy = {
@@ -32,6 +38,7 @@ const viewCopy = {
   access: { eyebrow: 'Identity and roles', title: 'Access' },
   connectors: { eyebrow: 'Multi-client routing', title: 'Connectors' },
   routines: { eyebrow: 'Proactive work', title: 'Routines' },
+  workflows: { eyebrow: 'Event-driven work', title: 'Workflows' },
   activity: { eyebrow: 'Runs and delivery', title: 'Activity' },
   memory: { eyebrow: 'Scoped context', title: 'Memory' },
 };
@@ -111,8 +118,11 @@ function applyOperatorCapabilities() {
     '#save-access-policy',
     '#add-project-member',
     '#new-routine',
-    '#trigger-routine',
+    '#save-routine',
     '#delete-routine',
+    '#new-workflow',
+    '#save-workflow',
+    '#archive-workflow',
     '#pairing-form button[type="submit"]',
     '#memory-form button[type="submit"]',
     '#forget-memory',
@@ -122,7 +132,22 @@ function applyOperatorCapabilities() {
     const control = $(selector);
     if (control) control.disabled = viewer;
   }
-  for (const selector of ['#tick-routines', '#worker-pass', '#recover-runs']) {
+  const routineTrigger = $('#trigger-routine');
+  if (routineTrigger) {
+    routineTrigger.disabled =
+      viewer || state.routineDirty || !routineById(state.selectedRoutineId);
+  }
+  const workflowTrigger = $('#trigger-workflow');
+  if (workflowTrigger) {
+    workflowTrigger.disabled =
+      viewer || state.workflowDirty || !workflowById(state.selectedWorkflowId);
+  }
+  for (const selector of [
+    '#tick-routines',
+    '#tick-workflows',
+    '#worker-pass',
+    '#recover-runs',
+  ]) {
     const control = $(selector);
     if (control) control.disabled = viewer || !installation;
   }
@@ -206,6 +231,7 @@ function formatTime(value, includeDate = false) {
 function shortId(value) {
   if (!value) return 'unknown';
   if (value.startsWith('routine:')) return `routine:${value.slice(-6)}`;
+  if (value.startsWith('workflow:')) return `workflow:${value.slice(-6)}`;
   return value.slice(0, 8);
 }
 
@@ -298,6 +324,7 @@ function renderWorkspaceHeader() {
     clients.filter((client) => client.status !== 'planned').length,
   );
   $('#routine-count').textContent = String(state.routines?.routines?.length || 0);
+  $('#workflow-count').textContent = String(state.workflows?.workflows?.length || 0);
   const runSummary = state.delivery?.summary?.agentRuns || {};
   $('#active-count').textContent = String(
     (runSummary.queued || 0) +
@@ -328,7 +355,8 @@ function renderSummary() {
   const failures =
     (runs.failed || 0) +
     (outbox.failed || 0) +
-    (state.routines?.summary?.executions?.failed || 0);
+    (state.routines?.summary?.executions?.failed || 0) +
+    (state.workflows?.summary?.executions?.failed || 0);
   summary.replaceChildren(
     metric(projects.length, 'Projects'),
     metric(clients.filter((client) => client.status !== 'planned').length, 'Active clients'),
@@ -1545,8 +1573,556 @@ function renderRoutines() {
   }
 }
 
+function workflowById(value) {
+  return (state.workflows?.workflows || []).find((workflow) => workflow.id === value);
+}
+
+function workflowTriggerLabel(trigger) {
+  return trigger?.kind === 'event' ? trigger.eventType || 'Event' : 'Manual';
+}
+
+function workflowExecutions(workflowId) {
+  return (state.workflows?.executions || []).filter(
+    (execution) => execution.workflowId === workflowId,
+  );
+}
+
+function fillWorkflowProjectOptions(selectedValue) {
+  const select = $('#workflow-project');
+  select.replaceChildren();
+  for (const project of state.workspace?.projects || []) {
+    const option = document.createElement('option');
+    option.value = project.projectId;
+    option.textContent = project.name;
+    option.selected = projectMatches(project, selectedValue);
+    select.append(option);
+  }
+}
+
+function fillWorkflowDestination(force = false) {
+  const externalId = $('#workflow-external-id');
+  if (!force && externalId.value.trim()) return;
+  const binding = preferredRoutineBinding(
+    $('#workflow-project').value,
+    $('#workflow-platform').value,
+  );
+  if (!binding) {
+    if (force) externalId.value = '';
+    return;
+  }
+  $('#workflow-platform').value = binding.platform;
+  externalId.value = binding.externalId;
+}
+
+function defaultWorkflowSteps() {
+  return [
+    {
+      id: 'collect',
+      name: 'Collect context',
+      instructions: '',
+      publish: false,
+    },
+    {
+      id: 'analyze',
+      name: 'Analyze',
+      instructions: '',
+      dependsOn: ['collect'],
+      publish: false,
+    },
+    {
+      id: 'publish',
+      name: 'Publish',
+      instructions: '',
+      dependsOn: ['analyze'],
+      publish: true,
+    },
+  ];
+}
+
+function sequentialWorkflowNodes(nodes) {
+  return nodes.every((node, index) => {
+    const dependencies = node.dependsOn || [];
+    return index === 0
+      ? dependencies.length === 0
+      : dependencies.length === 1 && dependencies[0] === nodes[index - 1].id;
+  });
+}
+
+function nextWorkflowStepId() {
+  const ids = new Set(state.workflowDraftSteps.map((step) => step.id));
+  let index = state.workflowDraftSteps.length + 1;
+  while (ids.has(`step-${index}`)) index += 1;
+  return `step-${index}`;
+}
+
+function markWorkflowDirty() {
+  state.workflowDirty = true;
+  $('#workflow-save-state').textContent = 'Unsaved changes';
+  $('#trigger-workflow').disabled = true;
+}
+
+function setWorkflowTriggerKind(kind, dirty = false) {
+  state.workflowTriggerKind = kind === 'event' ? 'event' : 'manual';
+  for (const button of $$('#workflow-trigger-kind button')) {
+    button.classList.toggle(
+      'active',
+      button.dataset.workflowTrigger === state.workflowTriggerKind,
+    );
+  }
+  const eventTrigger = state.workflowTriggerKind === 'event';
+  $('#workflow-event-type-field').hidden = !eventTrigger;
+  $('#workflow-trigger-label').textContent = eventTrigger
+    ? $('#workflow-event-type').value.trim() || 'Event'
+    : 'Manual';
+  if (dirty) markWorkflowDirty();
+}
+
+function moveWorkflowStep(index, offset) {
+  const target = index + offset;
+  if (target < 0 || target >= state.workflowDraftSteps.length) return;
+  const [step] = state.workflowDraftSteps.splice(index, 1);
+  state.workflowDraftSteps.splice(target, 0, step);
+  renderWorkflowSteps();
+  markWorkflowDirty();
+}
+
+function removeWorkflowStep(index) {
+  if (state.workflowDraftSteps.length <= 1) return;
+  state.workflowDraftSteps.splice(index, 1);
+  renderWorkflowSteps();
+  markWorkflowDirty();
+}
+
+function renderWorkflowSteps() {
+  const root = $('#workflow-steps');
+  root.replaceChildren();
+  const advanced = state.workflowGraphMode === 'advanced';
+  const dependencyIds = new Set(
+    state.workflowDraftSteps.flatMap((step) => step.dependsOn || []),
+  );
+  $('#workflow-step-count').textContent = advanced
+    ? `${state.workflowDraftSteps.length} graph nodes`
+    : `${state.workflowDraftSteps.length} steps`;
+  $('#add-workflow-step').hidden = advanced;
+
+  state.workflowDraftSteps.forEach((step, index) => {
+    const row = element('div', 'workflow-step-row');
+    const marker = element('div', 'workflow-step-marker');
+    marker.append(
+      element('strong', '', String(index + 1)),
+      element(
+        'small',
+        '',
+        advanced
+          ? step.publish ?? !dependencyIds.has(step.id)
+            ? 'Publish'
+            : 'Node'
+          : index === state.workflowDraftSteps.length - 1
+            ? 'Publish'
+            : 'Agent',
+      ),
+    );
+
+    const fields = element('div', 'workflow-step-fields');
+    const nameLabel = element('label', 'field workflow-step-name');
+    nameLabel.append(element('span', '', 'Step name'));
+    const name = document.createElement('input');
+    name.value = step.name || '';
+    name.required = true;
+    name.autocomplete = 'off';
+    name.addEventListener('input', () => {
+      step.name = name.value;
+      markWorkflowDirty();
+    });
+    nameLabel.append(name);
+
+    const instructionLabel = element('label', 'field workflow-step-instructions');
+    instructionLabel.append(element('span', '', 'Instructions'));
+    const instructions = document.createElement('textarea');
+    instructions.rows = 3;
+    instructions.required = true;
+    instructions.spellcheck = true;
+    instructions.placeholder = 'What should this agent produce?';
+    instructions.value = step.instructions || '';
+    instructions.addEventListener('input', () => {
+      step.instructions = instructions.value;
+      markWorkflowDirty();
+    });
+    instructionLabel.append(instructions);
+    fields.append(nameLabel, instructionLabel);
+
+    const actions = element('div', 'workflow-step-actions');
+    for (const action of [
+      { label: 'Move step up', symbol: '↑', disabled: index === 0, offset: -1 },
+      {
+        label: 'Move step down',
+        symbol: '↓',
+        disabled: index === state.workflowDraftSteps.length - 1,
+        offset: 1,
+      },
+    ]) {
+      const button = element('button', 'square-button workflow-step-button', action.symbol);
+      button.type = 'button';
+      button.title = action.label;
+      button.setAttribute('aria-label', action.label);
+      button.disabled = advanced || action.disabled;
+      button.addEventListener('click', () => moveWorkflowStep(index, action.offset));
+      actions.append(button);
+    }
+    const remove = element('button', 'square-button workflow-step-button remove', '×');
+    remove.type = 'button';
+    remove.title = 'Remove step';
+    remove.setAttribute('aria-label', 'Remove step');
+    remove.disabled = advanced || state.workflowDraftSteps.length <= 1;
+    remove.addEventListener('click', () => removeWorkflowStep(index));
+    actions.append(remove);
+
+    row.append(marker, fields, actions);
+    root.append(row);
+  });
+}
+
+function workflowNodeLabel(execution, nodeId) {
+  return (
+    execution.workflow?.nodes?.find((node) => node.id === nodeId)?.name || nodeId
+  );
+}
+
+function renderWorkflowExecutions(workflow) {
+  const root = $('#workflow-executions');
+  root.replaceChildren();
+  const executions = workflow ? workflowExecutions(workflow.id) : [];
+  $('#workflow-execution-count').textContent = `${executions.length} recorded`;
+  if (!executions.length) {
+    root.append(
+      element(
+        'div',
+        'empty-state',
+        workflow ? 'No executions yet' : 'Save the workflow to create executions',
+      ),
+    );
+    return;
+  }
+  for (const execution of executions.slice(0, 20)) {
+    const row = element('div', 'workflow-execution-row');
+    const copy = element('div', 'workflow-execution-copy');
+    copy.append(
+      element(
+        'strong',
+        '',
+        `${workflowTriggerLabel(execution.trigger)} / ${formatTime(execution.createdAt, true)}`,
+      ),
+      element(
+        'small',
+        '',
+        execution.error || execution.summary || shortId(execution.id),
+      ),
+    );
+    const nodes = element('div', 'workflow-node-statuses');
+    for (const node of execution.nodes || []) {
+      const nodeStatus = element('span', `workflow-node-status ${node.status}`);
+      nodeStatus.title = statusLabel(node.status);
+      nodeStatus.append(
+        element('i'),
+        document.createTextNode(workflowNodeLabel(execution, node.nodeId)),
+      );
+      nodes.append(nodeStatus);
+    }
+    copy.append(nodes);
+    row.append(
+      statePill(execution.status),
+      copy,
+      element('span', 'workflow-execution-time', formatTime(execution.updatedAt, true)),
+    );
+    const latestRun = [...(execution.nodes || [])].reverse().find((node) => node.runId);
+    if (latestRun) {
+      const open = element('button', 'routine-run-link', 'Open run');
+      open.type = 'button';
+      open.addEventListener('click', () => void openRoutineRun(latestRun.runId));
+      row.append(open);
+    } else {
+      row.append(element('span', 'workflow-execution-time', 'Not queued'));
+    }
+    root.append(row);
+  }
+}
+
+function renderWorkflowList() {
+  const root = $('#workflow-list');
+  root.replaceChildren();
+  const workflows = state.workflows?.workflows || [];
+  if (!workflows.length) {
+    root.append(element('div', 'empty-state', 'No workflows configured'));
+    return;
+  }
+  for (const workflow of workflows) {
+    const project = projectById(workflow.projectId);
+    const button = element('button', 'project-list-item');
+    button.type = 'button';
+    button.classList.toggle('active', workflow.id === state.selectedWorkflowId);
+    button.append(
+      element('strong', '', workflow.name),
+      element(
+        'span',
+        '',
+        `${workflow.enabled ? 'Enabled' : 'Disabled'} / ${project?.name || workflow.projectId} / ${workflowTriggerLabel(workflow.trigger)}`,
+      ),
+    );
+    button.addEventListener('click', () => selectWorkflow(workflow.id));
+    root.append(button);
+  }
+}
+
+function fillWorkflowForm(workflow) {
+  const isNew = !workflow;
+  const defaultProjectId = state.workspace?.projects?.[0]?.projectId || '';
+  const projectId = workflow?.projectId || defaultProjectId;
+  $('#workflow-editor-title').textContent = workflow?.name || 'New workflow';
+  $('#workflow-state').textContent = isNew
+    ? 'Draft'
+    : workflow.enabled
+      ? 'Enabled'
+      : 'Disabled';
+  $('#workflow-state').className = `state-pill ${isNew ? 'planned' : workflow.enabled ? 'enabled' : 'disabled'}`;
+  $('#workflow-name').value = workflow?.name || '';
+  $('#workflow-description').value = workflow?.description || '';
+  $('#workflow-enabled').checked = workflow?.enabled ?? true;
+  fillWorkflowProjectOptions(projectId);
+  $('#workflow-event-type').value =
+    workflow?.trigger?.kind === 'event' ? workflow.trigger.eventType : '';
+  setWorkflowTriggerKind(workflow?.trigger?.kind || 'manual');
+  $('#workflow-platform').value = workflow?.destination?.platform || 'lark';
+  $('#workflow-external-id').value = workflow?.destination?.externalId || '';
+  $('#workflow-visibility').value = workflow?.destination?.visibility || 'public';
+  $('#workflow-thread-id').value = workflow?.destination?.threadId || '';
+  if (isNew) fillWorkflowDestination();
+  const nodes = workflow?.nodes || defaultWorkflowSteps();
+  state.workflowGraphMode = sequentialWorkflowNodes(nodes) ? 'sequential' : 'advanced';
+  $('#workflow-destination-label').textContent =
+    state.workflowGraphMode === 'advanced' ? 'Sink nodes' : 'Final step';
+  state.workflowDraftSteps = nodes.map((node) => ({
+    id: node.id,
+    name: node.name || '',
+    instructions: node.instructions || '',
+    dependsOn: node.dependsOn ? [...node.dependsOn] : undefined,
+    publish: node.publish,
+  }));
+  renderWorkflowSteps();
+  $('#archive-workflow').hidden = isNew;
+  $('#trigger-workflow').disabled = isNew;
+  renderWorkflowExecutions(workflow);
+  state.workflowDirty = false;
+  $('#workflow-save-state').textContent = isNew
+    ? 'New workflow'
+    : `Version ${workflow.version}`;
+}
+
+function selectWorkflow(workflowId) {
+  if (state.workflowDirty && !window.confirm('Discard unsaved workflow changes?')) return;
+  state.selectedWorkflowId = workflowId;
+  renderWorkflowList();
+  fillWorkflowForm(workflowById(workflowId));
+}
+
+function newWorkflow() {
+  if (state.workflowDirty && !window.confirm('Discard unsaved workflow changes?')) return;
+  state.selectedWorkflowId = '__new__';
+  renderWorkflowList();
+  fillWorkflowForm(null);
+  $('#workflow-name').focus();
+}
+
+function addWorkflowStep() {
+  if (state.workflowGraphMode === 'advanced') return;
+  state.workflowDraftSteps.push({
+    id: nextWorkflowStepId(),
+    name: '',
+    instructions: '',
+  });
+  renderWorkflowSteps();
+  markWorkflowDirty();
+  $('#workflow-steps .workflow-step-row:last-child input')?.focus();
+}
+
+function workflowPayload() {
+  const existing = workflowById(state.selectedWorkflowId);
+  const name = $('#workflow-name').value.trim();
+  const projectId = $('#workflow-project').value;
+  const externalId = $('#workflow-external-id').value.trim();
+  const eventType = $('#workflow-event-type').value.trim();
+  if (!name || !projectId || !externalId) {
+    throw new Error('Name, project, and channel ID are required');
+  }
+  if (state.workflowTriggerKind === 'event' && !eventType) {
+    throw new Error('Event type is required');
+  }
+  if (!state.workflowDraftSteps.length) throw new Error('Add at least one step');
+  for (const step of state.workflowDraftSteps) {
+    if (!step.name.trim() || !step.instructions.trim()) {
+      throw new Error('Every step needs a name and instructions');
+    }
+  }
+  const sequential = state.workflowGraphMode === 'sequential';
+  return {
+    id: existing?.id,
+    workspaceId: currentWorkspaceId(),
+    projectId,
+    name,
+    description: $('#workflow-description').value.trim() || undefined,
+    enabled: $('#workflow-enabled').checked,
+    trigger:
+      state.workflowTriggerKind === 'event'
+        ? { kind: 'event', eventType }
+        : { kind: 'manual' },
+    nodes: state.workflowDraftSteps.map((step, index) => ({
+      id: step.id,
+      name: step.name.trim(),
+      instructions: step.instructions.trim(),
+      dependsOn: sequential
+        ? index > 0
+          ? [state.workflowDraftSteps[index - 1].id]
+          : undefined
+        : step.dependsOn,
+      publish: sequential
+        ? index === state.workflowDraftSteps.length - 1
+        : step.publish,
+    })),
+    destination: {
+      platform: $('#workflow-platform').value,
+      externalId,
+      channelId: externalId,
+      threadId: $('#workflow-thread-id').value.trim() || undefined,
+      visibility: $('#workflow-visibility').value,
+      title: name,
+    },
+  };
+}
+
+async function saveWorkflow(event) {
+  event.preventDefault();
+  const button = $('#save-workflow');
+  setButtonBusy(button, true, 'Saving', 'Save workflow');
+  try {
+    const data = await getJson('/v1/workflows', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(workflowPayload()),
+    });
+    state.workflows = data.workflows;
+    state.selectedWorkflowId = data.workflow.id;
+    state.workflowDirty = false;
+    renderWorkflows();
+    renderWorkspaceHeader();
+    renderSummary();
+    showToast('Workflow saved');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Saving', 'Save workflow');
+  }
+}
+
+async function triggerWorkflow() {
+  const workflow = workflowById(state.selectedWorkflowId);
+  if (!workflow) return;
+  const button = $('#trigger-workflow');
+  setButtonBusy(button, true, 'Starting', 'Run now');
+  try {
+    const data = await getJson(
+      `/v1/workflows/${encodeURIComponent(workflow.id)}/trigger`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      },
+    );
+    state.workflows = data.workflows;
+    renderWorkflows();
+    showToast(`Workflow accepted / ${statusLabel(data.execution.status)}`);
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Starting', 'Run now');
+  }
+}
+
+async function archiveWorkflow() {
+  const workflow = workflowById(state.selectedWorkflowId);
+  if (!workflow || !window.confirm(`Archive ${workflow.name}?`)) return;
+  const button = $('#archive-workflow');
+  setButtonBusy(button, true, 'Archiving', 'Archive');
+  try {
+    const data = await getJson(`/v1/workflows/${encodeURIComponent(workflow.id)}`, {
+      method: 'DELETE',
+    });
+    state.workflows = data.workflows;
+    state.selectedWorkflowId = state.workflows.workflows?.[0]?.id || '__new__';
+    state.workflowDirty = false;
+    renderWorkflows();
+    renderWorkspaceHeader();
+    showToast('Workflow archived');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Archiving', 'Archive');
+  }
+}
+
+async function tickWorkflows() {
+  const button = $('#tick-workflows');
+  setButtonBusy(button, true, 'Ticking', 'Tick now');
+  try {
+    const data = await getJson('/v1/workflows/tick', { method: 'POST' });
+    state.workflows = data.workflows;
+    renderWorkflows();
+    showToast(
+      `Claimed ${data.result.claimed} / queued ${data.result.queued} / failed ${data.result.failed}`,
+    );
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Ticking', 'Tick now');
+  }
+}
+
+function renderWorkflows() {
+  const coordinator = state.workflows?.coordinator || {};
+  const coordinatorLabel = !coordinator.enabled
+    ? 'Disabled'
+    : coordinator.mode === 'external'
+      ? 'External'
+      : coordinator.mode === 'manual'
+        ? 'Manual'
+        : 'Inline';
+  $('#workflow-coordinator-state').textContent = coordinatorLabel;
+  $('#workflow-coordinator-state').className = `state-pill ${coordinator.enabled ? 'enabled' : 'disabled'}`;
+  const modeDetail = coordinator.mode === 'external'
+    ? 'Independent coordinator'
+    : coordinator.mode === 'manual'
+      ? 'Manual ticks only'
+      : 'Server coordinator';
+  const interval = coordinator.tickIntervalMs
+    ? `${Math.max(1, Math.round(coordinator.tickIntervalMs / 1000))}s poll`
+    : 'on demand';
+  $('#workflow-coordinator-detail').textContent = coordinator.lastTickAt
+    ? `${modeDetail} / ${interval} / last ${formatTime(coordinator.lastTickAt, true)}`
+    : `${modeDetail} / ${interval}`;
+  const available = state.workflows?.workflows || [];
+  if (
+    state.selectedWorkflowId !== '__new__' &&
+    !workflowById(state.selectedWorkflowId)
+  ) {
+    state.selectedWorkflowId = available[0]?.id || '__new__';
+  }
+  renderWorkflowList();
+  if (!state.workflowDirty) {
+    fillWorkflowForm(workflowById(state.selectedWorkflowId));
+  }
+}
+
 function runTitle(run) {
   return (
+    run.metadata?.workflowName ||
     run.metadata?.routineName ||
     run.title ||
     run.message?.text ||
@@ -2022,6 +2598,7 @@ function renderAll() {
   renderOverviewRuns();
   renderProjectList();
   renderRoutines();
+  renderWorkflows();
   renderRunTable();
   renderDelivery();
 
@@ -2046,6 +2623,7 @@ async function refreshAll({ quiet = false } = {}) {
       runs,
       bindings,
       routines,
+      workflows,
       pairings,
     ] =
       await Promise.all([
@@ -2057,6 +2635,7 @@ async function refreshAll({ quiet = false } = {}) {
         getJson(`/v1/runs?limit=50&workspaceId=${workspaceId}`),
         getJson(`/v1/bindings?limit=100&workspaceId=${workspaceId}`),
         getJson(`/v1/routines?workspaceId=${workspaceId}`),
+        getJson(`/v1/workflows?workspaceId=${workspaceId}`),
         getJson(`/v1/pairing-invitations?workspaceId=${workspaceId}`),
       ]);
     state.health = health;
@@ -2067,6 +2646,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.runs = runs.runs || [];
     state.bindings = bindings.bindings || [];
     state.routines = routines;
+    state.workflows = workflows;
     state.pairings = pairings;
     const fallback = workspace.projects?.[0]?.projectId;
     state.selectedProjectId = projectById(state.selectedProjectId)?.projectId || fallback;
@@ -2115,6 +2695,12 @@ $('#routine-form').addEventListener('submit', (event) => void saveRoutine(event)
 $('#trigger-routine').addEventListener('click', () => void triggerRoutine());
 $('#delete-routine').addEventListener('click', () => void deleteRoutine());
 $('#tick-routines').addEventListener('click', () => void tickRoutines());
+$('#new-workflow').addEventListener('click', newWorkflow);
+$('#workflow-form').addEventListener('submit', (event) => void saveWorkflow(event));
+$('#trigger-workflow').addEventListener('click', () => void triggerWorkflow());
+$('#archive-workflow').addEventListener('click', () => void archiveWorkflow());
+$('#tick-workflows').addEventListener('click', () => void tickWorkflows());
+$('#add-workflow-step').addEventListener('click', addWorkflowStep);
 $('#memory-form').addEventListener('submit', (event) => void rememberMemory(event));
 $('#forget-memory').addEventListener('click', () => void forgetMemory());
 $('#reload-memory').addEventListener('click', () => void refreshMemory());
@@ -2129,9 +2715,26 @@ for (const input of $$('#routine-form input, #routine-form textarea, #routine-fo
   input.addEventListener('change', markRoutineDirty);
 }
 
+for (const input of $$('#workflow-form input, #workflow-form select')) {
+  input.addEventListener('input', markWorkflowDirty);
+  input.addEventListener('change', markWorkflowDirty);
+}
+
+for (const button of $$('#workflow-trigger-kind button')) {
+  button.addEventListener('click', () =>
+    setWorkflowTriggerKind(button.dataset.workflowTrigger, true),
+  );
+}
+
+$('#workflow-event-type').addEventListener('input', () =>
+  setWorkflowTriggerKind('event'),
+);
+
 $('#routine-schedule-kind').addEventListener('change', updateRoutineScheduleFields);
 $('#routine-project').addEventListener('change', () => fillRoutineDestination(true));
 $('#routine-platform').addEventListener('change', () => fillRoutineDestination(true));
+$('#workflow-project').addEventListener('change', () => fillWorkflowDestination(true));
+$('#workflow-platform').addEventListener('change', () => fillWorkflowDestination(true));
 
 $('#project-id').addEventListener('input', () => {
   if (state.selectedProjectId === '__new__') {
@@ -2215,7 +2818,8 @@ setInterval(() => {
     document.visibilityState === 'visible' &&
     state.auth?.authenticated &&
     !state.projectDirty &&
-    !state.routineDirty
+    !state.routineDirty &&
+    !state.workflowDirty
   ) {
     void refreshAll({ quiet: true });
   }

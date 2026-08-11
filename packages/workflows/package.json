@@ -1,5 +1,5 @@
 {
-  "name": "@opentag/storage-sqlite",
+  "name": "@opentag/workflows",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,12 +16,6 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@opentag/config": "0.1.0",
-    "@opentag/core": "0.1.0",
-    "@opentag/delivery": "0.1.0",
-    "@opentag/memory": "0.1.0",
-    "@opentag/routines": "0.1.0",
-    "@opentag/workflows": "0.1.0",
-    "better-sqlite3": "^12.11.1"
+    "@opentag/core": "0.1.0"
   }
 }

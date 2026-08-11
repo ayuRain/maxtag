@@ -45,9 +45,15 @@ import {
   FileRoutineStore,
   RoutineCommandService,
 } from '@opentag/routines';
+import { FileWorkflowStore } from '@opentag/workflows';
 import { SqliteOpenTagStore } from '@opentag/storage-sqlite';
+import {
+  WorkflowCoordinatorService,
+  type WorkflowCoordinatorTickResult,
+} from './workflow-coordinator.js';
 
 export * from './routine-scheduler.js';
+export * from './workflow-coordinator.js';
 
 export interface RuntimeHostLarkConfig {
   transportMode?: string;
@@ -80,6 +86,11 @@ export interface RuntimeHostRoutineConfig {
   defaultTimeZone?: string;
 }
 
+export interface RuntimeHostWorkflowConfig {
+  claimStaleMs?: number;
+  batchSize?: number;
+}
+
 export interface RuntimeHostStorageConfig {
   driver?: 'file' | 'sqlite';
   databasePath?: string;
@@ -93,6 +104,7 @@ export interface RuntimeHostConfig {
   telegram?: RuntimeHostTelegramConfig;
   executors?: RuntimeHostExecutorConfig;
   routines?: RuntimeHostRoutineConfig;
+  workflows?: RuntimeHostWorkflowConfig;
   storage?: RuntimeHostStorageConfig;
 }
 
@@ -206,6 +218,8 @@ export class OpenTagWorkerHost {
   readonly deliveryStore: DeliveryStore;
   readonly memoryStore: StateMemoryStore;
   readonly routineStore: FileRoutineStore;
+  readonly workflowStore: FileWorkflowStore;
+  readonly workflowCoordinator: WorkflowCoordinatorService;
   private readonly config: RuntimeHostConfig;
   readonly threadConfigStore: FileThreadConfigStore;
   private readonly routineCommandService: RoutineCommandService;
@@ -243,6 +257,11 @@ export class OpenTagWorkerHost {
               'routines',
               'routine-state.json',
             ),
+            legacyWorkflowFile: path.join(
+              config.dataDir,
+              'workflows',
+              'workflow-state.json',
+            ),
           })
         : undefined;
     this.deliveryStore =
@@ -254,6 +273,9 @@ export class OpenTagWorkerHost {
     this.routineStore =
       this.sqliteStorage?.routineStore ??
       new FileRoutineStore(path.join(config.dataDir, 'routines'));
+    this.workflowStore =
+      this.sqliteStorage?.workflowStore ??
+      new FileWorkflowStore(path.join(config.dataDir, 'workflows'));
     this.routineCommandService = new RoutineCommandService(this.routineStore, {
       defaultTimeZone: config.routines?.defaultTimeZone || 'Asia/Shanghai',
     });
@@ -273,6 +295,23 @@ export class OpenTagWorkerHost {
         },
       },
     );
+    this.workflowCoordinator = new WorkflowCoordinatorService({
+      workflowStore: this.workflowStore,
+      deliveryStore: this.deliveryStore,
+      threadConfigStore: this.threadConfigStore,
+      coordinatorId: `${this.workerId}-workflows`,
+      claimStaleMs: config.workflows?.claimStaleMs,
+      batchSize: config.workflows?.batchSize,
+      transportModeForPlatform: (platform) => {
+        if (platform === 'lark') {
+          return `lark-${this.larkTransportStatus().mode}`;
+        }
+        if (platform === 'telegram') {
+          return `telegram-${this.telegramTransportStatus().mode}`;
+        }
+        return platform === 'workflow' ? 'workflow-internal' : 'tracked-text';
+      },
+    });
   }
 
   get workerId(): string {
@@ -292,6 +331,7 @@ export class OpenTagWorkerHost {
       accessImported: boolean;
       memoryImported: boolean;
       routinesImported: boolean;
+      workflowsImported: boolean;
     };
   } {
     return {
@@ -378,6 +418,9 @@ export class OpenTagWorkerHost {
         } finally {
           const latest = await this.deliveryStore.getAgentRun(run.id);
           if (latest) result.runs.push(latest);
+          if (run.metadata?.source === 'workflow') {
+            await this.workflowCoordinator.tick();
+          }
         }
       }
       return result;
@@ -387,6 +430,10 @@ export class OpenTagWorkerHost {
     } finally {
       this.workerPass = undefined;
     }
+  }
+
+  async runWorkflowCoordinatorTick(): Promise<WorkflowCoordinatorTickResult> {
+    return this.workflowCoordinator.tick();
   }
 
   async executeAgentRun(

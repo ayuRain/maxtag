@@ -119,6 +119,14 @@ test('workspace access persists identities, roles, and project capabilities', as
   });
   assert.equal(contributorRoutine.allowed, false);
   assert.equal(contributorRoutine.reason, 'capability_not_granted');
+  const contributorWorkflow = await store.authorize({
+    workspaceId: 'acme',
+    projectId: 'alpha',
+    platform: 'lark',
+    actor: actor('ou-contributor'),
+    capability: 'manage_workflows',
+  });
+  assert.equal(contributorWorkflow.allowed, false);
 
   const viewerInvoke = await store.authorize({
     workspaceId: 'acme',
@@ -138,6 +146,14 @@ test('workspace access persists identities, roles, and project capabilities', as
   });
   assert.equal(ownerRoutine.allowed, true);
   assert.equal(ownerRoutine.reason, 'workspace_role');
+  const ownerWorkflow = await store.authorize({
+    workspaceId: 'acme',
+    projectId: 'alpha',
+    platform: 'lark',
+    actor: actor('ou-owner'),
+    capability: 'manage_workflows',
+  });
+  assert.equal(ownerWorkflow.allowed, true);
 
   const reopened = new FileWorkspaceAccessStore(root);
   const snapshot = await reopened.snapshot('acme');

@@ -6,6 +6,7 @@ import {
   RoutineSchedulerService,
   createOpenTagWorkerHost,
   type RoutineTickResult,
+  type WorkflowCoordinatorTickResult,
 } from '@opentag/runtime-host';
 
 function numberEnv(name: string, fallback: number): number {
@@ -49,8 +50,25 @@ function tickSummary(result: RoutineTickResult): Record<string, unknown> {
   };
 }
 
+function workflowTickSummary(
+  result: WorkflowCoordinatorTickResult,
+): Record<string, unknown> {
+  return {
+    tickAt: result.at,
+    claimed: result.claimed,
+    queued: result.queued,
+    failed: result.failed,
+    reconciled: result.reconciled,
+    executionIds: result.executionIds,
+    nodeExecutionIds: result.nodeExecutionIds,
+    runIds: result.runIds,
+  };
+}
+
 async function main(): Promise<void> {
-  if (!booleanEnv('OPENTAG_ROUTINES_ENABLED', true)) {
+  const routinesEnabled = booleanEnv('OPENTAG_ROUTINES_ENABLED', true);
+  const workflowsEnabled = booleanEnv('OPENTAG_WORKFLOWS_ENABLED', true);
+  if (!routinesEnabled && !workflowsEnabled) {
     log('disabled');
     return;
   }
@@ -61,7 +79,14 @@ async function main(): Promise<void> {
     throw new Error('standalone_scheduler_requires_sqlite_storage');
   }
   const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
-  const intervalMs = numberEnv('OPENTAG_ROUTINE_TICK_INTERVAL_MS', 30_000);
+  const routineIntervalMs = numberEnv(
+    'OPENTAG_ROUTINE_TICK_INTERVAL_MS',
+    30_000,
+  );
+  const workflowIntervalMs = numberEnv(
+    'OPENTAG_WORKFLOW_TICK_INTERVAL_MS',
+    2_000,
+  );
   const claimStaleMs = numberEnv(
     'OPENTAG_ROUTINE_CLAIM_STALE_MS',
     120_000,
@@ -69,6 +94,14 @@ async function main(): Promise<void> {
   const batchSize = Math.min(
     100,
     numberEnv('OPENTAG_ROUTINE_BATCH_SIZE', 100),
+  );
+  const workflowClaimStaleMs = numberEnv(
+    'OPENTAG_WORKFLOW_CLAIM_STALE_MS',
+    120_000,
+  );
+  const workflowBatchSize = Math.min(
+    100,
+    numberEnv('OPENTAG_WORKFLOW_BATCH_SIZE', 20),
   );
   const once = booleanEnv('OPENTAG_SCHEDULER_ONCE');
   const host = createOpenTagWorkerHost({
@@ -88,6 +121,10 @@ async function main(): Promise<void> {
     routines: {
       defaultTimeZone:
         process.env.OPENTAG_DEFAULT_TIME_ZONE || 'Asia/Shanghai',
+    },
+    workflows: {
+      claimStaleMs: workflowClaimStaleMs,
+      batchSize: workflowBatchSize,
     },
     storage: {
       driver: 'sqlite',
@@ -128,26 +165,53 @@ async function main(): Promise<void> {
     dataDir,
     schedulerId:
       process.env.OPENTAG_SCHEDULER_ID || `opentag-scheduler-${process.pid}`,
-    intervalMs,
+    routineIntervalMs,
+    workflowIntervalMs,
     claimStaleMs,
     batchSize,
+    routinesEnabled,
+    workflowsEnabled,
+    workflowClaimStaleMs,
+    workflowBatchSize,
     once,
     storage: host.storageStatus(),
   });
 
+  let nextRoutineTickAt = 0;
+  let nextWorkflowTickAt = 0;
   do {
-    const result = await scheduler.tick();
-    if (
-      once ||
-      result.staged > 0 ||
-      result.claimed > 0 ||
-      result.reconciled > 0
-    ) {
-      log('scheduler_tick', tickSummary(result));
+    const now = Date.now();
+    if (routinesEnabled && (once || now >= nextRoutineTickAt)) {
+      const result = await scheduler.tick();
+      nextRoutineTickAt = Date.now() + routineIntervalMs;
+      if (
+        once ||
+        result.staged > 0 ||
+        result.claimed > 0 ||
+        result.reconciled > 0
+      ) {
+        log('scheduler_tick', tickSummary(result));
+      }
+    }
+    if (workflowsEnabled && (once || now >= nextWorkflowTickAt)) {
+      const result = await host.runWorkflowCoordinatorTick();
+      nextWorkflowTickAt = Date.now() + workflowIntervalMs;
+      if (
+        once ||
+        result.claimed > 0 ||
+        result.reconciled > 0
+      ) {
+        log('workflow_tick', workflowTickSummary(result));
+      }
     }
     if (once || stopping) break;
+    const nextTickAt = Math.min(
+      ...(routinesEnabled ? [nextRoutineTickAt] : []),
+      ...(workflowsEnabled ? [nextWorkflowTickAt] : []),
+    );
+    const waitMs = Math.max(50, nextTickAt - Date.now());
     try {
-      await delay(intervalMs, undefined, { signal: stopController.signal });
+      await delay(waitMs, undefined, { signal: stopController.signal });
     } catch (error) {
       if (!stopController.signal.aborted) throw error;
     }

@@ -11,6 +11,7 @@ import {
 import { FileDeliveryStore } from '../packages/delivery/dist/index.js';
 import { FileRoutineStore } from '../packages/routines/dist/index.js';
 import { SqliteOpenTagStore } from '../packages/storage-sqlite/dist/index.js';
+import { FileWorkflowStore } from '../packages/workflows/dist/index.js';
 
 const workerFile = new URL('./fixtures/sqlite-storage-worker.mjs', import.meta.url);
 
@@ -67,8 +68,10 @@ test('SQLite storage imports existing file state once and preserves it', async (
   const accessDir = path.join(root, 'access');
   const memoryDir = path.join(root, 'memory');
   const routineDir = path.join(root, 'routines');
+  const workflowDir = path.join(root, 'workflows');
   const fileAccess = new FileWorkspaceAccessStore(accessDir);
   const fileRoutines = new FileRoutineStore(routineDir);
+  const fileWorkflows = new FileWorkflowStore(workflowDir);
   await fileDelivery.configureThreadBinding({
     platform: 'lark',
     externalId: 'legacy-channel',
@@ -121,6 +124,18 @@ test('SQLite storage imports existing file state once and preserves it', async (
       visibility: 'public',
     },
   });
+  const legacyWorkflow = await fileWorkflows.upsertWorkflow({
+    workspaceId: 'dev-workspace',
+    projectId: 'legacy-project',
+    name: 'Legacy workflow',
+    trigger: { kind: 'event', eventType: 'legacy.changed' },
+    nodes: [{ id: 'publish', instructions: 'Publish the legacy change.' }],
+    destination: {
+      platform: 'lark',
+      externalId: 'legacy-channel',
+      visibility: 'public',
+    },
+  });
 
   const databasePath = path.join(root, 'opentag.sqlite');
   const sqlite = new SqliteOpenTagStore({
@@ -131,6 +146,7 @@ test('SQLite storage imports existing file state once and preserves it', async (
     legacyAccessFile: path.join(accessDir, 'workspace-access.json'),
     legacyMemoryDir: memoryDir,
     legacyRoutineFile: path.join(routineDir, 'routine-state.json'),
+    legacyWorkflowFile: path.join(workflowDir, 'workflow-state.json'),
   });
   assert.deepEqual(sqlite.migration, {
     deliveryImported: true,
@@ -138,6 +154,7 @@ test('SQLite storage imports existing file state once and preserves it', async (
     accessImported: true,
     memoryImported: true,
     routinesImported: true,
+    workflowsImported: true,
   });
   assert.equal((await sqlite.deliveryStore.listThreadBindings()).length, 1);
   assert.equal((await sqlite.deliveryStore.listOutbox()).length, 1);
@@ -169,6 +186,10 @@ test('SQLite storage imports existing file state once and preserves it', async (
     (await sqlite.routineStore.getRoutine(legacyRoutine.id))?.name,
     'Legacy digest',
   );
+  assert.equal(
+    (await sqlite.workflowStore.getWorkflow(legacyWorkflow.id))?.name,
+    'Legacy workflow',
+  );
 
   const paired = await sqlite.consumePairingAndConfigureBinding({
     platform: 'lark',
@@ -189,6 +210,7 @@ test('SQLite storage imports existing file state once and preserves it', async (
     legacyAccessFile: path.join(accessDir, 'workspace-access.json'),
     legacyMemoryDir: memoryDir,
     legacyRoutineFile: path.join(routineDir, 'routine-state.json'),
+    legacyWorkflowFile: path.join(workflowDir, 'workflow-state.json'),
   });
   assert.deepEqual(reopened.migration, {
     deliveryImported: false,
@@ -196,6 +218,7 @@ test('SQLite storage imports existing file state once and preserves it', async (
     accessImported: false,
     memoryImported: false,
     routinesImported: false,
+    workflowsImported: false,
   });
   assert.equal(
     (await reopened.deliveryStore.getThreadBinding('lark', 'sqlite-channel'))
@@ -222,6 +245,10 @@ test('SQLite storage imports existing file state once and preserves it', async (
   assert.equal(
     (await reopened.routineStore.getRoutine(legacyRoutine.id))?.name,
     'Legacy digest',
+  );
+  assert.equal(
+    (await reopened.workflowStore.getWorkflow(legacyWorkflow.id))?.name,
+    'Legacy workflow',
   );
 });
 
@@ -356,6 +383,37 @@ test(
     assert.equal(routineClaims.flat()[0].execution.id, execution.id);
     assert.equal(
       (await store.routineStore.listExecutions({ routineId: routine.id }))[0]
+        .attempts,
+      1,
+    );
+
+    const workflow = await store.workflowStore.upsertWorkflow({
+      workspaceId: 'workspace-race',
+      projectId: 'project-race',
+      name: 'Race-safe workflow',
+      trigger: { kind: 'manual' },
+      nodes: [{ id: 'publish', instructions: 'Publish once.' }],
+      destination: {
+        platform: 'telegram',
+        externalId: 'same-target',
+        visibility: 'public',
+      },
+    });
+    const workflowExecution = await store.workflowStore.triggerWorkflow(
+      workflow.id,
+    );
+    const workflowClaims = await runContendingWorkers(
+      databasePath,
+      'workflow-claim',
+      [{ claimerId: 'coordinator-a' }, { claimerId: 'coordinator-b' }],
+    );
+    assert.equal(workflowClaims.flat().length, 1);
+    assert.equal(
+      workflowClaims.flat()[0].execution.id,
+      workflowExecution.id,
+    );
+    assert.equal(
+      (await store.workflowStore.getExecution(workflowExecution.id)).nodes[0]
         .attempts,
       1,
     );

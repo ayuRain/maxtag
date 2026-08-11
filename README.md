@@ -38,7 +38,7 @@ those lessons, but starts from a different product model:
 
 ```text
 apps/server                 HTTP/event ingestion and runtime host
-apps/admin                  Operator console for projects, access, connectors, routines, runs, and memory
+apps/admin                  Operator console for projects, access, connectors, routines, workflows, runs, and memory
 packages/core               Platform-neutral domain model and runtime contract
 packages/config             Agent policy, workspace identities, project roles, and audit
 packages/platform-lark      Feishu/Lark adapter
@@ -50,6 +50,7 @@ packages/runtime-host       Shared runtime host for independent workers
 packages/tools-github       GitHub tool contract placeholder
 packages/memory             Global/workspace/project/thread memory stores
 packages/routines           Scheduled work, execution claims, and audit history
+packages/workflows          Durable DAG definitions, event triggers, node claims, and execution history
 packages/delivery           Durable outbox, delivery tracking, bindings
 packages/storage-sqlite     WAL storage, migration, and atomic control transactions
 packages/ui-cards           Progress/checklist card models
@@ -82,9 +83,10 @@ packages/ui-cards           Progress/checklist card models
 - Codex and Claude executors are selected per project. They support safe-by-default
   dry-runs or explicit local CLI execution, and the standalone worker resolves
   the same policy and runtime mode as the HTTP server.
-- Delivery, run, inbound-event, binding, pairing, workspace-access, memory, and
-  routine state defaults to a shared SQLite WAL database. Outbox, run, and
-  routine claims plus memory revisions are transactional across processes.
+- Delivery, run, inbound-event, binding, pairing, workspace-access, memory,
+  routine, and workflow state defaults to a shared SQLite WAL database. Outbox,
+  run, routine, and workflow-node claims plus memory revisions are transactional
+  across processes.
 - Delivery recovery can requeue stale `sending` records and cancel only the
   selected run/thread/workspace/project scope.
 - Agent runs are recorded in the durable run ledger with status, timeline
@@ -99,6 +101,11 @@ packages/ui-cards           Progress/checklist card models
   schedules, client-neutral destinations, manual triggers, deterministic run
   bridging, deduplication, and stale execution reclaim. Routine work enters the
   same run queue, executor policy, memory scopes, and delivery path as messages.
+- Project workflows support saved DAG definitions, manual or typed event
+  triggers, event-id deduplication, immutable version snapshots, atomic node
+  claims, stale reclaim, and failure propagation. Every node enters the same
+  durable agent run queue; intermediate nodes stay internal and sink nodes
+  publish to the configured Lark, Telegram, or future client destination.
 - Lark and Telegram users can create, list, pause, resume, or delete standing
   work in the current project/topic. Each change is scoped to that conversation
   and records the requesting user for audit.
@@ -130,9 +137,9 @@ packages/ui-cards           Progress/checklist card models
   update workspace memory, and global memory is reserved for an installation
   operator through the authenticated control plane.
 - The admin console exposes Overview, Projects, Access, Connectors, Routines,
-  Activity, and Memory workspaces, with workspace identity linking, project
+  Workflows, Activity, and Memory workspaces, with workspace identity linking, project
   roles, project policy editing, self-service chat pairing, channel unbinding,
-  scheduler controls, routine execution history, run timelines, delivery
+  scheduler/coordinator controls, routine and per-node workflow execution history, run timelines, delivery
   ledgers, and a project-aware client preview.
 - Operator authentication is opt-in for local development and required for a
   shared deployment. It maps one or more tokens to named, workspace-scoped
@@ -177,7 +184,7 @@ To split scheduling from HTTP ingestion as well, set the server to external
 mode and start the scheduler beside the worker:
 
 ```bash
-OPENTAG_AGENT_WORKER=manual OPENTAG_ROUTINE_SCHEDULER=external npm run dev
+OPENTAG_AGENT_WORKER=manual OPENTAG_ROUTINE_SCHEDULER=external OPENTAG_WORKFLOW_COORDINATOR=external npm run dev
 npm run scheduler
 npm run worker
 ```
@@ -188,7 +195,7 @@ scheduling requires the shared SQLite store.
 ## Storage
 
 SQLite WAL is the default for delivery, run, inbound-event, channel-binding,
-pairing, workspace-access, versioned memory, and routine state:
+pairing, workspace-access, versioned memory, routine, and workflow state:
 
 ```bash
 OPENTAG_STORAGE_DRIVER=sqlite
@@ -197,18 +204,18 @@ OPENTAG_SQLITE_BUSY_TIMEOUT_MS=5000
 ```
 
 The HTTP server, scheduler, and standalone workers can safely share this
-database. Outbox, run, and routine claims use immediate write transactions, and
+database. Outbox, run, routine, and workflow-node claims use immediate write transactions, and
 consuming a pairing code plus creating its channel binding commits atomically.
 Memory writes also use an immediate transaction, so independent processes
 cannot overwrite one another's revisions. On first startup, OpenTag imports
 existing `delivery-state.json`, `pairing-state.json`,
-`workspace-access.json`, `routine-state.json`, and scoped memory Markdown or
-`memory-state.json` when their SQLite documents do not yet exist. Later
+`workspace-access.json`, `routine-state.json`, `workflow-state.json`, and scoped
+memory Markdown or `memory-state.json` when their SQLite documents do not yet exist. Later
 restarts use only the database.
 
 Set `OPENTAG_STORAGE_DRIVER=file` only for legacy or isolated local operation.
 Project policy is still file-backed and remains on the production-storage
-roadmap. File-mode memory and routines keep the same behavior contracts, but
+roadmap. File-mode memory, routines, and workflows keep the same behavior contracts, but
 are intended for one process rather than shared workers or schedulers.
 
 ## Operator Authentication
@@ -339,6 +346,50 @@ delete routine <id>
 Chinese interval and daily forms such as `每 30 分钟：检查 CI` and
 `每天 09:00：汇总项目进展` are supported as well. Commands only see routines
 for the current project and conversation destination.
+
+## Workflows
+
+Workflows turn manual requests or typed external events into durable agent DAGs.
+The common console editor creates a sequential collect/analyze/publish flow;
+the API accepts a full acyclic graph of up to 20 agent nodes. Each execution
+keeps an immutable copy of the workflow version it started with.
+
+```bash
+OPENTAG_WORKFLOWS_ENABLED=true
+OPENTAG_WORKFLOW_COORDINATOR=inline
+OPENTAG_WORKFLOW_TICK_INTERVAL_MS=2000
+OPENTAG_WORKFLOW_CLAIM_STALE_MS=120000
+OPENTAG_WORKFLOW_BATCH_SIZE=20
+OPENTAG_WORKFLOW_INGRESS_TOKEN=replace-with-a-random-secret
+OPENTAG_WORKFLOW_INGRESS_ACTOR=workflow-ingress
+```
+
+Use `OPENTAG_WORKFLOW_COORDINATOR=external` with `npm run scheduler` when the
+HTTP process should only ingest and stage work. The shared scheduler polls
+workflows at their shorter interval without increasing routine staging writes.
+`manual` advances only through `POST /v1/workflows/tick`.
+
+An event-triggered workflow matches an exact workspace, project, and event type.
+Producers must provide a stable event ID, which is deduplicated across retries:
+
+```bash
+curl -X POST 'http://127.0.0.1:3077/v1/workflow-events' \
+  -H 'Authorization: Bearer replace-with-a-random-secret' \
+  -H 'content-type: application/json' \
+  -d '{
+    "workspaceId": "dev-workspace",
+    "projectId": "opentag",
+    "eventType": "issue.ready",
+    "eventId": "issue-42-ready-v1",
+    "payload": { "issue": 42, "priority": "high" }
+  }'
+```
+
+Local loopback development permits workflow events when operator auth is off.
+Shared deployments require `OPENTAG_WORKFLOW_INGRESS_TOKEN`; if operator auth is
+configured without it, the event endpoint is disabled. Workflow nodes are agent
+instructions, not arbitrary in-process JavaScript or shell hooks. Audit actor
+identity comes from `OPENTAG_WORKFLOW_INGRESS_ACTOR`, never from the event body.
 
 ## Local CLI Executors
 

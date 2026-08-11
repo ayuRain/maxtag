@@ -19,6 +19,11 @@ try {
               ...workerData.input,
               limit: 1,
             })
+          : workerData.action === 'workflow-claim'
+            ? await store.workflowStore.claimReadyNodes({
+                ...workerData.input,
+                limit: 1,
+              })
         : await store.deliveryStore.claimReadyOutbox({ limit: 1 });
   parentPort.postMessage({ ok: true, result });
 } catch (error) {

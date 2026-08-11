@@ -10,7 +10,8 @@ export type ProjectAccessMode = 'open' | 'workspace' | 'members';
 export type ActorCapability =
   | 'invoke_agent'
   | 'write_memory'
-  | 'manage_routines';
+  | 'manage_routines'
+  | 'manage_workflows';
 
 export interface WorkspaceMemberIdentity {
   platform: PlatformKind;
@@ -138,6 +139,7 @@ const ALL_CAPABILITIES: ActorCapability[] = [
   'invoke_agent',
   'write_memory',
   'manage_routines',
+  'manage_workflows',
 ];
 
 function now(): string {

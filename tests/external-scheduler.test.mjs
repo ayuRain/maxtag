@@ -201,3 +201,136 @@ test(
     assert.match(execution.summary, /Dry-run Codex executor received/);
   },
 );
+
+test(
+  'external scheduler and workers advance a workflow DAG across processes',
+  { timeout: 30_000 },
+  async (context) => {
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'opentag-external-workflow-'),
+    );
+    const databasePath = path.join(dataDir, 'opentag.sqlite');
+    const port = await freePort();
+    const serverLogs = [];
+    const sharedEnv = {
+      OPENTAG_DATA_DIR: dataDir,
+      OPENTAG_STORAGE_DRIVER: 'sqlite',
+      OPENTAG_SQLITE_PATH: databasePath,
+      OPENTAG_EXECUTOR_MODE: 'dry-run',
+      OPENTAG_LARK_TRANSPORT: 'memory',
+      OPENTAG_ROUTINES_ENABLED: 'false',
+      OPENTAG_WORKFLOWS_ENABLED: 'true',
+    };
+    const server = spawn(process.execPath, ['apps/server/dist/index.js'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ...sharedEnv,
+        OPENTAG_PORT: String(port),
+        OPENTAG_HOST: '127.0.0.1',
+        OPENTAG_AGENT_WORKER: 'manual',
+        OPENTAG_WORKFLOW_COORDINATOR: 'external',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    server.stdout.on('data', (chunk) => serverLogs.push(chunk.toString()));
+    server.stderr.on('data', (chunk) => serverLogs.push(chunk.toString()));
+    let store;
+    context.after(async () => {
+      store?.close();
+      if (server.exitCode === null) {
+        server.kill('SIGTERM');
+        await Promise.race([
+          once(server, 'exit'),
+          new Promise((resolve) => setTimeout(resolve, 1_000)),
+        ]);
+      }
+      await fs.rm(dataDir, { recursive: true, force: true });
+    });
+
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const health = await waitForJson(
+      `${baseUrl}/health`,
+      (data) => data.ok === true,
+      server,
+      serverLogs,
+    );
+    assert.equal(health.workflows.mode, 'external');
+
+    const createResponse = await fetch(`${baseUrl}/v1/workflows`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'dev-workspace',
+        projectId: 'opentag',
+        name: 'External workflow',
+        trigger: { kind: 'manual' },
+        nodes: [
+          { id: 'analyze', instructions: 'Analyze the external input.' },
+          {
+            id: 'publish',
+            instructions: 'Publish the result.',
+            dependsOn: ['analyze'],
+          },
+        ],
+        destination: {
+          platform: 'lark',
+          externalId: 'external-workflow-chat',
+          visibility: 'public',
+        },
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const created = await createResponse.json();
+    const triggerResponse = await fetch(
+      `${baseUrl}/v1/workflows/${created.workflow.id}/trigger`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+    );
+    assert.equal(triggerResponse.status, 202);
+    const triggered = await triggerResponse.json();
+    assert.equal(triggered.coordinatorMode, 'external');
+    assert.equal(triggered.execution.status, 'pending');
+
+    const schedulerLog = await runProcess('apps/scheduler/dist/index.js', {
+      ...sharedEnv,
+      OPENTAG_SCHEDULER_ONCE: 'true',
+    });
+    assert.match(schedulerLog, /"event":"workflow_tick"/);
+    assert.match(schedulerLog, /"queued":1/);
+
+    store = new SqliteOpenTagStore({ databasePath });
+    let execution = await store.workflowStore.getExecution(
+      triggered.execution.id,
+    );
+    assert.deepEqual(
+      execution.nodes.map((node) => node.status),
+      ['queued', 'pending'],
+    );
+
+    await runProcess('apps/worker/dist/index.js', {
+      ...sharedEnv,
+      OPENTAG_WORKER_ONCE: 'true',
+    });
+    execution = await store.workflowStore.getExecution(triggered.execution.id);
+    assert.deepEqual(
+      execution.nodes.map((node) => node.status),
+      ['completed', 'queued'],
+    );
+    assert.equal(
+      (
+        await store.deliveryStore.getAgentRun(
+          `workflow:${execution.id}:publish`,
+        )
+      ).platform,
+      'lark',
+    );
+
+    await runProcess('apps/worker/dist/index.js', {
+      ...sharedEnv,
+      OPENTAG_WORKER_ONCE: 'true',
+    });
+    execution = await store.workflowStore.getExecution(triggered.execution.id);
+    assert.equal(execution.status, 'completed');
+    assert.ok(execution.nodes.every((node) => node.status === 'completed'));
+  },
+);

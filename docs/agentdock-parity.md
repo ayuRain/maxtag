@@ -20,6 +20,7 @@ many clients.
 | Durable delivery | SQLite WAL outbox, turn delivery records, atomic cross-process claims, scoped cancel, stale recovery, and bindings; legacy file mode remains available |
 | Agent run queue | SQLite WAL run status, timeline events, cancel requests, inline or standalone worker claim, restart persistence, and stale recovery |
 | Scheduled tasks | SQLite WAL-backed workspace/project routines with interval or daily schedules, IANA time zones, manual trigger, atomic cross-process claims, stale reclaim, deterministic run enqueue, inline/external/manual scheduler modes, and shared worker execution; Lark and Telegram topics support bilingual create/list/pause/resume/delete commands with requester audit |
+| Dynamic workflows | SQLite WAL-backed saved DAGs with immutable execution snapshots, manual and typed-event triggers, event-id deduplication, atomic node claims, stale reclaim, dependency failure propagation, and deterministic bridging of every node into the shared run queue; sink nodes publish to a real client destination |
 | Inbound callback ledger | Lark token/timestamp and Telegram webhook-secret checks, event idempotency, and duplicate short-circuit |
 | Native Telegram client | Bot API webhook normalization, forum topics, send/edit progress, reply chunking, outgoing files, and tracked delivery |
 | Executor boundary | Project-selectable Codex and Claude dry-run/local CLI modes with bounded output, cancellation, timeout, and filtered child environments |
@@ -40,7 +41,7 @@ many clients.
 | Encrypted Lark callbacks | Implement decrypt path before enabling encrypted events in production |
 | Memory governance | Add optional approval policy, retention/compaction controls, diff rendering, and export; durable transactional writes, audit history, legacy import, and admin restore are implemented |
 | Routine production hardening | Add production supervisor manifests, queue-depth/lease metrics, and real Lark delivery plus restart smoke evidence for the independent scheduler |
-| Dynamic workflows | Add saved workflow definitions and async workflow runs |
+| Workflow production depth | Add native PR, CI, issue, alert, and document watcher producers; richer branching/parallel graph editing; cancellation and retry controls; queue metrics; and live Lark restart smoke evidence |
 | Tooling depth | Replace direct CLI permission mapping with brokered GitHub, Lark Docs/Base, browser, and shell tools |
 
 ## Product Constraint

@@ -66,6 +66,10 @@
             Routines
             <span class="nav-count" id="routine-count">0</span>
           </button>
+          <button class="nav-item" data-view="workflows" type="button">
+            Workflows
+            <span class="nav-count" id="workflow-count">0</span>
+          </button>
           <button class="nav-item" data-view="activity" type="button">
             Activity
             <span class="nav-count" id="active-count">0</span>
@@ -232,8 +236,8 @@
                     <select id="binding-platform">
                       <option value="lark">Lark / Feishu</option>
                       <option value="telegram">Telegram</option>
-                      <option value="slack">Slack</option>
-                      <option value="github">GitHub</option>
+                      <option value="slack">Slack adapter</option>
+                      <option value="github">GitHub adapter</option>
                     </select>
                   </label>
                   <label class="field binding-id-field">
@@ -510,8 +514,8 @@
                     <select id="routine-platform">
                       <option value="lark">Lark / Feishu</option>
                       <option value="telegram">Telegram</option>
-                      <option value="slack">Slack</option>
-                      <option value="github">GitHub</option>
+                      <option value="slack" disabled>Slack (planned)</option>
+                      <option value="github" disabled>GitHub (planned)</option>
                     </select>
                   </label>
                   <label class="field">
@@ -547,6 +551,135 @@
                 <div class="toolbar-actions">
                   <button class="secondary-button" id="trigger-routine" type="button" disabled>Run now</button>
                   <button class="primary-button" id="save-routine" type="submit">Save routine</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="view" id="view-workflows" data-view-panel="workflows" hidden>
+          <div class="workflow-toolbar">
+            <div class="scheduler-status">
+              <span class="state-pill planned" id="workflow-coordinator-state">Unknown</span>
+              <div>
+                <strong>Coordinator</strong>
+                <small id="workflow-coordinator-detail">No tick recorded</small>
+              </div>
+            </div>
+            <button class="secondary-button" id="tick-workflows" type="button">Tick now</button>
+          </div>
+
+          <div class="project-workbench workflow-workbench">
+            <aside class="project-index">
+              <div class="index-heading">
+                <span>Workflows</span>
+                <button class="square-button" id="new-workflow" type="button" title="New workflow" aria-label="New workflow">+</button>
+              </div>
+              <div class="project-list" id="workflow-list"></div>
+            </aside>
+
+            <form class="project-editor workflow-editor" id="workflow-form">
+              <div class="editor-header">
+                <div>
+                  <span class="eyebrow">Agent workflow</span>
+                  <h2 id="workflow-editor-title">New workflow</h2>
+                </div>
+                <span class="state-pill planned" id="workflow-state">Draft</span>
+              </div>
+
+              <div class="form-section two-column-form">
+                <label class="field">
+                  <span>Name</span>
+                  <input id="workflow-name" autocomplete="off" required />
+                </label>
+                <label class="field">
+                  <span>Project</span>
+                  <select id="workflow-project" required></select>
+                </label>
+                <label class="field span-two">
+                  <span>Description</span>
+                  <input id="workflow-description" autocomplete="off" />
+                </label>
+                <label class="toggle-field span-two">
+                  <input id="workflow-enabled" type="checkbox" checked />
+                  <span>Enabled</span>
+                </label>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Trigger</h3>
+                  <span id="workflow-trigger-label">Manual</span>
+                </div>
+                <div class="workflow-trigger-grid">
+                  <div class="segmented" id="workflow-trigger-kind" role="group" aria-label="Workflow trigger">
+                    <button class="active" type="button" data-workflow-trigger="manual">Manual</button>
+                    <button type="button" data-workflow-trigger="event">Event</button>
+                  </div>
+                  <label class="field" id="workflow-event-type-field" hidden>
+                    <span>Event type</span>
+                    <input id="workflow-event-type" placeholder="issue.ready" autocomplete="off" spellcheck="false" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Steps</h3>
+                  <span id="workflow-step-count">0 steps</span>
+                </div>
+                <div class="workflow-step-list" id="workflow-steps"></div>
+                <button class="text-button workflow-add-step" id="add-workflow-step" type="button">Add step</button>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Destination</h3>
+                  <span id="workflow-destination-label">Final step</span>
+                </div>
+                <div class="two-column-form">
+                  <label class="field">
+                    <span>Client</span>
+                    <select id="workflow-platform">
+                      <option value="lark">Lark / Feishu</option>
+                      <option value="telegram">Telegram</option>
+                      <option value="slack" disabled>Slack (planned)</option>
+                      <option value="github" disabled>GitHub (planned)</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Channel ID</span>
+                    <input id="workflow-external-id" placeholder="oc_xxx" spellcheck="false" required />
+                  </label>
+                  <label class="field">
+                    <span>Conversation</span>
+                    <select id="workflow-visibility">
+                      <option value="public">Public channel</option>
+                      <option value="direct">Direct message</option>
+                      <option value="private">Private channel</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Thread ID (optional)</span>
+                    <input id="workflow-thread-id" spellcheck="false" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Executions</h3>
+                  <span id="workflow-execution-count">0 recorded</span>
+                </div>
+                <div class="workflow-executions" id="workflow-executions"></div>
+              </div>
+
+              <div class="editor-actions workflow-actions">
+                <button class="danger-text-button" id="archive-workflow" type="button" hidden>Archive</button>
+                <span id="workflow-save-state">New workflow</span>
+                <div class="toolbar-actions">
+                  <button class="secondary-button" id="trigger-workflow" type="button" disabled>Run now</button>
+                  <button class="primary-button" id="save-workflow" type="submit">Save workflow</button>
                 </div>
               </div>
             </form>

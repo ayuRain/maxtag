@@ -15,6 +15,7 @@
     { "path": "packages/routines" },
     { "path": "packages/storage-sqlite" },
     { "path": "packages/tools-github" },
+    { "path": "packages/workflows" },
     { "path": "apps/server" },
     { "path": "apps/scheduler" },
     { "path": "apps/worker" },

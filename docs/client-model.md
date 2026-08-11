@@ -22,6 +22,8 @@ clients of the same thread-agent core.
 - `MemoryDocument` and `MemoryRevision`: the current scoped snapshot plus an
   immutable SQLite history attributed to a trusted client or operator actor.
 - `Executor`: Codex, Claude, or another agent runner.
+- `Workflow`: a versioned project DAG whose nodes are durable agent runs and
+  whose sink nodes publish through a client-neutral destination.
 
 ## Current Status
 
@@ -41,6 +43,8 @@ clients of the same thread-agent core.
 - Project/thread memory follows project write capability, workspace memory also
   requires an identified active non-guest workspace member, and installation
   global memory is writable only from the operator control plane.
+- Manual and typed-event workflows resolve the same project policy, executor,
+  scoped memory, run queue, and client destination as an inbound conversation.
 - Slack: planned.
 - GitHub: planned as both a tool provider and a source client.
 
@@ -69,6 +73,17 @@ executor or memory concepts.
 Standing work follows the same rule. A routine created in a Lark topic or
 Telegram forum topic retains the resolved workspace, project, destination, and
 requesting user, then re-enters the shared run queue when its schedule is due.
+
+Workflow events add no alternate execution plane:
+
+```text
+typed event -> workspace/project workflow -> ready DAG node -> agent run queue -> client sink
+```
+
+Intermediate nodes use an internal workflow thread, while sink nodes resolve a
+real destination binding. An event producer retries safely with a stable event
+ID; exact workspace, project, and event-type matching prevents cross-project
+activation.
 
 Before a native adapter exists, a client can submit the normalized envelope to
 `/v1/client/events`. The server records inbound idempotency, resolves bindings,
