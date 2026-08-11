@@ -20,6 +20,10 @@
   ingestion runs with `OPENTAG_AGENT_WORKER=manual`.
 - Generic client ingress that maps non-Lark envelopes into the same run queue,
   memory scopes, and tracked text delivery.
+- Shared file-backed workspace/project agent policy with per-project identity,
+  instructions, executor selection, tool grants, network policy, and audit.
+- Operator console organized around projects, activity, scoped memory, delivery,
+  and project-aware agent previews.
 - Memory and GitHub tool contracts.
 
 ## Phase 1: Lark Tag MVP

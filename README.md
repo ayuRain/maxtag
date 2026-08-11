@@ -37,12 +37,13 @@ those lessons, but starts from a different product model:
 
 ```text
 apps/server                 HTTP/event ingestion and runtime host
-apps/admin                  Admin console placeholder
+apps/admin                  Operator console for projects, runs, and memory
 packages/core               Platform-neutral domain model and runtime contract
+packages/config             Workspace/project agent policy and audit store
 packages/platform-lark      Feishu/Lark adapter
 packages/platform-telegram  Telegram adapter placeholder
-packages/executor-codex     Codex executor placeholder
-packages/executor-claude    Claude executor placeholder
+packages/executor-codex     Codex executor contract and dry-run implementation
+packages/executor-claude    Claude executor contract and dry-run implementation
 packages/runtime-host       Shared runtime host for independent workers
 packages/tools-github       GitHub tool contract placeholder
 packages/memory             Global/workspace/project/thread memory stores
@@ -59,6 +60,11 @@ packages/ui-cards           Progress/checklist card models
 - Non-Lark clients can enter through `/v1/client/events`, which normalizes a
   client envelope into the same run queue, scoped memory, and delivery ledger.
 - Memory is scoped into global, workspace, project, and thread files.
+- Workspace and project agent policies are persisted separately from memory,
+  including identity, instructions, executor choice, project tool grants,
+  network policy, and an admin change audit.
+- Codex and Claude dry-run executors are selected per project, and the standalone
+  worker resolves the same policy file as the HTTP server.
 - Dry-run Lark delivery now runs through a file-backed outbox, per-run delivery
   records, and thread-to-project bindings.
 - Delivery recovery can requeue stale `sending` records and cancel only the
@@ -87,8 +93,9 @@ packages/ui-cards           Progress/checklist card models
 - Scoped memory can be viewed and updated through `/v1/memory`, the admin
   console, or chat commands such as `remember project ...` and
   `forget project ...`.
-- The admin preview exposes client readiness, memory scopes, and AgentDock parity
-  gaps.
+- The admin console exposes Overview, Projects, Activity, and Memory workspaces,
+  with project policy editing, channel binding, run timelines, delivery ledgers,
+  and a project-aware Lark preview.
 
 ## MVP
 

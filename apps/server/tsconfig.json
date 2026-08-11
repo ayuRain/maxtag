@@ -6,8 +6,10 @@
     "outDir": "dist"
   },
   "references": [
+    { "path": "../../packages/config" },
     { "path": "../../packages/core" },
     { "path": "../../packages/delivery" },
+    { "path": "../../packages/executor-claude" },
     { "path": "../../packages/executor-codex" },
     { "path": "../../packages/memory" },
     { "path": "../../packages/platform-lark" }

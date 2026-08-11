@@ -14,10 +14,11 @@ many clients.
 | Scoped memory | Global, workspace, project, and thread file scopes; Lark groups route to project scope; remember/forget commands |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
 | Topic continuation | Mention establishes a Lark topic binding; later messages in that topic continue without repeating the mention |
+| Project agent policy | File-backed per-project identity, instructions, Codex/Claude choice, tool grants, network policy, and audit history |
 | Durable delivery skeleton | File-backed outbox, turn delivery records, scoped cancel, stale recovery, and bindings |
 | Agent run queue | File-backed run status, timeline events, cancel requests, inline or standalone worker claim, and stale recovery |
 | Inbound callback ledger | Lark token/timestamp checks, event idempotency, and duplicate short-circuit |
-| Executor boundary | Codex dry-run and Claude placeholder behind `Executor` |
+| Executor boundary | Project-selectable Codex and Claude dry-runs behind `Executor` |
 
 ## Gaps To Close
 
@@ -28,7 +29,7 @@ many clients.
 | Async run execution | Add production supervisor/deployment manifests and cross-process cancellation heartbeat |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |
 | Real Lark smoke | Verify app scopes, bot-in-chat permissions, text replies, and card patching against a live app |
-| Binding governance | Add permission checks, audit history, and import/export for configured bindings |
+| Binding governance | Add permission checks and import/export for configured bindings; project policy changes now have an audit ledger |
 | Encrypted Lark callbacks | Implement decrypt path before enabling encrypted events in production |
 | Memory governance | Add durable write queue, audit history, approval policy, and admin restore |
 | Scheduled tasks | Add workspace/project routines on top of the runtime |

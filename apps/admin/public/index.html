@@ -3,123 +3,337 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OpenTag</title>
+    <title>OpenTag Console</title>
     <link rel="stylesheet" href="/admin.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="identity">
-        <strong>OpenTag</strong>
-        <span id="capability-line">loading</span>
-      </div>
-      <div class="actions">
-        <span class="status" id="health">offline</span>
-        <button id="run">Run</button>
-      </div>
-    </header>
-
-    <main class="workspace">
-      <section class="compose-panel">
-        <div class="panel-heading">
-          <h1>Thread Console</h1>
-          <span>workspace bot / scoped memory</span>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">O</span>
+          <strong>OpenTag</strong>
         </div>
 
-        <label class="field">
-          <span>Incoming message</span>
-          <textarea id="prompt" spellcheck="false">@OpenTag 帮我看看这个 repo 怎么接飞书</textarea>
-        </label>
+        <div class="workspace-switcher">
+          <span class="eyebrow">Workspace</span>
+          <strong id="workspace-name">Loading</strong>
+          <span id="workspace-id">dev-workspace</span>
+        </div>
 
-        <div class="section-label">Clients</div>
-        <div class="client-list" id="clients"></div>
+        <nav class="nav" aria-label="Console">
+          <button class="nav-item active" data-view="overview" type="button">
+            Overview
+          </button>
+          <button class="nav-item" data-view="projects" type="button">
+            Projects
+            <span class="nav-count" id="project-count">0</span>
+          </button>
+          <button class="nav-item" data-view="activity" type="button">
+            Activity
+            <span class="nav-count" id="active-count">0</span>
+          </button>
+          <button class="nav-item" data-view="memory" type="button">
+            Memory
+          </button>
+        </nav>
 
-        <div class="section-label">Memory</div>
-        <div class="scope-list" id="memory-scopes"></div>
-        <form class="memory-form" id="memory-form">
-          <div class="memory-actions">
-            <select id="memory-scope">
-              <option value="project">project</option>
-              <option value="workspace">workspace</option>
-              <option value="global">global</option>
-              <option value="thread">thread</option>
-            </select>
-            <button id="show-memory" type="button">Show</button>
-            <button id="save-memory" type="submit">Save</button>
-            <button id="forget-memory" type="button">Forget</button>
+        <div class="sidebar-footer">
+          <span class="health" id="health"><i></i> Offline</span>
+          <span id="runtime-label">Runtime unavailable</span>
+        </div>
+      </aside>
+
+      <main class="main-shell">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow" id="view-eyebrow">Workspace</span>
+            <h1 id="view-title">Overview</h1>
           </div>
-          <label class="field compact">
-            <span>Memory note</span>
-            <textarea id="memory-text" spellcheck="false">OpenTag should keep Lark group memory separate by project.</textarea>
-          </label>
-        </form>
-        <pre class="memory-output" id="memory-output">No memory loaded.</pre>
+          <div class="topbar-actions">
+            <span class="sync-label" id="sync-label">Not synced</span>
+            <button class="secondary-button" id="refresh-all" type="button">Refresh</button>
+            <button class="primary-button" id="open-test" type="button">Test agent</button>
+          </div>
+        </header>
 
-        <div class="section-label">Bindings</div>
-        <form class="binding-form" id="binding-form">
-          <label class="field compact">
-            <span>Lark chat</span>
-            <input id="binding-external-id" value="oc-smoke-project" spellcheck="false" />
-          </label>
-          <label class="field compact">
-            <span>Workspace</span>
-            <input id="binding-workspace-id" value="dev-workspace" spellcheck="false" />
-          </label>
-          <label class="field compact">
-            <span>Project</span>
-            <input id="binding-project-id" value="opentag" spellcheck="false" />
-          </label>
-          <div class="binding-actions">
-            <select id="binding-activation-mode">
-              <option value="mention">mention</option>
-              <option value="always">always</option>
-            </select>
-            <label class="check-field">
-              <input id="binding-require-mention" type="checkbox" checked />
-              <span>mention</span>
+        <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+        <section class="view" id="view-overview" data-view-panel="overview">
+          <div class="summary-strip" id="summary-strip"></div>
+
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Routing</span>
+              <h2>Projects</h2>
+            </div>
+            <button class="text-button" data-go-view="projects" type="button">Manage</button>
+          </div>
+          <div class="project-grid" id="overview-projects"></div>
+
+          <div class="overview-columns">
+            <section class="plain-section">
+              <div class="section-heading compact-heading">
+                <div>
+                  <span class="eyebrow">Surfaces</span>
+                  <h2>Clients</h2>
+                </div>
+              </div>
+              <div class="connector-list" id="connector-list"></div>
+            </section>
+
+            <section class="plain-section">
+              <div class="section-heading compact-heading">
+                <div>
+                  <span class="eyebrow">Latest</span>
+                  <h2>Runs</h2>
+                </div>
+                <button class="text-button" data-go-view="activity" type="button">Open log</button>
+              </div>
+              <div class="compact-run-list" id="overview-runs"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="view-projects" data-view-panel="projects" hidden>
+          <div class="project-workbench">
+            <aside class="project-index">
+              <div class="index-heading">
+                <span>Projects</span>
+                <button class="square-button" id="new-project" type="button" title="New project" aria-label="New project">+</button>
+              </div>
+              <div class="project-list" id="project-list"></div>
+            </aside>
+
+            <form class="project-editor" id="project-form">
+              <div class="editor-header">
+                <div>
+                  <span class="eyebrow">Project policy</span>
+                  <h2 id="project-editor-title">OpenTag</h2>
+                </div>
+                <span class="state-pill ready" id="project-policy-state">Configured</span>
+              </div>
+
+              <div class="form-section two-column-form">
+                <label class="field">
+                  <span>Project name</span>
+                  <input id="project-name" autocomplete="off" />
+                </label>
+                <label class="field">
+                  <span>Project ID</span>
+                  <input id="project-id" autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="field span-two">
+                  <span>Description</span>
+                  <input id="project-description" autocomplete="off" />
+                </label>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Agent</h3>
+                  <span id="agent-id-label">opentag</span>
+                </div>
+                <div class="two-column-form">
+                  <label class="field">
+                    <span>Name</span>
+                    <input id="agent-name" autocomplete="off" />
+                  </label>
+                  <label class="field">
+                    <span>Executor</span>
+                    <select id="agent-executor"></select>
+                  </label>
+                  <label class="field span-two">
+                    <span>Instructions</span>
+                    <textarea id="agent-instructions" rows="5" spellcheck="true"></textarea>
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Tools</h3>
+                  <span>Project scope</span>
+                </div>
+                <div class="tool-grid" id="tool-grid"></div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Network</h3>
+                  <span>Default deny</span>
+                </div>
+                <div class="two-column-form">
+                  <label class="field">
+                    <span>Policy</span>
+                    <select id="network-mode">
+                      <option value="deny-by-default">Deny by default</option>
+                      <option value="restricted">Restricted</option>
+                      <option value="allow-all">Allow all</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Allowed hosts</span>
+                    <input id="allowed-hosts" placeholder="github.com, open.feishu.cn" spellcheck="false" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Channel binding</h3>
+                  <span id="binding-count-label">0 bindings</span>
+                </div>
+                <div class="binding-editor">
+                  <label class="field">
+                    <span>Client</span>
+                    <select id="binding-platform">
+                      <option value="lark">Lark / Feishu</option>
+                      <option value="telegram">Telegram</option>
+                      <option value="slack">Slack</option>
+                      <option value="github">GitHub</option>
+                    </select>
+                  </label>
+                  <label class="field binding-id-field">
+                    <span>Channel ID</span>
+                    <input id="binding-external-id" placeholder="oc_xxx" spellcheck="false" />
+                  </label>
+                  <label class="field">
+                    <span>Activation</span>
+                    <select id="binding-activation-mode">
+                      <option value="mention">Mention</option>
+                      <option value="always">Always on</option>
+                    </select>
+                  </label>
+                  <label class="toggle-field">
+                    <input id="binding-require-mention" type="checkbox" checked />
+                    <span>Require mention</span>
+                  </label>
+                  <button class="secondary-button" id="save-binding" type="button">Bind</button>
+                </div>
+                <div class="binding-list" id="project-bindings"></div>
+              </div>
+
+              <div class="editor-actions">
+                <span id="project-save-state">No unsaved changes</span>
+                <button class="primary-button" id="save-project" type="submit">Save project</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="view" id="view-activity" data-view-panel="activity" hidden>
+          <div class="activity-toolbar">
+            <div class="segmented" id="run-filter" role="group" aria-label="Run status">
+              <button class="active" type="button" data-status="">All</button>
+              <button type="button" data-status="running">Running</button>
+              <button type="button" data-status="completed">Completed</button>
+              <button type="button" data-status="failed">Failed</button>
+            </div>
+            <div class="toolbar-actions">
+              <button class="secondary-button" id="worker-pass" type="button">Worker pass</button>
+              <button class="secondary-button" id="recover-runs" type="button">Recover runs</button>
+              <button class="secondary-button" id="recover-delivery" type="button">Recover delivery</button>
+            </div>
+          </div>
+
+          <div class="activity-layout">
+            <div class="run-table" id="run-table"></div>
+            <aside class="run-detail" id="run-detail">
+              <div class="empty-state">Select a run</div>
+            </aside>
+          </div>
+
+          <div class="delivery-band">
+            <div class="section-heading compact-heading">
+              <div>
+                <span class="eyebrow">Transport</span>
+                <h2>Delivery</h2>
+              </div>
+            </div>
+            <div class="delivery-columns">
+              <div>
+                <h3>Outbound</h3>
+                <div id="outbox-list" class="ledger-list"></div>
+              </div>
+              <div>
+                <h3>Inbound</h3>
+                <div id="inbound-list" class="ledger-list"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-memory" data-view-panel="memory" hidden>
+          <div class="memory-toolbar">
+            <label class="field compact-select">
+              <span>Project</span>
+              <select id="memory-project"></select>
             </label>
-            <button id="save-binding" type="submit">Save</button>
-          </div>
-        </form>
-        <div class="binding-list" id="bindings"></div>
-      </section>
-
-      <section class="run-panel">
-        <div class="preview-column">
-          <div class="panel-heading">
-            <h2>Lark Preview</h2>
-            <span id="route-line">no run</span>
+            <div class="segmented" id="memory-scope" role="group" aria-label="Memory scope">
+              <button type="button" data-scope="global">Global</button>
+              <button type="button" data-scope="workspace">Workspace</button>
+              <button class="active" type="button" data-scope="project">Project</button>
+              <button type="button" data-scope="thread">Thread</button>
+            </div>
           </div>
 
-          <div id="card" class="lark-card empty">No run yet.</div>
-
-          <div class="outbound-header">
-            <span>Outbound</span>
-            <span>thread reply</span>
+          <div class="memory-layout">
+            <section class="memory-current">
+              <div class="section-heading compact-heading">
+                <div>
+                  <span class="eyebrow" id="memory-route">Project memory</span>
+                  <h2>Current memory</h2>
+                </div>
+                <button class="text-button" id="reload-memory" type="button">Reload</button>
+              </div>
+              <pre id="memory-output">No memory loaded.</pre>
+            </section>
+            <form class="memory-editor" id="memory-form">
+              <label class="field">
+                <span>Memory note</span>
+                <textarea id="memory-text" rows="8" spellcheck="true"></textarea>
+              </label>
+              <div class="memory-actions">
+                <button class="danger-text-button" id="forget-memory" type="button">Forget matching</button>
+                <button class="primary-button" id="save-memory" type="submit">Remember</button>
+              </div>
+            </form>
           </div>
-          <pre id="output">No message yet.</pre>
+
+          <div class="scope-map" id="scope-map"></div>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="test-dialog" id="test-dialog">
+      <form method="dialog" class="dialog-shell" id="test-form">
+        <div class="dialog-header">
+          <div>
+            <span class="eyebrow">Lark preview</span>
+            <h2>Test agent</h2>
+          </div>
+          <button class="square-button" value="cancel" type="submit" aria-label="Close">x</button>
         </div>
-
-        <aside class="status-column">
-          <div class="section-label">Delivery</div>
-          <div class="delivery-actions">
-            <button id="recover-delivery" type="button">Recover</button>
-            <button id="cancel-run" type="button">Cancel run</button>
-            <button id="cancel-delivery" type="button">Cancel project</button>
-          </div>
-          <div class="delivery-panel" id="delivery">loading</div>
-
-          <div class="section-label">Runs</div>
-          <div class="run-actions">
-            <button id="run-worker" type="button">Worker pass</button>
-            <button id="recover-runs" type="button">Recover runs</button>
-          </div>
-          <div class="run-list" id="runs">loading</div>
-
-          <div class="section-label">AgentDock parity</div>
-          <div class="parity-list" id="parity"></div>
-        </aside>
-      </section>
-    </main>
+        <div class="dialog-controls">
+          <label class="field compact-select">
+            <span>Project</span>
+            <select id="test-project"></select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Message</span>
+          <textarea id="test-prompt" rows="5">@OpenTag summarize the current project status</textarea>
+        </label>
+        <div class="dialog-actions">
+          <span id="test-route">Ready</span>
+          <button class="primary-button" id="run-test" value="default" type="submit">Run</button>
+        </div>
+        <div class="test-result" id="test-result" hidden>
+          <div id="card" class="lark-card empty">No card</div>
+          <pre id="test-output">No output</pre>
+        </div>
+      </form>
+    </dialog>
 
     <script type="module" src="/admin.js"></script>
   </body>

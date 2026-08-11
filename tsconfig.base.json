@@ -13,6 +13,7 @@
     "baseUrl": ".",
     "paths": {
       "@opentag/core": ["packages/core/src/index.ts"],
+      "@opentag/config": ["packages/config/src/index.ts"],
       "@opentag/delivery": ["packages/delivery/src/index.ts"],
       "@opentag/platform-lark": ["packages/platform-lark/src/index.ts"],
       "@opentag/platform-telegram": ["packages/platform-telegram/src/index.ts"],

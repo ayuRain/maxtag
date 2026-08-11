@@ -46,8 +46,10 @@ export class CodexExecutor implements Executor {
     return {
       summary: [
         `Dry-run Codex executor received: ${request.message.text || '(empty message)'}`,
+        `Agent: ${request.identity.displayName}`,
         route ? `Route: ${route}` : '',
         `Memory scopes loaded: ${scopeCount}`,
+        `Tool grants: ${request.access.grants.map((grant) => grant.kind).join(', ') || 'none'}`,
       ]
         .filter(Boolean)
         .join('\n'),

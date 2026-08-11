@@ -271,6 +271,7 @@ export interface ThreadConfigStore {
 export interface RuntimeDependencies {
   platform: PlatformAdapter;
   executor: Executor;
+  executors?: Record<string, Executor>;
   memory: MemoryStore;
   threadConfig: ThreadConfigStore;
   clock?: () => Date;

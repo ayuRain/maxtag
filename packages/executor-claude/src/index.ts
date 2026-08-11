@@ -29,9 +29,18 @@ export class ClaudeExecutor implements Executor {
       throw new Error('Claude local-cli executor is not wired yet.');
     }
 
+    const route = [request.workspace?.name, request.project?.name]
+      .filter(Boolean)
+      .join(' / ');
     return {
-      summary:
+      summary: [
         `Dry-run Claude executor received: ${request.message.text || '(empty message)'}`,
+        `Agent: ${request.identity.displayName}`,
+        route ? `Route: ${route}` : '',
+        `Tool grants: ${request.access.grants.map((grant) => grant.kind).join(', ') || 'none'}`,
+      ]
+        .filter(Boolean)
+        .join('\n'),
       artifacts: [],
     };
   }
@@ -40,4 +49,3 @@ export class ClaudeExecutor implements Executor {
 export function createClaudeExecutor(options?: ClaudeExecutorOptions): Executor {
   return new ClaudeExecutor(options);
 }
-

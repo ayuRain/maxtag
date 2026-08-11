@@ -11,8 +11,10 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@opentag/config": "0.1.0",
     "@opentag/core": "0.1.0",
     "@opentag/delivery": "0.1.0",
+    "@opentag/executor-claude": "0.1.0",
     "@opentag/executor-codex": "0.1.0",
     "@opentag/memory": "0.1.0",
     "@opentag/platform-lark": "0.1.0"

@@ -1,70 +1,738 @@
-const health = document.querySelector('#health');
-const capabilityLine = document.querySelector('#capability-line');
-const promptInput = document.querySelector('#prompt');
-const runButton = document.querySelector('#run');
-const card = document.querySelector('#card');
-const output = document.querySelector('#output');
-const clients = document.querySelector('#clients');
-const memoryScopes = document.querySelector('#memory-scopes');
-const parity = document.querySelector('#parity');
-const routeLine = document.querySelector('#route-line');
-const delivery = document.querySelector('#delivery');
-const recoverDeliveryButton = document.querySelector('#recover-delivery');
-const cancelRunButton = document.querySelector('#cancel-run');
-const cancelDeliveryButton = document.querySelector('#cancel-delivery');
-const runWorkerButton = document.querySelector('#run-worker');
-const recoverRunsButton = document.querySelector('#recover-runs');
-const runs = document.querySelector('#runs');
-const bindings = document.querySelector('#bindings');
-const bindingForm = document.querySelector('#binding-form');
-const bindingExternalId = document.querySelector('#binding-external-id');
-const bindingWorkspaceId = document.querySelector('#binding-workspace-id');
-const bindingProjectId = document.querySelector('#binding-project-id');
-const bindingActivationMode = document.querySelector('#binding-activation-mode');
-const bindingRequireMention = document.querySelector('#binding-require-mention');
-const saveBindingButton = document.querySelector('#save-binding');
-const memoryForm = document.querySelector('#memory-form');
-const memoryScope = document.querySelector('#memory-scope');
-const memoryText = document.querySelector('#memory-text');
-const memoryOutput = document.querySelector('#memory-output');
-const showMemoryButton = document.querySelector('#show-memory');
-const saveMemoryButton = document.querySelector('#save-memory');
-const forgetMemoryButton = document.querySelector('#forget-memory');
-let runsCache = [];
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
+
+const state = {
+  health: null,
+  capabilities: null,
+  workspace: null,
+  delivery: null,
+  runs: [],
+  bindings: [],
+  selectedProjectId: null,
+  selectedRunId: null,
+  runFilter: '',
+  memoryScope: 'project',
+  memoryProjectId: null,
+  testProjectId: null,
+  projectDirty: false,
+};
+
+const viewCopy = {
+  overview: { eyebrow: 'Workspace', title: 'Overview' },
+  projects: { eyebrow: 'Routing and access', title: 'Projects' },
+  activity: { eyebrow: 'Runs and delivery', title: 'Activity' },
+  memory: { eyebrow: 'Scoped context', title: 'Memory' },
+};
+
+let toastTimer;
+let refreshInFlight = false;
 
 async function getJson(url, options) {
   const response = await fetch(url, options);
-  const data = await response.json();
+  const contentType = response.headers.get('content-type') || '';
+  const data = contentType.includes('application/json')
+    ? await response.json()
+    : { message: await response.text() };
   if (!response.ok) {
     throw new Error(data.message || data.error || response.statusText);
   }
   return data;
 }
 
-function appendText(parent, className, text) {
-  const element = document.createElement('div');
-  element.className = className;
-  element.textContent = text;
-  parent.append(element);
-  return element;
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
-function appendState(parent, status) {
-  const element = document.createElement('span');
-  element.className = `state ${status || 'planned'}`;
-  element.textContent = status || 'planned';
-  parent.append(element);
-  return element;
+function statusLabel(value) {
+  if (!value) return 'Unknown';
+  return value
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function renderRows(parent, rows, createRow) {
-  parent.replaceChildren();
-  for (const rowData of rows) parent.append(createRow(rowData));
+function statePill(value, label = statusLabel(value)) {
+  return element('span', `state-pill ${value || 'planned'}`, label);
+}
+
+function formatTime(value, includeDate = false) {
+  if (!value) return 'Never';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    ...(includeDate ? { month: 'short', day: 'numeric' } : {}),
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function shortId(value) {
+  return value ? value.slice(0, 8) : 'unknown';
+}
+
+function initials(value) {
+  return (value || 'OT')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase();
+}
+
+function showToast(message, tone = 'default') {
+  const toast = $('#toast');
+  clearTimeout(toastTimer);
+  toast.textContent = message;
+  toast.className = tone === 'error' ? 'toast error' : 'toast';
+  toast.hidden = false;
+  toastTimer = setTimeout(() => {
+    toast.hidden = true;
+  }, 3200);
+}
+
+function setButtonBusy(button, busy, busyLabel, idleLabel) {
+  button.disabled = busy;
+  button.textContent = busy ? busyLabel : idleLabel;
+}
+
+function currentWorkspaceId() {
+  return state.workspace?.workspace?.workspace?.id || 'dev-workspace';
+}
+
+function projectMatches(project, value) {
+  return value === project?.projectId || value === project?.id;
+}
+
+function projectById(value) {
+  return (state.workspace?.projects || []).find((project) =>
+    projectMatches(project, value),
+  );
+}
+
+function selectedProject() {
+  return projectById(state.selectedProjectId);
+}
+
+function showView(view, updateHash = true) {
+  const next = viewCopy[view] ? view : 'overview';
+  for (const panel of $$('[data-view-panel]')) {
+    panel.hidden = panel.dataset.viewPanel !== next;
+  }
+  for (const button of $$('[data-view]')) {
+    button.classList.toggle('active', button.dataset.view === next);
+  }
+  $('#view-eyebrow').textContent = viewCopy[next].eyebrow;
+  $('#view-title').textContent = viewCopy[next].title;
+  if (updateHash) history.replaceState(null, '', `#${next}`);
+  if (next === 'memory') void refreshMemory();
+}
+
+function renderHealth() {
+  const health = $('#health');
+  const online = Boolean(state.health?.ok);
+  health.classList.toggle('online', online);
+  health.innerHTML = '<i></i>';
+  health.append(document.createTextNode(online ? ' Online' : ' Offline'));
+
+  const worker = state.health?.worker;
+  $('#runtime-label').textContent = worker
+    ? `${worker.mode} worker / ${worker.activeRuns || 0} active`
+    : 'Runtime unavailable';
+}
+
+function renderWorkspaceHeader() {
+  const workspace = state.workspace?.workspace?.workspace;
+  $('#workspace-name').textContent = workspace?.name || 'OpenTag Workspace';
+  $('#workspace-id').textContent = workspace?.id || 'dev-workspace';
+  $('#project-count').textContent = String(state.workspace?.projects?.length || 0);
+  const runSummary = state.delivery?.summary?.agentRuns || {};
+  $('#active-count').textContent = String(
+    (runSummary.queued || 0) +
+      (runSummary.running || 0) +
+      (runSummary.cancel_requested || 0),
+  );
+  const transport = state.capabilities?.larkTransport?.mode || 'memory';
+  const workerMode = state.capabilities?.runWorker?.mode || 'manual';
+  $('#runtime-label').textContent = `${transport} transport / ${workerMode} worker`;
+}
+
+function metric(value, label) {
+  const node = element('div', 'summary-metric');
+  node.append(element('strong', '', String(value)), element('span', '', label));
+  return node;
+}
+
+function renderSummary() {
+  const summary = $('#summary-strip');
+  const projects = state.workspace?.projects || [];
+  const clients = state.capabilities?.clients || [];
+  const runs = state.delivery?.summary?.agentRuns || {};
+  const outbox = state.delivery?.summary?.outbox || {};
+  const active =
+    (runs.queued || 0) + (runs.running || 0) + (runs.cancel_requested || 0);
+  const failures = (runs.failed || 0) + (outbox.failed || 0);
+  summary.replaceChildren(
+    metric(projects.length, 'Projects'),
+    metric(clients.filter((client) => client.status !== 'planned').length, 'Active clients'),
+    metric(active, 'Active runs'),
+    metric(failures, 'Needs attention'),
+  );
+}
+
+function projectRunState(project) {
+  const summary = project.runSummary || {};
+  if ((summary.running || 0) + (summary.queued || 0) > 0) return 'running';
+  if ((summary.failed || 0) > 0) return 'failed';
+  return 'ready';
+}
+
+function renderOverviewProjects() {
+  const root = $('#overview-projects');
+  root.replaceChildren();
+  const projects = state.workspace?.projects || [];
+  if (!projects.length) {
+    root.append(element('div', 'empty-state', 'No projects'));
+    return;
+  }
+  for (const project of projects) {
+    const card = element('article', 'project-card');
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+
+    const head = element('div', 'project-card-head');
+    const identity = element('div', 'project-card-head');
+    identity.append(
+      element('span', 'avatar', initials(project.identity?.displayName)),
+      element('strong', '', project.name),
+    );
+    head.append(identity, statePill(projectRunState(project)));
+
+    const body = element('div', 'project-card-body');
+    body.append(
+      element('span', '', project.identity?.displayName || 'OpenTag'),
+      element(
+        'span',
+        '',
+        `${statusLabel(project.identity?.defaultExecutorId)} / ${project.grants?.length || 0} tools`,
+      ),
+      element(
+        'span',
+        '',
+        project.clients?.length ? project.clients.join(', ') : 'No client binding',
+      ),
+    );
+
+    const foot = element('div', 'project-card-foot');
+    foot.append(
+      element('span', '', `${project.bindingCount || 0} bindings`),
+      element('span', '', project.lastRunAt ? formatTime(project.lastRunAt, true) : 'No runs'),
+    );
+    card.append(head, body, foot);
+    const open = () => {
+      selectProject(project.projectId);
+      showView('projects');
+    };
+    card.addEventListener('click', open);
+    card.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') open();
+    });
+    root.append(card);
+  }
+}
+
+function renderConnectors() {
+  const root = $('#connector-list');
+  root.replaceChildren();
+  for (const client of state.capabilities?.clients || []) {
+    const row = element('div', 'connector-row');
+    const copy = element('div');
+    copy.append(
+      element('strong', '', client.label || client.id),
+      element('small', '', `${client.inbound || 'not wired'} / ${client.surface || 'no surface'}`),
+    );
+    row.append(copy, statePill(client.status));
+    root.append(row);
+  }
+}
+
+function renderOverviewRuns() {
+  const root = $('#overview-runs');
+  root.replaceChildren();
+  if (!state.runs.length) {
+    root.append(element('div', 'empty-state', 'No runs yet'));
+    return;
+  }
+  for (const run of state.runs.slice(0, 5)) {
+    const row = element('div', 'compact-run');
+    const copy = element('div');
+    copy.append(
+      element('strong', '', run.title || run.summary?.split('\n')[0] || shortId(run.id)),
+      element('small', '', `${run.projectId || 'general'} / ${formatTime(run.updatedAt, true)}`),
+    );
+    row.append(copy, statePill(run.status));
+    root.append(row);
+  }
+}
+
+function renderToolGrid(project) {
+  const root = $('#tool-grid');
+  const selected = new Set((project?.grants || []).map((grant) => grant.kind));
+  root.replaceChildren();
+  for (const tool of state.workspace?.availableTools || []) {
+    const label = element('label', 'tool-option');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = tool.id;
+    input.checked = selected.has(tool.id);
+    input.addEventListener('change', markProjectDirty);
+    label.append(input, element('span', '', tool.label));
+    root.append(label);
+  }
+}
+
+function fillExecutorOptions(selected) {
+  const select = $('#agent-executor');
+  select.replaceChildren();
+  for (const executor of state.workspace?.executors || []) {
+    const option = document.createElement('option');
+    option.value = executor.id;
+    option.textContent = executor.label;
+    option.selected = executor.id === selected;
+    select.append(option);
+  }
+}
+
+function projectBindings(project) {
+  return state.bindings.filter(
+    (binding) =>
+      binding.workspaceId === project?.workspaceId &&
+      projectMatches(project, binding.projectId),
+  );
+}
+
+function renderProjectBindings(project) {
+  const root = $('#project-bindings');
+  root.replaceChildren();
+  const items = project ? projectBindings(project) : [];
+  $('#binding-count-label').textContent = `${items.length} bindings`;
+  for (const binding of items) {
+    const row = element('div', 'binding-row');
+    const copy = element('div');
+    copy.append(
+      element('strong', '', statusLabel(binding.platform)),
+      element('small', '', binding.externalId),
+    );
+    row.append(
+      element('span', '', binding.source || 'configured'),
+      copy,
+      statePill(binding.activationMode || 'mention'),
+    );
+    root.append(row);
+  }
+  if (!items.length) root.append(element('div', 'empty-state', 'No channel bindings'));
+}
+
+function renderProjectList() {
+  const root = $('#project-list');
+  root.replaceChildren();
+  for (const project of state.workspace?.projects || []) {
+    const button = element('button', 'project-list-item');
+    button.type = 'button';
+    button.classList.toggle('active', projectMatches(project, state.selectedProjectId));
+    button.append(
+      element('strong', '', project.name),
+      element('span', '', `${project.identity?.displayName || 'OpenTag'} / ${project.projectId}`),
+    );
+    button.addEventListener('click', () => selectProject(project.projectId));
+    root.append(button);
+  }
+}
+
+function fillProjectForm(project) {
+  const isNew = !project;
+  const fallbackIdentity = state.workspace?.workspace?.identity || {};
+  const identity = project?.identity || fallbackIdentity;
+  $('#project-editor-title').textContent = project?.name || 'New project';
+  $('#project-policy-state').textContent = isNew ? 'Draft' : 'Configured';
+  $('#project-policy-state').className = `state-pill ${isNew ? 'planned' : 'ready'}`;
+  $('#project-name').value = project?.name || '';
+  $('#project-id').value = project?.projectId || '';
+  $('#project-id').disabled = !isNew;
+  $('#project-description').value = project?.description || '';
+  $('#agent-name').value = identity.displayName || 'OpenTag';
+  $('#agent-instructions').value = identity.instructions || '';
+  $('#agent-id-label').textContent = identity.id || 'new-agent';
+  fillExecutorOptions(identity.defaultExecutorId || 'codex');
+  $('#network-mode').value = project?.networkPolicy?.mode || 'deny-by-default';
+  $('#allowed-hosts').value = (project?.networkPolicy?.allowedHosts || []).join(', ');
+  renderToolGrid(project);
+  renderProjectBindings(project);
+  state.projectDirty = false;
+  $('#project-save-state').textContent = 'No unsaved changes';
+}
+
+function selectProject(projectId) {
+  const project = projectById(projectId);
+  state.selectedProjectId = project?.projectId || projectId;
+  if (!state.memoryProjectId || project) state.memoryProjectId = project?.projectId || projectId;
+  renderProjectList();
+  fillProjectForm(project);
+  fillProjectSelects();
+}
+
+function markProjectDirty() {
+  state.projectDirty = true;
+  $('#project-save-state').textContent = 'Unsaved changes';
+}
+
+function newProject() {
+  state.selectedProjectId = '__new__';
+  renderProjectList();
+  fillProjectForm(null);
+  $('#project-id').focus();
+}
+
+function currentAgentId() {
+  const project = selectedProject();
+  if (project?.identity?.id) return project.identity.id;
+  const projectId = $('#project-id').value.trim() || 'project';
+  return `${projectId}-agent`;
+}
+
+async function saveProject(event) {
+  event.preventDefault();
+  const button = $('#save-project');
+  const projectId = $('#project-id').value.trim();
+  if (!projectId) {
+    showToast('Project ID is required', 'error');
+    $('#project-id').focus();
+    return;
+  }
+  setButtonBusy(button, true, 'Saving', 'Save project');
+  try {
+    await getJson('/v1/projects', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: currentWorkspaceId(),
+        projectId,
+        name: $('#project-name').value.trim() || projectId,
+        description: $('#project-description').value,
+        agentId: currentAgentId(),
+        agentName: $('#agent-name').value.trim() || 'OpenTag',
+        instructions: $('#agent-instructions').value,
+        executorId: $('#agent-executor').value,
+        tools: $$('#tool-grid input:checked').map((input) => input.value),
+        networkMode: $('#network-mode').value,
+        allowedHosts: $('#allowed-hosts')
+          .value.split(',')
+          .map((host) => host.trim())
+          .filter(Boolean),
+        actor: 'admin-console',
+      }),
+    });
+    state.selectedProjectId = projectId;
+    await refreshAll({ quiet: true });
+    showToast('Project policy saved');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Saving', 'Save project');
+  }
+}
+
+async function saveBinding() {
+  const button = $('#save-binding');
+  const project = selectedProject();
+  const externalId = $('#binding-external-id').value.trim();
+  if (!project || !externalId) {
+    showToast('Select a project and enter a channel ID', 'error');
+    return;
+  }
+  setButtonBusy(button, true, 'Binding', 'Bind');
+  try {
+    await getJson('/v1/bindings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        platform: $('#binding-platform').value,
+        externalId,
+        channelId: externalId,
+        workspaceId: project.workspaceId,
+        projectId: project.projectId,
+        scope: 'channel',
+        source: 'configured',
+        activationMode: $('#binding-activation-mode').value,
+        requireMention: $('#binding-require-mention').checked,
+      }),
+    });
+    $('#binding-external-id').value = '';
+    await refreshAll({ quiet: true });
+    showToast('Channel bound');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Binding', 'Bind');
+  }
+}
+
+function runTitle(run) {
+  return run.title || run.message?.text || run.summary?.split('\n')[0] || shortId(run.id);
+}
+
+function filteredRuns() {
+  return state.runs.filter((run) => !state.runFilter || run.status === state.runFilter);
+}
+
+function renderRunTable() {
+  const root = $('#run-table');
+  root.replaceChildren();
+  const header = element('div', 'run-table-header');
+  for (const label of ['Task', 'Status', 'Project', 'Client', 'Updated']) {
+    header.append(element('span', '', label));
+  }
+  root.append(header);
+  const items = filteredRuns();
+  if (!items.length) {
+    root.append(element('div', 'empty-state', 'No runs in this view'));
+    return;
+  }
+  for (const run of items) {
+    const row = element('button', 'run-table-row');
+    row.type = 'button';
+    row.classList.toggle('active', run.id === state.selectedRunId);
+    row.append(
+      element('strong', '', runTitle(run)),
+      statePill(run.status),
+      element('span', '', run.projectId || 'general'),
+      element('span', '', statusLabel(run.platform)),
+      element('span', '', formatTime(run.updatedAt, true)),
+    );
+    row.addEventListener('click', () => void openRun(run.id));
+    root.append(row);
+  }
+}
+
+async function openRun(runId) {
+  state.selectedRunId = runId;
+  renderRunTable();
+  const detail = $('#run-detail');
+  detail.replaceChildren(element('div', 'empty-state', 'Loading run'));
+  try {
+    const data = await getJson(`/v1/runs/${encodeURIComponent(runId)}/events?limit=100`);
+    renderRunDetail(data.run, data.events || []);
+  } catch (error) {
+    detail.replaceChildren(element('div', 'empty-state', error.message));
+  }
+}
+
+function renderRunDetail(run, events) {
+  const detail = $('#run-detail');
+  detail.replaceChildren();
+  const head = element('div', 'run-detail-head');
+  const copy = element('div');
+  copy.append(
+    element('strong', '', runTitle(run)),
+    element('small', '', `${shortId(run.id)} / ${run.executorId || 'executor'} / ${run.workerId || 'unclaimed'}`),
+  );
+  head.append(copy, statePill(run.status));
+  detail.append(head);
+  if (run.summary) detail.append(element('div', 'run-summary', run.summary));
+
+  if (['queued', 'running', 'cancel_requested'].includes(run.status)) {
+    const cancel = element('button', 'secondary-button', 'Cancel run');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => void cancelRun(run.id, cancel));
+    detail.append(cancel);
+  }
+
+  const timeline = element('div', 'timeline');
+  for (const event of events) {
+    const row = element('div', 'timeline-row');
+    const eventCopy = element('div');
+    eventCopy.append(
+      element('strong', '', event.message || statusLabel(event.type)),
+      element('small', '', `${statusLabel(event.type)} / ${formatTime(event.at, true)}`),
+    );
+    row.append(eventCopy);
+    timeline.append(row);
+  }
+  if (!events.length) timeline.append(element('div', 'empty-state', 'No timeline events'));
+  detail.append(timeline);
+}
+
+async function cancelRun(runId, button) {
+  setButtonBusy(button, true, 'Cancelling', 'Cancel run');
+  try {
+    await getJson(`/v1/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: 'admin_console_cancelled' }),
+    });
+    await refreshAll({ quiet: true });
+    await openRun(runId);
+    showToast('Cancellation requested');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Cancelling', 'Cancel run');
+  }
+}
+
+function renderLedgerList(root, items, kind) {
+  root.replaceChildren();
+  if (!items.length) {
+    root.append(element('div', 'empty-state', `No ${kind} records`));
+    return;
+  }
+  for (const item of items.slice(0, 8)) {
+    const row = element('div', 'ledger-row');
+    const copy = element('div');
+    const title =
+      kind === 'outbound'
+        ? item.kind
+        : item.eventType || item.platform || 'event';
+    const detail =
+      kind === 'outbound'
+        ? `${item.target?.chatId || item.target?.cardId || 'target'} / #${item.sequence}`
+        : `${item.externalId}${item.duplicateCount ? ` / ${item.duplicateCount} duplicates` : ''}`;
+    copy.append(element('strong', '', title), element('small', '', detail));
+    row.append(copy, statePill(item.status));
+    root.append(row);
+  }
+}
+
+function renderDelivery() {
+  renderLedgerList($('#outbox-list'), state.delivery?.outbox || [], 'outbound');
+  renderLedgerList($('#inbound-list'), state.delivery?.inboundEvents || [], 'inbound');
+}
+
+function fillProjectSelect(select, selectedValue) {
+  select.replaceChildren();
+  for (const project of state.workspace?.projects || []) {
+    const option = document.createElement('option');
+    option.value = project.projectId;
+    option.textContent = project.name;
+    option.selected = projectMatches(project, selectedValue);
+    select.append(option);
+  }
+}
+
+function fillProjectSelects() {
+  const fallback = state.workspace?.projects?.[0]?.projectId;
+  state.memoryProjectId = projectById(state.memoryProjectId)?.projectId || fallback;
+  state.testProjectId =
+    projectById(state.testProjectId)?.projectId ||
+    projectById(state.selectedProjectId)?.projectId ||
+    fallback;
+  fillProjectSelect($('#memory-project'), state.memoryProjectId);
+  fillProjectSelect($('#test-project'), state.testProjectId);
+}
+
+function memoryThread() {
+  const project = projectById(state.memoryProjectId) || state.workspace?.projects?.[0];
+  const binding = projectBindings(project)[0];
+  const platform = binding?.platform || 'lark';
+  const externalId = binding?.externalId || `admin:${project?.projectId || 'general'}`;
+  const threadId = binding?.scope === 'thread'
+    ? `${platform}:${externalId}`
+    : `${platform}:${externalId}:admin`;
+  return {
+    platform,
+    externalId,
+    channelId: binding?.channelId || externalId,
+    threadId,
+    workspaceId: project?.workspaceId || currentWorkspaceId(),
+    projectId: project?.projectId || 'general',
+    scope: state.memoryScope,
+  };
+}
+
+function renderScopeMap(route) {
+  const root = $('#scope-map');
+  const scopes = [
+    ['Global', 'OpenTag installation'],
+    ['Workspace', route.workspaceId],
+    ['Project', route.projectId],
+    ['Thread', route.threadId],
+  ];
+  root.replaceChildren();
+  for (const [label, value] of scopes) {
+    const node = element('div', 'scope-node');
+    node.append(element('strong', '', label), element('span', '', value || 'not set'));
+    root.append(node);
+  }
+}
+
+async function refreshMemory() {
+  if (!state.workspace) return;
+  const route = memoryThread();
+  const query = new URLSearchParams(route);
+  $('#memory-route').textContent = `${statusLabel(state.memoryScope)} / ${route.projectId}`;
+  renderScopeMap(route);
+  try {
+    const data = await getJson(`/v1/memory?${query.toString()}`);
+    const content = data.snapshot?.scopes?.[0]?.content?.trim();
+    $('#memory-output').textContent = content || 'No memory in this scope.';
+  } catch (error) {
+    $('#memory-output').textContent = error.message;
+  }
+}
+
+async function rememberMemory(event) {
+  event.preventDefault();
+  const button = $('#save-memory');
+  const text = $('#memory-text').value.trim();
+  if (!text) {
+    showToast('Enter a memory note', 'error');
+    return;
+  }
+  setButtonBusy(button, true, 'Saving', 'Remember');
+  try {
+    await getJson('/v1/memory', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...memoryThread(), action: 'remember', text }),
+    });
+    $('#memory-text').value = '';
+    await refreshMemory();
+    showToast('Memory saved');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Saving', 'Remember');
+  }
+}
+
+async function forgetMemory() {
+  const button = $('#forget-memory');
+  const selector = $('#memory-text').value.trim();
+  if (!selector) {
+    showToast('Enter text to match', 'error');
+    return;
+  }
+  setButtonBusy(button, true, 'Forgetting', 'Forget matching');
+  try {
+    await getJson('/v1/memory', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...memoryThread(), action: 'forget', selector }),
+    });
+    await refreshMemory();
+    showToast('Matching memory removed');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Forgetting', 'Forget matching');
+  }
 }
 
 function findCardText(cardDoc, prefix) {
-  for (const element of cardDoc.elements || []) {
-    const content = element.text?.content;
+  for (const item of cardDoc.elements || []) {
+    const content = item.text?.content;
     if (typeof content === 'string' && content.startsWith(prefix)) {
       return content.replace(prefix, '').trim();
     }
@@ -73,517 +741,242 @@ function findCardText(cardDoc, prefix) {
 }
 
 function findChecklist(cardDoc) {
-  const statusMarkers = ['○ ', '● ', '✓ ', '! ', '- '];
-  for (const element of cardDoc.elements || []) {
-    const content = element.text?.content;
+  const markers = ['○ ', '● ', '✓ ', '! ', '- '];
+  for (const item of cardDoc.elements || []) {
+    const content = item.text?.content;
     if (typeof content !== 'string') continue;
     const lines = content
       .split('\n')
       .map((line) => line.trim())
-      .filter((line) => statusMarkers.some((marker) => line.startsWith(marker)));
+      .filter((line) => markers.some((marker) => line.startsWith(marker)));
     if (lines.length) return lines;
   }
   return [];
 }
 
 function renderCard(cardDoc) {
-  const title = cardDoc.header?.title?.content || 'OpenTag run';
-  const template = cardDoc.header?.template || '';
-  const status = findCardText(cardDoc, '**Status:**');
-  const summary = findCardText(cardDoc, '**Summary:**');
-  const checklist = findChecklist(cardDoc);
-
+  const card = $('#card');
   card.className = 'lark-card';
   card.replaceChildren();
-
-  appendText(card, `card-header ${template}`, title);
-  const body = document.createElement('div');
-  body.className = 'card-body';
-  appendText(body, 'card-line', `Status: ${status || 'unknown'}`);
-  if (summary) appendText(body, 'card-line', `Summary: ${summary}`);
-
-  const list = document.createElement('div');
-  list.className = 'checklist';
-  for (const item of checklist) {
-    const row = document.createElement('div');
-    row.className = 'check-item';
-    const symbol = document.createElement('span');
-    symbol.className = 'check-symbol';
-    symbol.textContent = item.slice(0, 1);
-    const label = document.createElement('span');
-    label.textContent = item.slice(2);
-    row.append(symbol, label);
-    list.append(row);
+  const title = cardDoc.header?.title?.content || 'OpenTag run';
+  const template = cardDoc.header?.template || '';
+  card.append(element('div', `card-header ${template}`, title));
+  const body = element('div', 'card-body');
+  const status = findCardText(cardDoc, '**Status:**');
+  const summary = findCardText(cardDoc, '**Summary:**');
+  body.append(element('div', 'card-line', `Status: ${status || 'unknown'}`));
+  if (summary) body.append(element('div', 'card-line', `Summary: ${summary}`));
+  const checklist = element('div', 'checklist');
+  for (const item of findChecklist(cardDoc)) {
+    const row = element('div', 'check-item');
+    row.append(
+      element('span', 'check-symbol', item.slice(0, 1)),
+      element('span', '', item.slice(2)),
+    );
+    checklist.append(row);
   }
-  body.append(list);
+  body.append(checklist);
   card.append(body);
 }
 
-function renderClients(items) {
-  renderRows(clients, items, (item) => {
-    const row = document.createElement('div');
-    row.className = 'client-row';
-    appendText(row, 'row-main', item.label || item.id);
-    appendState(row, item.status);
-    appendText(row, 'row-detail', item.surface || item.inbound || '');
-    return row;
-  });
-}
-
-function renderMemoryScopes(items) {
-  renderRows(memoryScopes, items, (item) => {
-    const row = document.createElement('div');
-    row.className = 'scope-row';
-    appendText(row, 'row-main', item.label || item.id);
-    appendState(row, item.status);
-    appendText(row, 'row-detail', item.description || '');
-    return row;
-  });
-}
-
-function renderParity(items) {
-  renderRows(parity, items, (item) => {
-    const row = document.createElement('div');
-    row.className = 'parity-row';
-    appendText(row, 'row-main', item.capability);
-    appendState(row, item.status);
-    appendText(row, 'row-detail', item.opentag);
-    return row;
-  });
-}
-
-function renderMetricStrip(keys, summary) {
-  const metrics = document.createElement('div');
-  metrics.className = 'metric-strip';
-  for (const key of keys) {
-    const metric = document.createElement('div');
-    metric.className = 'metric';
-    const value = document.createElement('strong');
-    value.textContent = String(summary?.[key] || 0);
-    const label = document.createElement('span');
-    label.textContent = key;
-    metric.append(value, label);
-    metrics.append(metric);
-  }
-  return metrics;
-}
-
-function renderDelivery(data) {
-  delivery.replaceChildren();
-
-  appendText(delivery, 'subhead', 'Agent Runs');
-  delivery.append(renderMetricStrip(
-    ['queued', 'running', 'cancel_requested', 'completed', 'failed', 'cancelled'],
-    data?.summary?.agentRuns,
-  ));
-
-  appendText(delivery, 'subhead', 'Outbound');
-  delivery.append(renderMetricStrip(
-    ['delivered', 'pending', 'sending', 'failed', 'cancelled'],
-    data?.summary?.outbox,
-  ));
-
-  const outboundList = document.createElement('div');
-  outboundList.className = 'delivery-list';
-  for (const item of (data?.outbox || []).slice(0, 4)) {
-    const row = document.createElement('div');
-    row.className = 'delivery-row';
-    appendText(row, 'row-main', item.kind);
-    appendState(row, item.status);
-    appendText(
-      row,
-      'row-detail',
-      `${item.target?.chatId || item.target?.cardId || 'target'} · #${item.sequence}`,
-    );
-    outboundList.append(row);
-  }
-
-  appendText(delivery, 'subhead', 'Inbound');
-  delivery.append(renderMetricStrip(
-    ['processed', 'duplicates', 'rejected', 'failed'],
-    data?.summary?.inboundEvents,
-  ));
-
-  const inboundList = document.createElement('div');
-  inboundList.className = 'delivery-list';
-  for (const item of (data?.inboundEvents || []).slice(0, 4)) {
-    const row = document.createElement('div');
-    row.className = 'delivery-row';
-    appendText(row, 'row-main', item.eventType || item.platform);
-    appendState(row, item.status);
-    appendText(
-      row,
-      'row-detail',
-      `${item.externalId}${item.duplicateCount ? ` · dup ${item.duplicateCount}` : ''}`,
-    );
-    inboundList.append(row);
-  }
-
-  delivery.append(outboundList, inboundList);
-}
-
-function renderBindings(items) {
-  renderRows(bindings, items, (item) => {
-    const row = document.createElement('div');
-    row.className = 'binding-row';
-    appendText(row, 'row-main', item.externalId);
-    appendText(row, 'row-detail', `${item.workspaceId} / ${item.projectId}`);
-    appendState(row, item.activationMode || 'mention');
-    return row;
-  });
-}
-
-function renderRuns(items) {
-  runsCache = items;
-  renderRows(runs, items, (item) => {
-    const row = document.createElement('div');
-    row.className = 'run-row';
-    appendText(row, 'row-main', item.summary || item.id);
-    appendState(row, item.status);
-    appendText(
-      row,
-      'row-detail',
-      [
-        `${item.workspaceId || 'workspace'} / ${item.projectId || 'project'}`,
-        item.workerId ? `worker ${item.workerId}` : '',
-      ].filter(Boolean).join(' · '),
-    );
-    return row;
-  });
-}
-
-async function refreshHealth() {
-  try {
-    await getJson('/health');
-    health.textContent = 'online';
-    health.classList.add('ok');
-  } catch (error) {
-    health.textContent = 'offline';
-    health.classList.remove('ok');
-  }
-}
-
-async function refreshCapabilities() {
-  const data = await getJson('/v1/capabilities');
-  const lark = (data.clients || []).find((client) => client.id === 'lark');
-  const activeClients = (data.clients || []).length;
-  const activeScopes = (data.memoryScopes || []).length;
-  const transport = data.larkTransport?.mode || 'memory';
-  const worker = data.runWorker?.enabled ? data.runWorker?.mode || 'inline' : 'manual';
-  capabilityLine.textContent = `${lark?.label || 'Lark'} ${lark?.status || 'ready'} · ${transport} transport · ${worker} worker · ${activeClients} clients · ${activeScopes} memory scopes`;
-  renderClients(data.clients || []);
-  renderMemoryScopes(data.memoryScopes || []);
-  renderParity(data.parity || []);
-}
-
-async function refreshDelivery() {
-  try {
-    renderDelivery(await getJson('/v1/deliveries?limit=4'));
-  } catch (error) {
-    delivery.textContent = error.message;
-  }
-}
-
-async function refreshRuns() {
-  try {
-    const data = await getJson('/v1/runs?limit=6');
-    renderRuns(data.runs || []);
-  } catch (error) {
-    runs.textContent = error.message;
-  }
-}
-
-async function recoverDelivery() {
-  recoverDeliveryButton.disabled = true;
-  recoverDeliveryButton.textContent = 'Recovering';
-  try {
-    const data = await getJson('/v1/deliveries/recover-stale', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        olderThanMs: 120000,
-        reason: 'admin_recover_stale',
-      }),
-    });
-    renderDelivery(data.delivery);
-    routeLine.textContent = `requeued ${data.result?.requeued || 0}`;
-  } catch (error) {
-    routeLine.textContent = error.message;
-  } finally {
-    recoverDeliveryButton.disabled = false;
-    recoverDeliveryButton.textContent = 'Recover';
-  }
-}
-
-async function cancelProjectDelivery() {
-  cancelDeliveryButton.disabled = true;
-  cancelDeliveryButton.textContent = 'Cancelling';
-  try {
-    const data = await getJson('/v1/deliveries/cancel', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        workspaceId: bindingWorkspaceId.value,
-        projectId: bindingProjectId.value,
-        reason: 'admin_cancel_project',
-      }),
-    });
-    renderDelivery(data.delivery);
-    routeLine.textContent = `cancelled ${data.result?.cancelled || 0}`;
-  } catch (error) {
-    routeLine.textContent = error.message;
-  } finally {
-    cancelDeliveryButton.disabled = false;
-    cancelDeliveryButton.textContent = 'Cancel project';
-  }
-}
-
-async function cancelLatestRun() {
-  const run = runsCache.find((item) =>
-    ['queued', 'running', 'cancel_requested'].includes(item.status),
-  );
-  if (!run) {
-    routeLine.textContent = 'no active run';
+async function runTest(event) {
+  event.preventDefault();
+  if (event.submitter?.value === 'cancel') {
+    $('#test-dialog').close();
     return;
   }
-  cancelRunButton.disabled = true;
-  cancelRunButton.textContent = 'Cancelling';
-  try {
-    const data = await getJson(`/v1/runs/${encodeURIComponent(run.id)}/cancel`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ reason: 'admin_cancel_run' }),
-    });
-    renderDelivery(data.delivery);
-    await refreshRuns();
-    routeLine.textContent = `cancel requested ${run.id.slice(0, 8)}`;
-  } catch (error) {
-    routeLine.textContent = error.message;
-  } finally {
-    cancelRunButton.disabled = false;
-    cancelRunButton.textContent = 'Cancel run';
-  }
-}
-
-async function runWorkerPass() {
-  runWorkerButton.disabled = true;
-  runWorkerButton.textContent = 'Working';
-  try {
-    const data = await getJson('/v1/runs/worker-pass', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ limit: 1 }),
-    });
-    renderDelivery(data.delivery);
-    await refreshRuns();
-    routeLine.textContent = `worker claimed ${data.result?.claimed || 0}`;
-  } catch (error) {
-    routeLine.textContent = error.message;
-  } finally {
-    runWorkerButton.disabled = false;
-    runWorkerButton.textContent = 'Worker pass';
-  }
-}
-
-async function recoverRuns() {
-  recoverRunsButton.disabled = true;
-  recoverRunsButton.textContent = 'Recovering';
-  try {
-    const data = await getJson('/v1/runs/recover-stale', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        olderThanMs: 120000,
-        reason: 'admin_recover_stale_runs',
-      }),
-    });
-    renderDelivery(data.delivery);
-    await refreshRuns();
-    routeLine.textContent = `runs requeued ${data.result?.requeued || 0}`;
-  } catch (error) {
-    routeLine.textContent = error.message;
-  } finally {
-    recoverRunsButton.disabled = false;
-    recoverRunsButton.textContent = 'Recover runs';
-  }
-}
-
-async function refreshBindings() {
-  try {
-    const data = await getJson('/v1/bindings?limit=8');
-    renderBindings(data.bindings || []);
-  } catch (error) {
-    bindings.textContent = error.message;
-  }
-}
-
-async function saveBinding(event) {
-  event.preventDefault();
-  saveBindingButton.disabled = true;
-  saveBindingButton.textContent = 'Saving';
-  try {
-    await getJson('/v1/bindings', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        platform: 'lark',
-        externalId: bindingExternalId.value,
-        channelId: bindingExternalId.value,
-        workspaceId: bindingWorkspaceId.value,
-        projectId: bindingProjectId.value,
-        scope: 'channel',
-        activationMode: bindingActivationMode.value,
-        requireMention: bindingRequireMention.checked,
-      }),
-    });
-    await refreshBindings();
-    await refreshDelivery();
-  } catch (error) {
-    routeLine.textContent = error.message;
-  } finally {
-    saveBindingButton.disabled = false;
-    saveBindingButton.textContent = 'Save';
-  }
-}
-
-function memoryRouteParams() {
-  return {
-    platform: 'lark',
-    externalId: bindingExternalId.value,
-    channelId: bindingExternalId.value,
-    workspaceId: bindingWorkspaceId.value,
-    projectId: bindingProjectId.value,
-    scope: memoryScope.value,
-  };
-}
-
-function renderMemorySnapshot(data) {
-  const scope = data?.snapshot?.scopes?.[0];
-  const content = scope?.content?.trim();
-  memoryOutput.textContent = content || 'No memory in this scope yet.';
-}
-
-async function refreshMemory() {
-  const query = new URLSearchParams(memoryRouteParams());
-  renderMemorySnapshot(await getJson(`/v1/memory?${query.toString()}`));
-}
-
-async function saveMemory(event) {
-  event.preventDefault();
-  saveMemoryButton.disabled = true;
-  saveMemoryButton.textContent = 'Saving';
-  try {
-    await getJson('/v1/memory', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        ...memoryRouteParams(),
-        action: 'remember',
-        text: memoryText.value,
-      }),
-    });
-    await refreshMemory();
-  } catch (error) {
-    memoryOutput.textContent = error.message;
-  } finally {
-    saveMemoryButton.disabled = false;
-    saveMemoryButton.textContent = 'Save';
-  }
-}
-
-async function forgetMemory() {
-  forgetMemoryButton.disabled = true;
-  forgetMemoryButton.textContent = 'Forgetting';
-  try {
-    await getJson('/v1/memory', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        ...memoryRouteParams(),
-        action: 'forget',
-        selector: memoryText.value,
-      }),
-    });
-    await refreshMemory();
-  } catch (error) {
-    memoryOutput.textContent = error.message;
-  } finally {
-    forgetMemoryButton.disabled = false;
-    forgetMemoryButton.textContent = 'Forget';
-  }
-}
-
-async function runDryRun() {
-  runButton.disabled = true;
-  runButton.textContent = 'Running';
-  output.textContent = 'Running...';
-  routeLine.textContent = 'running';
+  const button = $('#run-test');
+  state.testProjectId = $('#test-project').value;
+  const project = projectById(state.testProjectId);
+  setButtonBusy(button, true, 'Running', 'Run');
+  $('#test-route').textContent = 'Running';
+  $('#test-result').hidden = false;
+  $('#test-output').textContent = 'Waiting for result...';
   try {
     const data = await getJson('/v1/dev/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: promptInput.value }),
+      body: JSON.stringify({
+        text: $('#test-prompt').value,
+        workspaceId: project?.workspaceId || currentWorkspaceId(),
+        projectId: project?.projectId || 'opentag',
+        projectName: project?.name,
+      }),
     });
-    const firstCard = data.larkDryRun?.cards?.[0]?.card;
-    const firstText = data.larkDryRun?.texts?.[0]?.text;
-    if (firstCard) renderCard(firstCard);
-    output.textContent = firstText || JSON.stringify(data.result, null, 2);
-    renderDelivery(data.delivery);
-    await refreshRuns();
-    routeLine.textContent = data.route
-      ? `${data.route.workspaceId || 'workspace'} / ${data.route.projectId || 'project'}`
-      : 'completed';
+    const cards = data.larkDryRun?.cards || [];
+    const texts = data.larkDryRun?.texts || [];
+    if (cards.length) renderCard(cards.at(-1).card);
+    $('#test-output').textContent =
+      texts.at(-1)?.text || data.result?.summary || JSON.stringify(data.result, null, 2);
+    $('#test-route').textContent = `${data.route?.workspaceId || 'workspace'} / ${data.route?.projectId || 'project'}`;
+    await refreshAll({ quiet: true });
   } catch (error) {
-    output.textContent = error.message;
-    routeLine.textContent = 'failed';
+    $('#test-output').textContent = error.message;
+    $('#test-route').textContent = 'Failed';
   } finally {
-    runButton.disabled = false;
-    runButton.textContent = 'Run';
+    setButtonBusy(button, false, 'Running', 'Run');
   }
 }
 
-runButton.addEventListener('click', () => {
-  void runDryRun();
+async function runControl(endpoint, button, labels, body = {}) {
+  setButtonBusy(button, true, labels.busy, labels.idle);
+  try {
+    const data = await getJson(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    await refreshAll({ quiet: true });
+    showToast(data.result ? JSON.stringify(data.result) : 'Operation completed');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, labels.busy, labels.idle);
+  }
+}
+
+function renderAll() {
+  renderHealth();
+  renderWorkspaceHeader();
+  renderSummary();
+  renderOverviewProjects();
+  renderConnectors();
+  renderOverviewRuns();
+  renderProjectList();
+  renderRunTable();
+  renderDelivery();
+  fillProjectSelects();
+
+  const fallback = state.workspace?.projects?.[0]?.projectId;
+  if (!projectById(state.selectedProjectId)) state.selectedProjectId = fallback;
+  fillProjectForm(selectedProject());
+}
+
+async function refreshAll({ quiet = false } = {}) {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  const button = $('#refresh-all');
+  if (!quiet) setButtonBusy(button, true, 'Refreshing', 'Refresh');
+  try {
+    const [health, capabilities, workspace, delivery, runs, bindings] =
+      await Promise.all([
+        getJson('/health'),
+        getJson('/v1/capabilities'),
+        getJson(`/v1/workspace?workspaceId=${encodeURIComponent(currentWorkspaceId())}`),
+        getJson('/v1/deliveries?limit=20'),
+        getJson('/v1/runs?limit=50'),
+        getJson('/v1/bindings?limit=100'),
+      ]);
+    state.health = health;
+    state.capabilities = capabilities;
+    state.workspace = workspace;
+    state.delivery = delivery;
+    state.runs = runs.runs || [];
+    state.bindings = bindings.bindings || [];
+    const fallback = workspace.projects?.[0]?.projectId;
+    state.selectedProjectId = projectById(state.selectedProjectId)?.projectId || fallback;
+    state.memoryProjectId = projectById(state.memoryProjectId)?.projectId || fallback;
+    renderAll();
+    $('#sync-label').textContent = `Synced ${formatTime(new Date().toISOString())}`;
+  } catch (error) {
+    state.health = null;
+    renderHealth();
+    $('#sync-label').textContent = 'Sync failed';
+    if (!quiet) showToast(error.message, 'error');
+  } finally {
+    refreshInFlight = false;
+    if (!quiet) setButtonBusy(button, false, 'Refreshing', 'Refresh');
+  }
+}
+
+for (const button of $$('[data-view]')) {
+  button.addEventListener('click', () => showView(button.dataset.view));
+}
+for (const button of $$('[data-go-view]')) {
+  button.addEventListener('click', () => showView(button.dataset.goView));
+}
+
+$('#refresh-all').addEventListener('click', () => void refreshAll());
+$('#open-test').addEventListener('click', () => $('#test-dialog').showModal());
+$('#test-form').addEventListener('submit', (event) => void runTest(event));
+$('#new-project').addEventListener('click', newProject);
+$('#project-form').addEventListener('submit', (event) => void saveProject(event));
+$('#save-binding').addEventListener('click', () => void saveBinding());
+$('#memory-form').addEventListener('submit', (event) => void rememberMemory(event));
+$('#forget-memory').addEventListener('click', () => void forgetMemory());
+$('#reload-memory').addEventListener('click', () => void refreshMemory());
+
+for (const input of $$('#project-form input, #project-form textarea, #project-form select')) {
+  input.addEventListener('input', markProjectDirty);
+  input.addEventListener('change', markProjectDirty);
+}
+
+$('#project-id').addEventListener('input', () => {
+  if (state.selectedProjectId === '__new__') {
+    $('#agent-id-label').textContent = currentAgentId();
+  }
 });
 
-recoverDeliveryButton.addEventListener('click', () => {
-  void recoverDelivery();
-});
-
-cancelRunButton.addEventListener('click', () => {
-  void cancelLatestRun();
-});
-
-cancelDeliveryButton.addEventListener('click', () => {
-  void cancelProjectDelivery();
-});
-
-runWorkerButton.addEventListener('click', () => {
-  void runWorkerPass();
-});
-
-recoverRunsButton.addEventListener('click', () => {
-  void recoverRuns();
-});
-
-bindingForm.addEventListener('submit', (event) => {
-  void saveBinding(event);
-});
-
-memoryForm.addEventListener('submit', (event) => {
-  void saveMemory(event);
-});
-
-showMemoryButton.addEventListener('click', () => {
+$('#memory-project').addEventListener('change', (event) => {
+  state.memoryProjectId = event.target.value;
   void refreshMemory();
 });
 
-forgetMemoryButton.addEventListener('click', () => {
-  void forgetMemory();
+$('#test-project').addEventListener('change', (event) => {
+  state.testProjectId = event.target.value;
 });
 
-await refreshHealth();
-await refreshCapabilities();
-await refreshDelivery();
-await refreshRuns();
-await refreshBindings();
+for (const button of $$('#memory-scope button')) {
+  button.addEventListener('click', () => {
+    state.memoryScope = button.dataset.scope;
+    for (const item of $$('#memory-scope button')) {
+      item.classList.toggle('active', item === button);
+    }
+    void refreshMemory();
+  });
+}
+
+for (const button of $$('#run-filter button')) {
+  button.addEventListener('click', () => {
+    state.runFilter = button.dataset.status || '';
+    for (const item of $$('#run-filter button')) {
+      item.classList.toggle('active', item === button);
+    }
+    renderRunTable();
+  });
+}
+
+$('#worker-pass').addEventListener('click', (event) =>
+  void runControl(
+    '/v1/runs/worker-pass',
+    event.currentTarget,
+    { busy: 'Working', idle: 'Worker pass' },
+    { limit: 1 },
+  ),
+);
+$('#recover-runs').addEventListener('click', (event) =>
+  void runControl(
+    '/v1/runs/recover-stale',
+    event.currentTarget,
+    { busy: 'Recovering', idle: 'Recover runs' },
+    { olderThanMs: 120000, reason: 'admin_console_recovery' },
+  ),
+);
+$('#recover-delivery').addEventListener('click', (event) =>
+  void runControl(
+    '/v1/deliveries/recover-stale',
+    event.currentTarget,
+    { busy: 'Recovering', idle: 'Recover delivery' },
+    { olderThanMs: 120000, reason: 'admin_console_recovery' },
+  ),
+);
+
+const initialView = location.hash.slice(1);
+showView(viewCopy[initialView] ? initialView : 'overview', false);
+await refreshAll();
+
+setInterval(() => {
+  if (document.visibilityState === 'visible' && !state.projectDirty) {
+    void refreshAll({ quiet: true });
+  }
+}, 10000);

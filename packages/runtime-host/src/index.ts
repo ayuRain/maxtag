@@ -1,7 +1,6 @@
 import path from 'node:path';
 import {
   OpenTagRuntime,
-  StaticThreadConfigStore,
   type AgentRunEvent,
   type MemoryScopeKind,
   type PlatformAdapter,
@@ -11,6 +10,7 @@ import {
   type Workspace,
   type Project,
 } from '@opentag/core';
+import { FileThreadConfigStore } from '@opentag/config';
 import {
   FileDeliveryStore,
   TrackedLarkTransport,
@@ -19,6 +19,7 @@ import {
   type RecoverStaleAgentRunsOptions,
 } from '@opentag/delivery';
 import { createCodexExecutor } from '@opentag/executor-codex';
+import { createClaudeExecutor } from '@opentag/executor-claude';
 import {
   ScopedFileMemoryStore,
   parseMemoryCommand,
@@ -140,7 +141,7 @@ export class OpenTagWorkerHost {
   readonly deliveryStore: FileDeliveryStore;
   readonly memoryStore: ScopedFileMemoryStore;
   private readonly config: RuntimeHostConfig;
-  private readonly threadConfigStore: StaticThreadConfigStore;
+  readonly threadConfigStore: FileThreadConfigStore;
   private readonly activeRuns = new Map<string, AbortController>();
   private workerPass: Promise<AgentWorkerPassResult> | undefined;
 
@@ -152,19 +153,22 @@ export class OpenTagWorkerHost {
     this.memoryStore = new ScopedFileMemoryStore(
       path.join(config.dataDir, 'memory'),
     );
-    this.threadConfigStore = new StaticThreadConfigStore({
-      identity: {
-        displayName: 'OpenTag',
-        instructions:
-          'You are OpenTag in a shared work thread. Keep progress visible and publish durable artifacts.',
-        defaultExecutorId: 'codex',
+    this.threadConfigStore = new FileThreadConfigStore(
+      path.join(config.dataDir, 'config'),
+      {
+        identity: {
+          displayName: 'OpenTag',
+          instructions:
+            'You are OpenTag in a shared work thread. Keep progress visible and publish durable artifacts.',
+          defaultExecutorId: 'codex',
+        },
+        workspace: {
+          id: 'dev-workspace',
+          name: 'Development Workspace',
+          defaultProjectId: 'opentag',
+        },
       },
-      workspace: {
-        id: 'dev-workspace',
-        name: 'Development Workspace',
-        defaultProjectId: 'opentag',
-      },
-    });
+    );
   }
 
   get workerId(): string {
@@ -445,9 +449,12 @@ export class OpenTagWorkerHost {
   }
 
   private createRuntimeForPlatform(platform: PlatformAdapter): OpenTagRuntime {
+    const codex = createCodexExecutor({ mode: 'dry-run' });
+    const claude = createClaudeExecutor({ mode: 'dry-run' });
     return new OpenTagRuntime({
       platform,
-      executor: createCodexExecutor({ mode: 'dry-run' }),
+      executor: codex,
+      executors: { codex, claude },
       memory: this.memoryStore,
       threadConfig: this.threadConfigStore,
     });

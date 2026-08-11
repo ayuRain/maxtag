@@ -7,8 +7,10 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
+    { "path": "../config" },
     { "path": "../core" },
     { "path": "../delivery" },
+    { "path": "../executor-claude" },
     { "path": "../executor-codex" },
     { "path": "../memory" },
     { "path": "../platform-lark" }

@@ -2,6 +2,7 @@ import type {
   AgentRunEvent,
   AgentRunResult,
   ChecklistItem,
+  Executor,
   ScopedMemorySnapshot,
   ProgressState,
   RuntimeDependencies,
@@ -52,84 +53,102 @@ export class OpenTagRuntime {
 
     const progress = this.deps.platform.createProgressSurface(input.thread);
     const { surfaceId } = await progress.create(state);
-
-    const workspace =
-      (await this.deps.threadConfig.getWorkspace?.(input.thread)) ??
-      (input.thread.workspaceId
-        ? { id: input.thread.workspaceId, name: input.thread.workspaceId }
-        : undefined);
-    const project = await this.deps.threadConfig.getProject?.(
-      input.thread,
-      workspace,
-    );
-    const identity = await this.deps.threadConfig.getIdentity(input.thread);
-    const access = await this.deps.threadConfig.getAccessBundle(input.thread, {
-      workspace,
-      project,
-    });
-
-    state = {
-      ...state,
-      checklist: updateChecklist(state.checklist, {
-        id: 'route',
-        label: 'Resolve workspace/project',
-        status: 'done',
-        detail: [workspace?.name, project?.name].filter(Boolean).join(' / '),
-      }),
-      updatedAt: now(),
-    };
-    await progress.update(surfaceId, state);
-
-    const memorySnapshot: ScopedMemorySnapshot | undefined =
-      await this.deps.memory.loadMemory?.({
-        thread: input.thread,
-        workspace,
-        project,
-      });
-    const memory =
-      memorySnapshot?.text ??
-      (await this.deps.memory.loadThreadMemory(input.thread));
-
-    state = {
-      ...state,
-      checklist: updateChecklist(state.checklist, {
-        id: 'memory',
-        label: 'Load scoped memory',
-        status: 'done',
-        detail: memorySnapshot
-          ? `${memorySnapshot.scopes.length} scope(s)`
-          : 'thread scope',
-      }),
-      updatedAt: now(),
-    };
-    await progress.update(surfaceId, state);
-
-    const onEvent = async (event: AgentRunEvent): Promise<void> => {
-      await input.onEvent?.(event);
-      if (event.type === 'progress') {
-        state = {
-          ...state,
-          checklist: updateChecklist(state.checklist, event.item),
-          summary: event.message ?? state.summary,
-          updatedAt: now(),
-        };
-        await progress.update(surfaceId, state);
-      }
+    let executor: Executor | undefined;
+    let activeItem: ChecklistItem = {
+      id: 'route',
+      label: 'Resolve workspace/project',
+      status: 'running',
     };
 
     try {
+      const workspace =
+        (await this.deps.threadConfig.getWorkspace?.(input.thread)) ??
+        (input.thread.workspaceId
+          ? { id: input.thread.workspaceId, name: input.thread.workspaceId }
+          : undefined);
+      const project = await this.deps.threadConfig.getProject?.(
+        input.thread,
+        workspace,
+      );
+      const identity = await this.deps.threadConfig.getIdentity(input.thread);
+      const access = await this.deps.threadConfig.getAccessBundle(input.thread, {
+        workspace,
+        project,
+      });
+      executor = this.deps.executors
+        ? this.deps.executors[identity.defaultExecutorId]
+        : this.deps.executor;
+      if (!executor) {
+        throw new Error(`executor_not_available:${identity.defaultExecutorId}`);
+      }
+
       state = {
         ...state,
         checklist: updateChecklist(state.checklist, {
-          id: 'work',
-          label: 'Run executor',
-          status: 'running',
+          id: 'route',
+          label: 'Resolve workspace/project',
+          status: 'done',
+          detail: [workspace?.name, project?.name].filter(Boolean).join(' / '),
         }),
         updatedAt: now(),
       };
       await progress.update(surfaceId, state);
 
-      const result = await this.deps.executor.run({
+      activeItem = {
+        id: 'memory',
+        label: 'Load scoped memory',
+        status: 'running',
+      };
+      const memorySnapshot: ScopedMemorySnapshot | undefined =
+        await this.deps.memory.loadMemory?.({
+          thread: input.thread,
+          workspace,
+          project,
+        });
+      const memory =
+        memorySnapshot?.text ??
+        (await this.deps.memory.loadThreadMemory(input.thread));
+
+      state = {
+        ...state,
+        checklist: updateChecklist(state.checklist, {
+          id: 'memory',
+          label: 'Load scoped memory',
+          status: 'done',
+          detail: memorySnapshot
+            ? `${memorySnapshot.scopes.length} scope(s)`
+            : 'thread scope',
+        }),
+        updatedAt: now(),
+      };
+      await progress.update(surfaceId, state);
+
+      const onEvent = async (event: AgentRunEvent): Promise<void> => {
+        await input.onEvent?.(event);
+        if (event.type === 'progress') {
+          state = {
+            ...state,
+            checklist: updateChecklist(state.checklist, event.item),
+            summary: event.message ?? state.summary,
+            updatedAt: now(),
+          };
+          await progress.update(surfaceId, state);
+        }
+      };
+
+      activeItem = {
+        id: 'work',
+        label: `Run ${executor.label}`,
+        status: 'running',
+      };
+      state = {
+        ...state,
+        checklist: updateChecklist(state.checklist, activeItem),
+        updatedAt: now(),
+      };
+      await progress.update(surfaceId, state);
+
+      const result = await executor.run({
         runId: input.runId,
         workspace,
         project,
@@ -150,7 +169,7 @@ export class OpenTagRuntime {
         checklist: updateChecklist(
           updateChecklist(state.checklist, {
             id: 'work',
-            label: 'Run executor',
+            label: `Run ${executor.label}`,
             status: 'done',
           }),
           {
@@ -162,6 +181,11 @@ export class OpenTagRuntime {
         updatedAt: now(),
       };
       await progress.update(surfaceId, state);
+      activeItem = {
+        id: 'publish',
+        label: 'Publish thread reply',
+        status: 'running',
+      };
       await this.deps.platform.sendMessage(
         input.thread,
         result.summary,
@@ -187,8 +211,7 @@ export class OpenTagRuntime {
         status: input.abortSignal?.aborted ? 'cancelled' : 'failed',
         summary: message,
         checklist: updateChecklist(state.checklist, {
-          id: 'work',
-          label: 'Run executor',
+          ...activeItem,
           status: 'failed',
           detail: message,
         }),

@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import {
   OpenTagRuntime,
-  StaticThreadConfigStore,
   type AgentRunEvent,
   type MemoryScopeKind,
   type PlatformAdapter,
@@ -14,8 +13,14 @@ import {
   type SourceAttachment,
   type SourceMessage,
   type SourceThread,
+  type ToolGrant,
+  type ToolGrantKind,
   type Workspace,
 } from '@opentag/core';
+import {
+  FileThreadConfigStore,
+  type UpsertProjectAgentPolicyInput,
+} from '@opentag/config';
 import {
   FileDeliveryStore,
   TrackedLarkTransport,
@@ -31,6 +36,7 @@ import {
   type ThreadBindingScope,
 } from '@opentag/delivery';
 import { createCodexExecutor } from '@opentag/executor-codex';
+import { createClaudeExecutor } from '@opentag/executor-claude';
 import {
   ScopedFileMemoryStore,
   parseMemoryCommand,
@@ -73,7 +79,7 @@ const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
 const activeRuns = new Map<string, AbortController>();
 let agentWorkerTimer: NodeJS.Timeout | undefined;
 let agentWorkerPass: Promise<AgentWorkerPassResult> | undefined;
-const threadConfigStore = new StaticThreadConfigStore({
+const threadConfigStore = new FileThreadConfigStore(path.join(dataDir, 'config'), {
   identity: {
     displayName: 'OpenTag',
     instructions:
@@ -169,6 +175,12 @@ const capabilityManifest = {
       capability: 'Channel binding',
       agentdock: 'chat/session routing and activation controls',
       opentag: 'admin-configured project route and activation mode',
+      status: 'partial',
+    },
+    {
+      capability: 'Project agent policy',
+      agentdock: 'agent templates, tool nodes, and per-session configuration',
+      opentag: 'persisted identity, instructions, executor, project grants, network policy, and audit',
       status: 'partial',
     },
     {
@@ -350,10 +362,67 @@ async function deliverySnapshot(limit = 50): Promise<Record<string, unknown>> {
   };
 }
 
+async function workspaceSnapshot(
+  workspaceId = 'dev-workspace',
+): Promise<Record<string, unknown>> {
+  const [workspacePolicies, projects, bindings, recentRuns, audit] =
+    await Promise.all([
+      threadConfigStore.listWorkspacePolicies(),
+      threadConfigStore.listProjectPolicies(workspaceId),
+      deliveryStore.listThreadBindings(500),
+      deliveryStore.listAgentRuns({ workspaceId, limit: 500 }),
+      threadConfigStore.listAudit(25),
+    ]);
+  const workspacePolicy =
+    workspacePolicies.find((item) => item.workspace.id === workspaceId) ??
+    workspacePolicies[0];
+  return {
+    workspace: workspacePolicy,
+    projects: projects.map((project) => {
+      const matchesProject = (value?: string): boolean =>
+        value === project.projectId || value === project.id;
+      const projectBindings = bindings.filter(
+        (binding) =>
+          binding.workspaceId === project.workspaceId &&
+          matchesProject(binding.projectId),
+      );
+      const projectRuns = recentRuns.filter((run) => matchesProject(run.projectId));
+      const runSummary = {
+        queued: 0,
+        running: 0,
+        cancel_requested: 0,
+        completed: 0,
+        failed: 0,
+        cancelled: 0,
+      };
+      for (const run of projectRuns) runSummary[run.status] += 1;
+      return {
+        ...project,
+        clients: [...new Set(projectBindings.map((binding) => binding.platform))],
+        bindingCount: projectBindings.length,
+        runSummary,
+        lastRunAt: projectRuns[0]?.updatedAt,
+      };
+    }),
+    availableTools: Object.entries(PROJECT_TOOL_LABELS).map(([id, label]) => ({
+      id,
+      label,
+    })),
+    executors: [
+      { id: 'codex', label: 'Codex' },
+      { id: 'claude', label: 'Claude' },
+    ],
+    audit,
+  };
+}
+
 function createRuntimeForPlatform(platform: PlatformAdapter): OpenTagRuntime {
+  const codex = createCodexExecutor({ mode: 'dry-run' });
+  const claude = createClaudeExecutor({ mode: 'dry-run' });
   return new OpenTagRuntime({
     platform,
-    executor: createCodexExecutor({ mode: 'dry-run' }),
+    executor: codex,
+    executors: { codex, claude },
     memory: memoryStore,
     threadConfig: threadConfigStore,
   });
@@ -364,19 +433,23 @@ function coerceDevMessage(body: Record<string, unknown>): {
   message: SourceMessage;
 } {
   const text = typeof body.text === 'string' ? body.text : 'hello opentag';
+  const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+  const projectId = stringValue(body, 'projectId', 'opentag');
+  const projectName = stringValue(body, 'projectName', projectId);
+  const channelId = `dev-${projectId}`;
   const thread: SourceThread = {
-    id: 'lark:dev-chat:root',
+    id: `lark:${channelId}:root`,
     platform: 'lark',
-    externalId: 'dev-chat:root',
-    workspaceId: 'dev-workspace',
-    projectId: 'opentag',
-    channelId: 'dev-chat',
+    externalId: `${channelId}:root`,
+    workspaceId,
+    projectId,
+    channelId,
     rootMessageId: 'root',
     topicId: 'root',
-    title: 'OpenTag Demo Project',
+    title: projectName,
     visibility: 'public',
     metadata: {
-      projectId: 'opentag',
+      projectId,
     },
   };
   return {
@@ -428,6 +501,95 @@ function booleanValue(
   if (value === 'true') return true;
   if (value === 'false') return false;
   return fallback;
+}
+
+function stringArrayValue(
+  body: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
+  const value = body[key];
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const PROJECT_TOOL_LABELS: Record<string, string> = {
+  github: 'GitHub',
+  'lark-docs': 'Lark Docs',
+  'lark-base': 'Lark Base',
+  browser: 'Browser',
+  shell: 'Shell',
+};
+
+function coerceProjectPolicyInput(
+  body: Record<string, unknown>,
+): UpsertProjectAgentPolicyInput | { error: string } {
+  const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+  const projectId = stringValue(body, 'projectId');
+  if (!workspaceId || !projectId) return { error: 'workspace_and_project_required' };
+
+  const executorId = stringValue(body, 'executorId');
+  if (executorId && executorId !== 'codex' && executorId !== 'claude') {
+    return { error: 'unsupported_executor' };
+  }
+
+  const tools = stringArrayValue(body, 'tools');
+  const unsupportedTool = tools?.find((tool) => !PROJECT_TOOL_LABELS[tool]);
+  if (unsupportedTool) return { error: `unsupported_tool:${unsupportedTool}` };
+  const grants: ToolGrant[] | undefined = tools?.map((tool) => ({
+    id: `project:${workspaceId}:${projectId}:${tool}`,
+    kind: tool as ToolGrantKind,
+    scope: 'project',
+    label: PROJECT_TOOL_LABELS[tool],
+  }));
+
+  const networkMode = stringValue(body, 'networkMode');
+  if (
+    networkMode &&
+    networkMode !== 'deny-by-default' &&
+    networkMode !== 'restricted' &&
+    networkMode !== 'allow-all'
+  ) {
+    return { error: 'unsupported_network_mode' };
+  }
+  const allowedHosts = stringArrayValue(body, 'allowedHosts');
+
+  const identityValues = {
+    id: stringValue(body, 'agentId'),
+    displayName: stringValue(body, 'agentName'),
+    description: stringValue(body, 'agentDescription'),
+    instructions: stringValue(body, 'instructions'),
+    defaultExecutorId: executorId,
+  };
+  const identity = Object.fromEntries(
+    Object.entries(identityValues).filter(([, value]) => value !== undefined),
+  );
+
+  return {
+    workspaceId,
+    projectId,
+    name: stringValue(body, 'name'),
+    description:
+      typeof body.description === 'string' ? body.description : undefined,
+    identity: Object.keys(identity).length
+      ? (identity as UpsertProjectAgentPolicyInput['identity'])
+      : undefined,
+    grants,
+    networkPolicy:
+      networkMode || allowedHosts
+        ? {
+            mode: networkMode as
+              | 'deny-by-default'
+              | 'restricted'
+              | 'allow-all'
+              | undefined,
+            allowedHosts,
+          }
+        : undefined,
+    actor: stringValue(body, 'actor', 'admin-console'),
+  };
 }
 
 function numberValue(
@@ -1013,18 +1175,25 @@ async function enqueueMessageRun(input: {
   const memoryCommand = parseMemoryCommand(routed.message.text, {
     defaultScope: memoryCommandDefaultScope(routed.thread),
   });
+  const resolvedPolicy = await threadConfigStore.resolveThreadPolicy(routed.thread);
   const run = await deliveryStore.createAgentRun({
     runId,
     thread: routed.thread,
     message: routed.message,
     inboundEventId: options?.inboundEventId,
     bindingId: routeBinding.id,
-    executorId: memoryCommand ? 'memory-command' : 'codex',
+    executorId: memoryCommand
+      ? 'memory-command'
+      : resolvedPolicy.identity.defaultExecutorId,
     transportMode,
     metadata: {
       memoryCommand: memoryCommand
         ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
         : undefined,
+      agentId: resolvedPolicy.identity.id,
+      agentDisplayName: resolvedPolicy.identity.displayName,
+      policyConfigured: resolvedPolicy.configured,
+      grantKinds: resolvedPolicy.access.grants.map((grant) => grant.kind),
     },
   });
 
@@ -1327,6 +1496,41 @@ const server = createServer(async (request, response) => {
           activeRuns: activeRuns.size,
           passRunning: Boolean(agentWorkerPass),
         },
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/workspace') {
+      sendJson(
+        response,
+        200,
+        await workspaceSnapshot(
+          url.searchParams.get('workspaceId') || 'dev-workspace',
+        ),
+      );
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/projects') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const input = coerceProjectPolicyInput(body);
+      if ('error' in input) {
+        sendJson(response, 400, { error: input.error });
+        return;
+      }
+      const project = await threadConfigStore.upsertProjectPolicy(input);
+      sendJson(response, 200, {
+        project,
+        workspace: await workspaceSnapshot(project.workspaceId),
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/config/audit') {
+      sendJson(response, 200, {
+        audit: await threadConfigStore.listAudit(
+          Number(url.searchParams.get('limit') || 50),
+        ),
       });
       return;
     }
