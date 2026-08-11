@@ -17,6 +17,13 @@ const bindingProjectId = document.querySelector('#binding-project-id');
 const bindingActivationMode = document.querySelector('#binding-activation-mode');
 const bindingRequireMention = document.querySelector('#binding-require-mention');
 const saveBindingButton = document.querySelector('#save-binding');
+const memoryForm = document.querySelector('#memory-form');
+const memoryScope = document.querySelector('#memory-scope');
+const memoryText = document.querySelector('#memory-text');
+const memoryOutput = document.querySelector('#memory-output');
+const showMemoryButton = document.querySelector('#show-memory');
+const saveMemoryButton = document.querySelector('#save-memory');
+const forgetMemoryButton = document.querySelector('#forget-memory');
 
 async function getJson(url, options) {
   const response = await fetch(url, options);
@@ -281,6 +288,73 @@ async function saveBinding(event) {
   }
 }
 
+function memoryRouteParams() {
+  return {
+    platform: 'lark',
+    externalId: bindingExternalId.value,
+    channelId: bindingExternalId.value,
+    workspaceId: bindingWorkspaceId.value,
+    projectId: bindingProjectId.value,
+    scope: memoryScope.value,
+  };
+}
+
+function renderMemorySnapshot(data) {
+  const scope = data?.snapshot?.scopes?.[0];
+  const content = scope?.content?.trim();
+  memoryOutput.textContent = content || 'No memory in this scope yet.';
+}
+
+async function refreshMemory() {
+  const query = new URLSearchParams(memoryRouteParams());
+  renderMemorySnapshot(await getJson(`/v1/memory?${query.toString()}`));
+}
+
+async function saveMemory(event) {
+  event.preventDefault();
+  saveMemoryButton.disabled = true;
+  saveMemoryButton.textContent = 'Saving';
+  try {
+    await getJson('/v1/memory', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...memoryRouteParams(),
+        action: 'remember',
+        text: memoryText.value,
+      }),
+    });
+    await refreshMemory();
+  } catch (error) {
+    memoryOutput.textContent = error.message;
+  } finally {
+    saveMemoryButton.disabled = false;
+    saveMemoryButton.textContent = 'Save';
+  }
+}
+
+async function forgetMemory() {
+  forgetMemoryButton.disabled = true;
+  forgetMemoryButton.textContent = 'Forgetting';
+  try {
+    await getJson('/v1/memory', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...memoryRouteParams(),
+        action: 'forget',
+        selector: memoryText.value,
+      }),
+    });
+    await refreshMemory();
+  } catch (error) {
+    memoryOutput.textContent = error.message;
+  } finally {
+    forgetMemoryButton.disabled = false;
+    forgetMemoryButton.textContent = 'Forget';
+  }
+}
+
 async function runDryRun() {
   runButton.disabled = true;
   runButton.textContent = 'Running';
@@ -315,6 +389,18 @@ runButton.addEventListener('click', () => {
 
 bindingForm.addEventListener('submit', (event) => {
   void saveBinding(event);
+});
+
+memoryForm.addEventListener('submit', (event) => {
+  void saveMemory(event);
+});
+
+showMemoryButton.addEventListener('click', () => {
+  void refreshMemory();
+});
+
+forgetMemoryButton.addEventListener('click', () => {
+  void forgetMemory();
 });
 
 await refreshHealth();

@@ -311,12 +311,33 @@ select:focus {
   gap: 0;
 }
 
-.binding-actions {
+.memory-form {
+  display: grid;
+  gap: 0;
+}
+
+.memory-form textarea {
+  min-height: 86px;
+}
+
+.memory-output {
+  margin-top: 10px;
+  max-height: 150px;
+  min-height: 70px;
+  overflow: auto;
+}
+
+.binding-actions,
+.memory-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   margin-top: 10px;
+}
+
+.memory-actions {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
 }
 
 .check-field {
@@ -534,7 +555,8 @@ pre {
     gap: 4px;
   }
 
-  .binding-actions {
+  .binding-actions,
+  .memory-actions {
     grid-template-columns: 1fr;
     justify-items: start;
   }

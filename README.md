@@ -65,6 +65,9 @@ packages/ui-cards           Progress/checklist card models
   thread.
 - Channel/project bindings can be configured through the admin API and console,
   including mention-only vs always-on activation.
+- Scoped memory can be viewed and updated through `/v1/memory`, the admin
+  console, or chat commands such as `remember project ...` and
+  `forget project ...`.
 - The admin preview exposes client readiness, memory scopes, and AgentDock parity
   gaps.
 
@@ -77,7 +80,7 @@ packages/ui-cards           Progress/checklist card models
 5. Thread-level agent identity and access bundle.
 6. Durable outbound delivery and retry.
 7. GitHub draft PR loop.
-8. Public scoped memory with explicit remember/forget commands.
+8. Public scoped memory governance, audit log, and durable write queue.
 
 ## Local Build
 

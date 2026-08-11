@@ -7,6 +7,7 @@
 - Executor abstraction for Codex and Claude.
 - Progress card model that can render to Lark today and Slack/Telegram later.
 - Global/workspace/project/thread memory scopes.
+- Explicit scoped memory commands and admin API for remember, forget, and show.
 - File-backed outbox, inbound event ledger, turn delivery tracker, and
   configured channel/project bindings.
 - Memory and GitHub tool contracts.
@@ -19,6 +20,8 @@
 - Create or bind `SourceThread` records from Lark group/topic events, with
   channel-level project assignment for group memory.
 - Resolve workspace and project identity before every run.
+- Support `remember`/`forget` commands for global, workspace, project, and
+  thread memory without invoking the full executor.
 - Render live progress cards with checklist items, stop action, and final state.
 - Short-circuit duplicate Lark events by `event_id` or message id.
 - Persist inbound event idempotency and upgrade outbound deliveries from the

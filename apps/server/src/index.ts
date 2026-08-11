@@ -5,8 +5,11 @@ import { readFile } from 'node:fs/promises';
 import {
   OpenTagRuntime,
   StaticThreadConfigStore,
+  type MemoryScopeKind,
+  type Project,
   type SourceMessage,
   type SourceThread,
+  type Workspace,
 } from '@opentag/core';
 import {
   FileDeliveryStore,
@@ -18,7 +21,11 @@ import {
   type ThreadBindingScope,
 } from '@opentag/delivery';
 import { createCodexExecutor } from '@opentag/executor-codex';
-import { ScopedFileMemoryStore } from '@opentag/memory';
+import {
+  ScopedFileMemoryStore,
+  parseMemoryCommand,
+  type ParsedMemoryCommand,
+} from '@opentag/memory';
 import {
   LarkPlatformAdapter,
   MemoryLarkTransport,
@@ -40,6 +47,20 @@ const larkCallbackMaxSkewSeconds = Number(
   process.env.OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS || 300,
 );
 const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
+const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
+const threadConfigStore = new StaticThreadConfigStore({
+  identity: {
+    displayName: 'OpenTag',
+    instructions:
+      'You are OpenTag in a shared work thread. Keep progress visible and publish durable artifacts.',
+    defaultExecutorId: 'codex',
+  },
+  workspace: {
+    id: 'dev-workspace',
+    name: 'Development Workspace',
+    defaultProjectId: 'opentag',
+  },
+});
 
 const capabilityManifest = {
   product: 'OpenTag',
@@ -116,7 +137,7 @@ const capabilityManifest = {
     {
       capability: 'Scoped memory',
       agentdock: 'session memory with async write queue',
-      opentag: 'global/workspace/project/thread file scopes with channel bindings',
+      opentag: 'global/workspace/project/thread scopes with remember/forget commands',
       status: 'partial',
     },
     {
@@ -209,20 +230,8 @@ function createRuntimeForDryRun(transport: LarkTransport): OpenTagRuntime {
   return new OpenTagRuntime({
     platform,
     executor: createCodexExecutor({ mode: 'dry-run' }),
-    memory: new ScopedFileMemoryStore(path.join(dataDir, 'memory')),
-    threadConfig: new StaticThreadConfigStore({
-      identity: {
-        displayName: 'OpenTag',
-        instructions:
-          'You are OpenTag in a shared work thread. Keep progress visible and publish durable artifacts.',
-        defaultExecutorId: 'codex',
-      },
-      workspace: {
-        id: 'dev-workspace',
-        name: 'Development Workspace',
-        defaultProjectId: 'opentag',
-      },
-    }),
+    memory: memoryStore,
+    threadConfig: threadConfigStore,
   });
 }
 
@@ -380,6 +389,119 @@ function shouldHandleMessage(input: {
   return !requireMention || input.message.mentionsAgent;
 }
 
+async function memoryContextForThread(
+  thread: SourceThread,
+): Promise<{ workspace?: Workspace; project?: Project }> {
+  const workspace = await threadConfigStore.getWorkspace(thread);
+  const project = await threadConfigStore.getProject(thread, workspace);
+  return { workspace, project };
+}
+
+function memoryScopeValue(
+  body: Record<string, unknown>,
+  fallback: MemoryScopeKind = 'project',
+): MemoryScopeKind {
+  const value = stringValue(body, 'scope');
+  return value === 'global' ||
+    value === 'workspace' ||
+    value === 'project' ||
+    value === 'thread'
+    ? value
+    : fallback;
+}
+
+function coerceMemoryThread(body: Record<string, unknown>): SourceThread {
+  const platform = stringValue(body, 'platform', 'lark') || 'lark';
+  const externalId =
+    stringValue(body, 'externalId') ||
+    stringValue(body, 'channelId') ||
+    stringValue(body, 'threadId') ||
+    'admin';
+  const channelId = stringValue(body, 'channelId', externalId) || externalId;
+  const threadId =
+    stringValue(body, 'threadId', `${platform}:${externalId}`) ||
+    `${platform}:${externalId}`;
+  return {
+    id: threadId,
+    platform,
+    externalId,
+    workspaceId: stringValue(body, 'workspaceId', 'dev-workspace'),
+    projectId: stringValue(body, 'projectId', 'opentag'),
+    channelId,
+    title: stringValue(body, 'title', externalId),
+    visibility: 'public',
+  };
+}
+
+function memoryCommandDefaultScope(thread: SourceThread): MemoryScopeKind {
+  return thread.visibility === 'direct' ? 'thread' : 'project';
+}
+
+function formatMemoryScopeLabel(scope: MemoryScopeKind): string {
+  return `${scope} memory`;
+}
+
+function formatMemoryContent(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return 'No memory in this scope yet.';
+  return trimmed.length <= 1500 ? trimmed : `${trimmed.slice(0, 1500)}...`;
+}
+
+async function applyMemoryCommand(input: {
+  command: ParsedMemoryCommand;
+  thread: SourceThread;
+}): Promise<Record<string, unknown>> {
+  const { workspace, project } = await memoryContextForThread(input.thread);
+  if (input.command.kind === 'remember') {
+    await memoryStore.rememberScoped({
+      thread: input.thread,
+      workspace,
+      project,
+      scope: input.command.scope,
+      text: input.command.value,
+    });
+    return {
+      summary: `Remembered in ${formatMemoryScopeLabel(input.command.scope)}.`,
+      scope: input.command.scope,
+      workspaceId: workspace?.id,
+      projectId: project?.id,
+      value: input.command.value,
+    };
+  }
+
+  if (input.command.kind === 'forget') {
+    await memoryStore.forgetScoped({
+      thread: input.thread,
+      workspace,
+      project,
+      scope: input.command.scope,
+      selector: input.command.value,
+    });
+    return {
+      summary: `Removed matching lines from ${formatMemoryScopeLabel(input.command.scope)}.`,
+      scope: input.command.scope,
+      workspaceId: workspace?.id,
+      projectId: project?.id,
+      selector: input.command.value,
+    };
+  }
+
+  const snapshot = await memoryStore.loadMemory({
+    thread: input.thread,
+    workspace,
+    project,
+    scopes: [input.command.scope],
+  });
+  const content = snapshot.scopes[0]?.content ?? '';
+  return {
+    summary: `${formatMemoryScopeLabel(input.command.scope)}\n${formatMemoryContent(content)}`,
+    scope: input.command.scope,
+    workspaceId: workspace?.id,
+    projectId: project?.id,
+    content,
+  };
+}
+
 async function runDryMessage(input: {
   thread: SourceThread;
   message: SourceMessage;
@@ -399,6 +521,71 @@ async function runDryMessage(input: {
     requireMention: routed.binding?.requireMention,
   });
   const routeBinding = routed.binding ?? observedBinding;
+  const route = {
+    workspaceId: routed.thread.workspaceId,
+    projectId: routed.thread.projectId,
+    threadId: routed.thread.id,
+    platform: routed.thread.platform,
+    bindingId: routeBinding.id,
+    bindingScope: routeBinding.scope,
+    activationMode: routeBinding.activationMode,
+    observedBindingId: observedBinding.id,
+  };
+  const memoryCommand = parseMemoryCommand(routed.message.text, {
+    defaultScope: memoryCommandDefaultScope(routed.thread),
+  });
+  if (memoryCommand) {
+    try {
+      const commandResult = await applyMemoryCommand({
+        command: memoryCommand,
+        thread: routed.thread,
+      });
+      await trackedTransport.sendText({
+        chatId: routed.thread.channelId || routed.thread.externalId,
+        rootId: routed.thread.rootMessageId,
+        replyToMessageId: routed.message.id,
+        text: String(commandResult.summary),
+        metadata: {
+          runId,
+          thread: routed.thread,
+          stage: 'thread-reply',
+        },
+      });
+      if (options?.inboundEventId) {
+        await deliveryStore.markInboundEventProcessed(options.inboundEventId, {
+          workspaceId: observedBinding.workspaceId,
+          projectId: observedBinding.projectId,
+          threadId: routed.thread.id,
+          messageId: routed.message.id,
+        });
+      }
+      return {
+        result: {
+          summary: commandResult.summary,
+          artifacts: [],
+        },
+        route,
+        memoryCommand: {
+          kind: memoryCommand.kind,
+          scope: memoryCommand.scope,
+          ...commandResult,
+        },
+        delivery: await deliverySnapshot(20),
+        larkDryRun: {
+          texts: memoryTransport.texts,
+          cards: memoryTransport.cards,
+        },
+      };
+    } catch (error) {
+      if (options?.inboundEventId) {
+        await deliveryStore.markInboundEventFailed(
+          options.inboundEventId,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      throw error;
+    }
+  }
   let result;
   try {
     result = await runtime.handleMessage({
@@ -426,16 +613,7 @@ async function runDryMessage(input: {
   const delivery = await deliverySnapshot(20);
   return {
     result,
-    route: {
-      workspaceId: routed.thread.workspaceId,
-      projectId: routed.thread.projectId,
-      threadId: routed.thread.id,
-      platform: routed.thread.platform,
-      bindingId: routeBinding.id,
-      bindingScope: routeBinding.scope,
-      activationMode: routeBinding.activationMode,
-      observedBindingId: observedBinding.id,
-    },
+    route,
     delivery,
     larkDryRun: {
       texts: memoryTransport.texts,
@@ -498,6 +676,67 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         binding,
         delivery: await deliverySnapshot(20),
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/memory') {
+      const query = Object.fromEntries(url.searchParams.entries());
+      const thread = coerceMemoryThread(query);
+      const { workspace, project } = await memoryContextForThread(thread);
+      const scope = memoryScopeValue(query, 'project');
+      const snapshot = await memoryStore.loadMemory({
+        thread,
+        workspace,
+        project,
+        scopes: [scope],
+      });
+      sendJson(response, 200, {
+        route: {
+          workspaceId: workspace?.id,
+          projectId: project?.id,
+          threadId: thread.id,
+          platform: thread.platform,
+        },
+        scope,
+        snapshot,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/memory') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const action = stringValue(body, 'action', 'remember');
+      const thread = coerceMemoryThread(body);
+      const scope = memoryScopeValue(body, 'project');
+      const value =
+        stringValue(body, 'text') ||
+        stringValue(body, 'value') ||
+        stringValue(body, 'selector');
+      if ((action === 'remember' || action === 'forget') && !value) {
+        sendJson(response, 400, { error: 'memory_value_required' });
+        return;
+      }
+      if (action !== 'remember' && action !== 'forget' && action !== 'show') {
+        sendJson(response, 400, { error: 'unsupported_memory_action' });
+        return;
+      }
+      const result = await applyMemoryCommand({
+        command: {
+          kind: action,
+          scope,
+          value: value ?? '',
+        },
+        thread,
+      });
+      sendJson(response, 200, {
+        route: {
+          workspaceId: result.workspaceId,
+          projectId: result.projectId,
+          threadId: thread.id,
+          platform: thread.platform,
+        },
+        memoryCommand: result,
       });
       return;
     }

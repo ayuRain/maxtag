@@ -11,7 +11,7 @@ many clients.
 | Client-neutral event model | `SourceThread`, `SourceMessage`, and `PlatformAdapter` |
 | Lark first client | Lark normalize path, progress cards, dry-run server route |
 | Multiple future clients | Telegram stub plus Slack/GitHub entries in capability manifest |
-| Scoped memory | Global, workspace, project, and thread file scopes; Lark groups route to project scope |
+| Scoped memory | Global, workspace, project, and thread file scopes; Lark groups route to project scope; remember/forget commands |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
 | Durable delivery skeleton | File-backed outbox, turn delivery records, and bindings |
 | Inbound callback ledger | Lark token/timestamp checks, event idempotency, and duplicate short-circuit |
@@ -25,7 +25,7 @@ many clients.
 | Turn delivery tracking | Add recovery/reconciliation for stale card or reply delivery |
 | Binding governance | Add permission checks, audit history, and import/export for configured bindings |
 | Encrypted Lark callbacks | Implement decrypt path before enabling encrypted events in production |
-| Memory write queue | Move remember/forget writes into a durable async queue |
+| Memory governance | Add durable write queue, audit history, approval policy, and admin restore |
 | Scheduled tasks | Add workspace/project routines on top of the runtime |
 | Dynamic workflows | Add saved workflow definitions and async workflow runs |
 | Tooling depth | Wire GitHub, Lark Docs/Base, browser, and shell grants |

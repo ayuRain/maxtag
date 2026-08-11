@@ -35,6 +35,24 @@
 
         <div class="section-label">Memory</div>
         <div class="scope-list" id="memory-scopes"></div>
+        <form class="memory-form" id="memory-form">
+          <div class="memory-actions">
+            <select id="memory-scope">
+              <option value="project">project</option>
+              <option value="workspace">workspace</option>
+              <option value="global">global</option>
+              <option value="thread">thread</option>
+            </select>
+            <button id="show-memory" type="button">Show</button>
+            <button id="save-memory" type="submit">Save</button>
+            <button id="forget-memory" type="button">Forget</button>
+          </div>
+          <label class="field compact">
+            <span>Memory note</span>
+            <textarea id="memory-text" spellcheck="false">OpenTag should keep Lark group memory separate by project.</textarea>
+          </label>
+        </form>
+        <pre class="memory-output" id="memory-output">No memory loaded.</pre>
 
         <div class="section-label">Bindings</div>
         <form class="binding-form" id="binding-form">
