@@ -36,11 +36,11 @@
   instructions, executor selection, tool grants, network policy, and audit.
 - Opt-in local Codex and Claude CLI execution with bounded output, process-group
   cancellation, timeout, project workspace resolution, and filtered child env.
-- File-backed workspace/project routines with interval and daily schedules,
-  deduped execution claims, stale reclaim, manual triggers, audit history, and
-  deterministic bridging into the shared agent run queue. Lark and Telegram
-  topics can create, list, pause, resume, and delete scoped standing work with
-  requester audit.
+- SQLite WAL-backed workspace/project routines with interval and daily
+  schedules, atomic cross-process claims, stale reclaim, manual triggers, audit
+  history, deterministic bridging into the shared agent run queue, and
+  inline/external/manual scheduler modes. Lark and Telegram topics can create,
+  list, pause, resume, and delete scoped standing work with requester audit.
 - Operator console organized around projects, access, routines, activity,
   scoped memory, delivery, and project-aware agent previews.
 - Optional operator authentication with Bearer automation, signed HttpOnly
@@ -84,8 +84,8 @@
 
 - Harden Codex and Claude local CLI execution behind the common `Executor`
   contract with provider event parsing and runtime evidence.
-- Add production supervisor/deployment manifests for independent worker
-  processes.
+- Add production supervisor/deployment manifests for independent worker and
+  scheduler processes.
 - Add cross-process cancellation heartbeat for active runs.
 - Support turn steering while a run is active.
 - Attach artifacts: final message, file, patch, hosted report, PR link.
@@ -105,7 +105,7 @@
 - Routine foundation: scheduled summaries, channel digests, and recurring checks
   can run through the shared executor and delivery path; each thread has a
   bilingual standing-work command surface.
-- Production routine store, supervised scheduler deployment, and live Lark
+- Supervised scheduler deployment, queue-depth/lease metrics, and live Lark
   delivery/restart smoke evidence.
 - Watchers: PR, CI, issue, alert, and document monitors.
 - Add richer routine status and recent-result summaries to each thread.

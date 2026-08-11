@@ -15,6 +15,7 @@
     { "path": "../../packages/platform-lark" },
     { "path": "../../packages/platform-telegram" },
     { "path": "../../packages/routines" },
+    { "path": "../../packages/runtime-host" },
     { "path": "../../packages/storage-sqlite" }
   ],
   "include": ["src/**/*.ts"]

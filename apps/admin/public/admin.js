@@ -1512,14 +1512,26 @@ async function tickRoutines() {
 
 function renderRoutines() {
   const scheduler = state.routines?.scheduler || {};
-  $('#scheduler-state').textContent = scheduler.enabled ? 'Enabled' : 'Disabled';
+  const schedulerLabel = !scheduler.enabled
+    ? 'Disabled'
+    : scheduler.mode === 'external'
+      ? 'External'
+      : scheduler.mode === 'manual'
+        ? 'Manual'
+        : 'Inline';
+  $('#scheduler-state').textContent = schedulerLabel;
   $('#scheduler-state').className = `state-pill ${scheduler.enabled ? 'enabled' : 'disabled'}`;
   const nextRunAt = state.routines?.summary?.nextRunAt;
+  const modeDetail = scheduler.mode === 'external'
+    ? 'Independent scheduler'
+    : scheduler.mode === 'manual'
+      ? 'Manual ticks only'
+      : 'Server scheduler';
   $('#scheduler-detail').textContent = scheduler.lastTickAt
-    ? `Last ${formatTime(scheduler.lastTickAt, true)} / ${nextRunAt ? `next ${formatTime(nextRunAt, true)}` : 'nothing due'}`
+    ? `${modeDetail} / last ${formatTime(scheduler.lastTickAt, true)} / ${nextRunAt ? `next ${formatTime(nextRunAt, true)}` : 'nothing due'}`
     : nextRunAt
-      ? `No tick recorded / next ${formatTime(nextRunAt, true)}`
-      : 'No tick recorded / no enabled routines';
+      ? `${modeDetail} / next ${formatTime(nextRunAt, true)}`
+      : `${modeDetail} / no enabled routines`;
   const available = state.routines?.routines || [];
   if (
     state.selectedRoutineId !== '__new__' &&

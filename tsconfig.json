@@ -16,6 +16,7 @@
     { "path": "packages/storage-sqlite" },
     { "path": "packages/tools-github" },
     { "path": "apps/server" },
+    { "path": "apps/scheduler" },
     { "path": "apps/worker" },
     { "path": "apps/admin" }
   ]

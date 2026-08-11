@@ -9,7 +9,8 @@
     { "path": "../config" },
     { "path": "../core" },
     { "path": "../delivery" },
-    { "path": "../memory" }
+    { "path": "../memory" },
+    { "path": "../routines" }
   ],
   "include": ["src/**/*.ts"]
 }

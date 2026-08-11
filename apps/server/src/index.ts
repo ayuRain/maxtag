@@ -80,12 +80,14 @@ import {
   FileRoutineStore,
   RoutineCommandService,
   type ParsedRoutineCommand,
-  type Routine,
-  type RoutineClaim,
   type RoutineExecution,
   type RoutineSchedule,
   type UpsertRoutineInput,
 } from '@opentag/routines';
+import {
+  RoutineSchedulerService,
+  type RoutineTickResult,
+} from '@opentag/runtime-host';
 import { SqliteOpenTagStore } from '@opentag/storage-sqlite';
 import {
   OperatorAuth,
@@ -155,6 +157,12 @@ const claudeMaxBudgetUsd = optionalNumberEnvironmentValue(
 const routinesEnabled = !['0', 'false', 'no'].includes(
   String(process.env.OPENTAG_ROUTINES_ENABLED || 'true').toLowerCase(),
 );
+const routineSchedulerMode = routineSchedulerModeValue(
+  process.env.OPENTAG_ROUTINE_SCHEDULER,
+  routinesEnabled,
+);
+const routineSchedulerInline =
+  routinesEnabled && routineSchedulerMode === 'inline';
 const routineTickIntervalMs = numberEnvironmentValue(
   'OPENTAG_ROUTINE_TICK_INTERVAL_MS',
   30_000,
@@ -162,6 +170,10 @@ const routineTickIntervalMs = numberEnvironmentValue(
 const routineClaimStaleMs = numberEnvironmentValue(
   'OPENTAG_ROUTINE_CLAIM_STALE_MS',
   120_000,
+);
+const routineBatchSize = Math.min(
+  100,
+  numberEnvironmentValue('OPENTAG_ROUTINE_BATCH_SIZE', 100),
 );
 const defaultRoutineTimeZone =
   process.env.OPENTAG_DEFAULT_TIME_ZONE || 'Asia/Shanghai';
@@ -219,6 +231,11 @@ const sqliteStorage =
           'workspace-access.json',
         ),
         legacyMemoryDir: path.join(dataDir, 'memory'),
+        legacyRoutineFile: path.join(
+          dataDir,
+          'routines',
+          'routine-state.json',
+        ),
       })
     : undefined;
 const routineSchedulerId = `opentag-routines-${process.pid}`;
@@ -228,7 +245,9 @@ const deliveryStore =
 const memoryStore =
   sqliteStorage?.memoryStore ??
   new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
-const routineStore = new FileRoutineStore(path.join(dataDir, 'routines'));
+const routineStore =
+  sqliteStorage?.routineStore ??
+  new FileRoutineStore(path.join(dataDir, 'routines'));
 const routineCommandService = new RoutineCommandService(routineStore, {
   defaultTimeZone: defaultRoutineTimeZone,
 });
@@ -245,9 +264,6 @@ const pairingNoticeAt = new Map<string, number>();
 const accessNoticeAt = new Map<string, number>();
 let agentWorkerTimer: NodeJS.Timeout | undefined;
 let agentWorkerPass: Promise<AgentWorkerPassResult> | undefined;
-let routineTickPass: Promise<RoutineTickResult> | undefined;
-let routineLastTickAt: string | undefined;
-let routineLastTickResult: RoutineTickResult | undefined;
 const threadConfigStore = new FileThreadConfigStore(path.join(dataDir, 'config'), {
   identity: {
     displayName: 'OpenTag',
@@ -260,6 +276,22 @@ const threadConfigStore = new FileThreadConfigStore(path.join(dataDir, 'config')
     name: 'Development Workspace',
     defaultProjectId: 'opentag',
   },
+});
+const routineScheduler = new RoutineSchedulerService({
+  routineStore,
+  deliveryStore,
+  threadConfigStore,
+  schedulerId: routineSchedulerId,
+  claimStaleMs: routineClaimStaleMs,
+  batchSize: routineBatchSize,
+  transportModeForPlatform: (platform) => {
+    if (platform === 'lark') return `lark-${String(larkTransportStatus().mode)}`;
+    if (platform === 'telegram') {
+      return `telegram-${telegramTransportStatus().mode}`;
+    }
+    return 'tracked-text';
+  },
+  onRunQueued: () => scheduleAgentWorkerPass(),
 });
 
 const capabilityManifest = {
@@ -385,7 +417,7 @@ const capabilityManifest = {
     {
       capability: 'Long-running work',
       agentdock: 'scheduled tasks and dynamic workflows',
-      opentag: 'durable run queue plus chat-native, scoped interval/daily standing work',
+      opentag: 'SQLite routines plus inline or independent scheduling into the durable run queue',
       status: 'partial',
     },
   ],
@@ -399,6 +431,24 @@ function storageDriverValue(value: string | undefined): 'sqlite' | 'file' {
   const normalized = (value || 'sqlite').trim().toLowerCase();
   if (normalized === 'sqlite' || normalized === 'file') return normalized;
   throw new Error('OPENTAG_STORAGE_DRIVER must be sqlite or file.');
+}
+
+function routineSchedulerModeValue(
+  value: string | undefined,
+  enabled: boolean,
+): 'inline' | 'external' | 'manual' {
+  if (!enabled) return 'manual';
+  const normalized = (value || 'inline').trim().toLowerCase();
+  if (
+    normalized === 'inline' ||
+    normalized === 'external' ||
+    normalized === 'manual'
+  ) {
+    return normalized;
+  }
+  throw new Error(
+    'OPENTAG_ROUTINE_SCHEDULER must be inline, external, or manual.',
+  );
 }
 
 function operatorRoleValue(value: string | undefined): OperatorRole | undefined {
@@ -2055,17 +2105,6 @@ interface AgentWorkerPassResult {
   runs: AgentRunRecord[];
 }
 
-interface RoutineTickResult {
-  at: string;
-  staged: number;
-  claimed: number;
-  queued: number;
-  failed: number;
-  reconciled: number;
-  executionIds: string[];
-  runIds: string[];
-}
-
 async function enqueueMessageRun(input: {
   thread: SourceThread;
   message: SourceMessage;
@@ -2164,163 +2203,15 @@ async function enqueueMessageRun(input: {
   };
 }
 
-async function routineProjectId(routine: Routine): Promise<string> {
-  if (routine.projectId) return routine.projectId;
-  const workspaces = await threadConfigStore.listWorkspacePolicies();
-  return (
-    workspaces.find((item) => item.workspace.id === routine.workspaceId)
-      ?.workspace.defaultProjectId || 'opentag'
-  );
-}
-
-async function routineRunInput(claim: RoutineClaim): Promise<{
-  thread: SourceThread;
-  message: SourceMessage;
-}> {
-  const routine = claim.routine;
-  const destination = routine.destination;
-  const projectId = await routineProjectId(routine);
-  const threadId =
-    destination.threadId ||
-    `${destination.platform}:${destination.externalId}:routine:${routine.id}`;
-  const thread: SourceThread = {
-    id: threadId,
-    platform: destination.platform,
-    externalId: destination.externalId,
-    workspaceId: routine.workspaceId,
-    projectId,
-    channelId: destination.channelId || destination.externalId,
-    rootMessageId: destination.rootMessageId,
-    topicId: destination.topicId,
-    title: destination.title || routine.name,
-    visibility: destination.visibility,
-    metadata: {
-      routineId: routine.id,
-      routineExecutionId: claim.execution.id,
-      routineTrigger: claim.execution.trigger,
-    },
-  };
-  return {
-    thread,
-    message: {
-      id: `routine:${claim.execution.id}`,
-      threadId,
-      platform: destination.platform,
-      text: routine.instructions,
-      actor: {
-        id: `routine:${routine.id}`,
-        displayName: routine.name,
-        isBot: true,
-      },
-      createdAt: new Date().toISOString(),
-      mentionsAgent: true,
-      metadata: {
-        routineId: routine.id,
-        routineExecutionId: claim.execution.id,
-        scheduledFor: claim.execution.scheduledFor,
-      },
-    },
-  };
-}
-
 async function reconcileRoutineExecutions(): Promise<number> {
-  const executions = await routineStore.listExecutions({ limit: 500 });
-  let reconciled = 0;
-  for (const execution of executions) {
-    if (!execution.runId) continue;
-    if (
-      execution.status === 'completed' ||
-      execution.status === 'failed' ||
-      execution.status === 'cancelled'
-    ) {
-      continue;
-    }
-    const run = await deliveryStore.getAgentRun(execution.runId);
-    if (!run) continue;
-    const status =
-      run.status === 'cancel_requested' ? 'running' : run.status;
-    await routineStore.reconcileRun({
-      runId: run.id,
-      status,
-      summary: run.summary,
-      error: run.lastError,
-    });
-    reconciled += 1;
-  }
-  return reconciled;
-}
-
-async function enqueueRoutineClaim(claim: RoutineClaim): Promise<string> {
-  const input = await routineRunInput(claim);
-  const queued = await enqueueMessageRun(input, {
-    runId: `routine:${claim.execution.id}`,
-    metadata: {
-      source: 'routine',
-      routineId: claim.routine.id,
-      routineName: claim.routine.name,
-      routineExecutionId: claim.execution.id,
-      routineTrigger: claim.execution.trigger,
-      routineScheduledFor: claim.execution.scheduledFor,
-    },
-  });
-  await routineStore.markExecutionQueued(
-    claim.execution.id,
-    queued.run.id,
-  );
-  scheduleAgentWorkerPass();
-  return queued.run.id;
+  return routineScheduler.reconcileExecutions();
 }
 
 async function runRoutineSchedulerTick(input?: {
   at?: Date;
   stageDue?: boolean;
 }): Promise<RoutineTickResult> {
-  if (routineTickPass) return routineTickPass;
-  routineTickPass = (async () => {
-    const at = input?.at ?? new Date();
-    const reconciledBefore = await reconcileRoutineExecutions();
-    const staged = input?.stageDue === false
-      ? []
-      : await routineStore.stageDue(at, 100);
-    const claims = await routineStore.claimExecutions({
-      claimerId: routineSchedulerId,
-      limit: 100,
-      staleAfterMs: routineClaimStaleMs,
-      at,
-    });
-    const result: RoutineTickResult = {
-      at: at.toISOString(),
-      staged: staged.length,
-      claimed: claims.length,
-      queued: 0,
-      failed: 0,
-      reconciled: reconciledBefore,
-      executionIds: claims.map((claim) => claim.execution.id),
-      runIds: [],
-    };
-    for (const claim of claims) {
-      try {
-        const runId = await enqueueRoutineClaim(claim);
-        result.queued += 1;
-        result.runIds.push(runId);
-      } catch (error) {
-        result.failed += 1;
-        await routineStore.markExecutionFailed(
-          claim.execution.id,
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-    }
-    result.reconciled += await reconcileRoutineExecutions();
-    routineLastTickAt = result.at;
-    routineLastTickResult = result;
-    return result;
-  })();
-  try {
-    return await routineTickPass;
-  } finally {
-    routineTickPass = undefined;
-  }
+  return routineScheduler.tick(input);
 }
 
 async function routineSnapshot(
@@ -2341,11 +2232,13 @@ async function routineSnapshot(
     audit,
     scheduler: {
       enabled: routinesEnabled,
+      mode: routineSchedulerMode,
       tickIntervalMs: routineTickIntervalMs,
       claimStaleMs: routineClaimStaleMs,
-      running: Boolean(routineTickPass),
-      lastTickAt: routineLastTickAt,
-      lastTickResult: routineLastTickResult,
+      batchSize: routineBatchSize,
+      running: routineScheduler.running,
+      lastTickAt: routineScheduler.lastTickAt,
+      lastTickResult: routineScheduler.lastTickResult,
     },
   };
 }
@@ -2699,8 +2592,10 @@ const server = createServer(async (request, response) => {
         },
         routines: {
           enabled: routinesEnabled,
-          running: Boolean(routineTickPass),
-          lastTickAt: routineLastTickAt,
+          mode: routineSchedulerMode,
+          batchSize: routineBatchSize,
+          running: routineScheduler.running,
+          lastTickAt: routineScheduler.lastTickAt,
         },
         storage: {
           driver: storageDriver,
@@ -2884,11 +2779,13 @@ const server = createServer(async (request, response) => {
         executorRuntime: executorStatus(),
         routines: {
           enabled: routinesEnabled,
+          mode: routineSchedulerMode,
           tickIntervalMs: routineTickIntervalMs,
           claimStaleMs: routineClaimStaleMs,
-          running: Boolean(routineTickPass),
-          lastTickAt: routineLastTickAt,
-          lastTickResult: routineLastTickResult,
+          batchSize: routineBatchSize,
+          running: routineScheduler.running,
+          lastTickAt: routineScheduler.lastTickAt,
+          lastTickResult: routineScheduler.lastTickResult,
         },
         storage: {
           driver: storageDriver,
@@ -3315,7 +3212,9 @@ const server = createServer(async (request, response) => {
           id,
           operatorActor(operatorAuthentication!),
         );
-        const tick = await runRoutineSchedulerTick({ stageDue: false });
+        const tick = routineSchedulerInline
+          ? await runRoutineSchedulerTick({ stageDue: false })
+          : undefined;
         const currentExecution = (
           await routineStore.listExecutions({ routineId: id, limit: 50 })
         ).find((item) => item.id === execution.id);
@@ -3323,6 +3222,7 @@ const server = createServer(async (request, response) => {
           accepted: true,
           execution: currentExecution || execution,
           tick,
+          schedulerMode: routineSchedulerMode,
           routines: await routineSnapshot(execution.routine.workspaceId),
         });
       } catch (error) {
@@ -4406,7 +4306,7 @@ server.listen(port, host, () => {
   console.log(
     `OpenTag storage driver=${storageDriver}${
       sqliteStorage
-        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_pairing=${sqliteStorage.migration.pairingImported} migrated_access=${sqliteStorage.migration.accessImported} migrated_memory=${sqliteStorage.migration.memoryImported}`
+        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_pairing=${sqliteStorage.migration.pairingImported} migrated_access=${sqliteStorage.migration.accessImported} migrated_memory=${sqliteStorage.migration.memoryImported} migrated_routines=${sqliteStorage.migration.routinesImported}`
         : ''
     }`,
   );
@@ -4437,7 +4337,7 @@ server.listen(port, host, () => {
     }, agentWorkerIntervalMs);
     interval.unref?.();
   }
-  if (routinesEnabled) {
+  if (routineSchedulerInline) {
     void runRoutineSchedulerTick().catch((error) => {
       console.error('OpenTag routine startup tick failed', error);
     });

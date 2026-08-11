@@ -24,8 +24,34 @@ function iso(value: Date): string {
   return value.toISOString();
 }
 
-function emptyState(): RoutineState {
+export function createEmptyRoutineState(): RoutineState {
   return { version: 1, routines: [], executions: [], audit: [] };
+}
+
+export function normalizeRoutineState(
+  input: Partial<RoutineState> | Record<string, unknown>,
+): RoutineState {
+  return {
+    version: 1,
+    routines: Array.isArray(input.routines)
+      ? (input.routines as Routine[])
+      : [],
+    executions: Array.isArray(input.executions)
+      ? (input.executions as RoutineExecution[])
+      : [],
+    audit: Array.isArray(input.audit)
+      ? (input.audit as RoutineAuditRecord[])
+      : [],
+  };
+}
+
+export function trimRoutineState(state: RoutineState): void {
+  if (state.executions.length > 2_000) {
+    state.executions.splice(0, state.executions.length - 2_000);
+  }
+  if (state.audit.length > 500) {
+    state.audit.splice(0, state.audit.length - 500);
+  }
 }
 
 function executionCounts(): Record<RoutineExecutionStatus, number> {
@@ -76,14 +102,11 @@ export class FileRoutineStore {
       const parsed = JSON.parse(
         await fs.readFile(this.stateFile, 'utf8'),
       ) as Partial<RoutineState>;
-      return {
-        version: 1,
-        routines: parsed.routines ?? [],
-        executions: parsed.executions ?? [],
-        audit: parsed.audit ?? [],
-      };
+      return normalizeRoutineState(parsed);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyState();
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return createEmptyRoutineState();
+      }
       throw error;
     }
   }
@@ -95,21 +118,16 @@ export class FileRoutineStore {
     await fs.rename(temporary, this.stateFile);
   }
 
-  private async readState(): Promise<RoutineState> {
+  protected async readState(): Promise<RoutineState> {
     await this.mutationQueue;
     return this.load();
   }
 
-  private async mutate<T>(operation: (state: RoutineState) => T): Promise<T> {
+  protected async mutate<T>(operation: (state: RoutineState) => T): Promise<T> {
     const run = this.mutationQueue.then(async () => {
       const state = await this.load();
       const result = operation(state);
-      if (state.executions.length > 2_000) {
-        state.executions.splice(0, state.executions.length - 2_000);
-      }
-      if (state.audit.length > 500) {
-        state.audit.splice(0, state.audit.length - 500);
-      }
+      trimRoutineState(state);
       await this.save(state);
       return result;
     });

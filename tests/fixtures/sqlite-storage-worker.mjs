@@ -14,6 +14,11 @@ try {
       ? await store.consumePairingAndConfigureBinding(workerData.input)
       : workerData.action === 'remember'
         ? await store.memoryStore.rememberScoped(workerData.input)
+        : workerData.action === 'routine-claim'
+          ? await store.routineStore.claimExecutions({
+              ...workerData.input,
+              limit: 1,
+            })
         : await store.deliveryStore.claimReadyOutbox({ limit: 1 });
   parentPort.postMessage({ ok: true, result });
 } catch (error) {

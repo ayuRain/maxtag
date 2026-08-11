@@ -3,12 +3,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { FileThreadConfigStore } from '@opentag/config';
+import { FileDeliveryStore } from '@opentag/delivery';
 import {
   FileRoutineStore,
   RoutineCommandService,
   nextRoutineRunAt,
   parseRoutineCommand,
 } from '@opentag/routines';
+import { RoutineSchedulerService } from '@opentag/runtime-host';
 
 function routineInput(overrides = {}) {
   return {
@@ -237,4 +240,60 @@ test('disabling a routine cancels staged work while manual runs remain auditable
   const scopedAudit = await fixture.store.listAudit({ workspaceId: 'acme' });
   assert.ok(scopedAudit.length > 0);
   assert.ok(scopedAudit.every((entry) => entry.workspaceId === 'acme'));
+});
+
+test('routine scheduler rejects a destination bound to another project', async (context) => {
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'opentag-routine-scope-'),
+  );
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const routineStore = new FileRoutineStore(path.join(root, 'routines'));
+  const deliveryStore = new FileDeliveryStore(path.join(root, 'delivery'));
+  const threadConfigStore = new FileThreadConfigStore(
+    path.join(root, 'config'),
+    {
+      workspace: {
+        id: 'acme',
+        name: 'Acme',
+        defaultProjectId: 'payments',
+      },
+    },
+  );
+  await deliveryStore.configureThreadBinding({
+    platform: 'lark',
+    externalId: 'oc_shared',
+    workspaceId: 'acme',
+    projectId: 'security',
+    scope: 'channel',
+    source: 'configured',
+  });
+  const routine = await routineStore.upsertRoutine(
+    routineInput({
+      destination: {
+        platform: 'lark',
+        externalId: 'oc_shared',
+        channelId: 'oc_shared',
+        visibility: 'public',
+      },
+    }),
+  );
+  const execution = await routineStore.triggerRoutine(routine.id);
+  const scheduler = new RoutineSchedulerService({
+    routineStore,
+    deliveryStore,
+    threadConfigStore,
+    schedulerId: 'scope-test',
+  });
+
+  const result = await scheduler.tick({ stageDue: false });
+  assert.equal(result.queued, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(
+    (await routineStore.listExecutions({ routineId: routine.id }))[0].error,
+    'routine_destination_binding_scope_mismatch',
+  );
+  assert.equal(
+    await deliveryStore.getAgentRun(`routine:${execution.id}`),
+    undefined,
+  );
 });

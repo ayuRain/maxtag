@@ -47,6 +47,8 @@ import {
 } from '@opentag/routines';
 import { SqliteOpenTagStore } from '@opentag/storage-sqlite';
 
+export * from './routine-scheduler.js';
+
 export interface RuntimeHostLarkConfig {
   transportMode?: string;
   appId?: string;
@@ -236,6 +238,11 @@ export class OpenTagWorkerHost {
               'workspace-access.json',
             ),
             legacyMemoryDir: path.join(config.dataDir, 'memory'),
+            legacyRoutineFile: path.join(
+              config.dataDir,
+              'routines',
+              'routine-state.json',
+            ),
           })
         : undefined;
     this.deliveryStore =
@@ -244,9 +251,9 @@ export class OpenTagWorkerHost {
     this.memoryStore =
       this.sqliteStorage?.memoryStore ??
       new ScopedFileMemoryStore(path.join(config.dataDir, 'memory'));
-    this.routineStore = new FileRoutineStore(
-      path.join(config.dataDir, 'routines'),
-    );
+    this.routineStore =
+      this.sqliteStorage?.routineStore ??
+      new FileRoutineStore(path.join(config.dataDir, 'routines'));
     this.routineCommandService = new RoutineCommandService(this.routineStore, {
       defaultTimeZone: config.routines?.defaultTimeZone || 'Asia/Shanghai',
     });
@@ -284,6 +291,7 @@ export class OpenTagWorkerHost {
       pairingImported: boolean;
       accessImported: boolean;
       memoryImported: boolean;
+      routinesImported: boolean;
     };
   } {
     return {

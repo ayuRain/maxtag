@@ -82,9 +82,9 @@ packages/ui-cards           Progress/checklist card models
 - Codex and Claude executors are selected per project. They support safe-by-default
   dry-runs or explicit local CLI execution, and the standalone worker resolves
   the same policy and runtime mode as the HTTP server.
-- Delivery, run, inbound-event, binding, pairing, workspace-access, and memory
-  state defaults to a shared SQLite WAL database. Outbox/run claims and memory
-  revisions are transactional across the HTTP server and standalone workers.
+- Delivery, run, inbound-event, binding, pairing, workspace-access, memory, and
+  routine state defaults to a shared SQLite WAL database. Outbox, run, and
+  routine claims plus memory revisions are transactional across processes.
 - Delivery recovery can requeue stale `sending` records and cancel only the
   selected run/thread/workspace/project scope.
 - Agent runs are recorded in the durable run ledger with status, timeline
@@ -93,6 +93,8 @@ packages/ui-cards           Progress/checklist card models
   inline worker, with stale run recovery on startup and through the admin API.
 - Agent execution can also be claimed by the standalone `apps/worker` process
   against the same `OPENTAG_DATA_DIR`.
+- Routine staging, claiming, and run reconciliation can stay inline or run in
+  the standalone `apps/scheduler` process against the same SQLite database.
 - Workspace and project routines support interval or IANA-time-zone daily
   schedules, client-neutral destinations, manual triggers, deterministic run
   bridging, deduplication, and stale execution reclaim. Routine work enters the
@@ -147,8 +149,7 @@ packages/ui-cards           Progress/checklist card models
 5. Thread-level agent identity and access bundle.
 6. Durable outbound delivery, retry, scoped cancel, and stale recovery.
 7. GitHub draft PR loop.
-8. Production database backing, independent worker deployment, and full run
-   resume.
+8. Supervised worker/scheduler deployment and full run resume.
 
 ## Local Build
 
@@ -172,10 +173,22 @@ npm run worker
 For one-shot smoke tests, set `OPENTAG_WORKER_ONCE=1`; tune claim batch size with
 `OPENTAG_WORKER_BATCH`.
 
+To split scheduling from HTTP ingestion as well, set the server to external
+mode and start the scheduler beside the worker:
+
+```bash
+OPENTAG_AGENT_WORKER=manual OPENTAG_ROUTINE_SCHEDULER=external npm run dev
+npm run scheduler
+npm run worker
+```
+
+Set `OPENTAG_SCHEDULER_ONCE=1` for a one-shot scheduler smoke test. External
+scheduling requires the shared SQLite store.
+
 ## Storage
 
 SQLite WAL is the default for delivery, run, inbound-event, channel-binding,
-pairing, workspace-access, and versioned memory state:
+pairing, workspace-access, versioned memory, and routine state:
 
 ```bash
 OPENTAG_STORAGE_DRIVER=sqlite
@@ -183,19 +196,20 @@ OPENTAG_SQLITE_PATH=./data/opentag.sqlite
 OPENTAG_SQLITE_BUSY_TIMEOUT_MS=5000
 ```
 
-The HTTP server and standalone worker can safely share this database. Outbox
-and run claims use immediate write transactions, and consuming a pairing code
-plus creating its channel binding commits atomically. Memory writes also use an
-immediate transaction, so the server and independent workers cannot overwrite
-one another's revisions. On first startup, OpenTag imports existing
-`delivery-state.json`, `pairing-state.json`, `workspace-access.json`, and scoped
-memory Markdown or `memory-state.json` when their SQLite documents do not yet
-exist. Later restarts use only the database.
+The HTTP server, scheduler, and standalone workers can safely share this
+database. Outbox, run, and routine claims use immediate write transactions, and
+consuming a pairing code plus creating its channel binding commits atomically.
+Memory writes also use an immediate transaction, so independent processes
+cannot overwrite one another's revisions. On first startup, OpenTag imports
+existing `delivery-state.json`, `pairing-state.json`,
+`workspace-access.json`, `routine-state.json`, and scoped memory Markdown or
+`memory-state.json` when their SQLite documents do not yet exist. Later
+restarts use only the database.
 
 Set `OPENTAG_STORAGE_DRIVER=file` only for legacy or isolated local operation.
-Project policy and routines are still file-backed and remain on the
-production-storage roadmap. File-mode memory keeps the same version contract,
-but is intended for one process rather than shared workers.
+Project policy is still file-backed and remains on the production-storage
+roadmap. File-mode memory and routines keep the same behavior contracts, but
+are intended for one process rather than shared workers or schedulers.
 
 ## Operator Authentication
 
@@ -284,16 +298,26 @@ rotation and SSO/OIDC remain later control-plane work.
 
 ## Routines
 
-The server scheduler is enabled by default. It persists routines and execution
-history under `OPENTAG_DATA_DIR`, stages due work without catch-up floods, and
-bridges each execution into a deterministic agent run. Configure it with:
+Routines and execution history live in the shared SQLite WAL store by default.
+The server scheduler is inline by default, stages due work without catch-up
+floods, and bridges each execution into a deterministic agent run. Configure it
+with:
 
 ```bash
 OPENTAG_ROUTINES_ENABLED=true
+OPENTAG_ROUTINE_SCHEDULER=inline
 OPENTAG_ROUTINE_TICK_INTERVAL_MS=30000
 OPENTAG_ROUTINE_CLAIM_STALE_MS=120000
+OPENTAG_ROUTINE_BATCH_SIZE=100
 OPENTAG_DEFAULT_TIME_ZONE=Asia/Shanghai
 ```
+
+Use `OPENTAG_ROUTINE_SCHEDULER=external` on the HTTP server and run
+`npm run scheduler` for an independently supervised scheduler. Use `manual`
+when only explicit `POST /v1/routines/tick` calls should advance work. SQLite
+claims are atomic across competing schedulers, while the deterministic
+`routine:<executionId>` run ID makes a stale reclaim idempotent if a scheduler
+stops between claim and enqueue.
 
 Use the **Routines** console to create interval or daily work, choose a project
 and client destination, trigger a manual run, and open the corresponding run

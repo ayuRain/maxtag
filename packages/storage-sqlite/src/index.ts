@@ -29,12 +29,20 @@ import {
   readLegacyMemoryState,
   type MemoryState,
 } from '@opentag/memory';
+import {
+  FileRoutineStore,
+  createEmptyRoutineState,
+  normalizeRoutineState,
+  trimRoutineState,
+  type RoutineState,
+} from '@opentag/routines';
 
 const SCHEMA_VERSION = 1;
 const DELIVERY_DOCUMENT = 'delivery';
 const PAIRING_DOCUMENT = 'pairing';
 const ACCESS_DOCUMENT = 'access';
 const MEMORY_DOCUMENT = 'memory';
+const ROUTINES_DOCUMENT = 'routines';
 
 interface StateDocumentRow {
   schema_version: number;
@@ -46,6 +54,7 @@ export interface SqliteMigrationSummary {
   pairingImported: boolean;
   accessImported: boolean;
   memoryImported: boolean;
+  routinesImported: boolean;
 }
 
 export interface SqliteOpenTagStoreOptions {
@@ -56,6 +65,7 @@ export interface SqliteOpenTagStoreOptions {
   legacyPairingFile?: string;
   legacyAccessFile?: string;
   legacyMemoryDir?: string;
+  legacyRoutineFile?: string;
 }
 
 export interface AtomicPairingBindingInput extends ConsumePairingCodeInput {
@@ -168,6 +178,14 @@ class SqliteStateBackend {
     );
   }
 
+  readRoutines(): RoutineState {
+    return this.readDocument(
+      ROUTINES_DOCUMENT,
+      normalizeRoutineState,
+      createEmptyRoutineState,
+    );
+  }
+
   mutateDelivery<T>(operation: (state: FileDeliveryState) => T): T {
     return this.immediateTransaction(() => {
       const state = this.readDelivery();
@@ -205,6 +223,16 @@ class SqliteStateBackend {
     });
   }
 
+  mutateRoutines<T>(operation: (state: RoutineState) => T): T {
+    return this.immediateTransaction(() => {
+      const state = this.readRoutines();
+      const result = operation(state);
+      trimRoutineState(state);
+      this.writeDocument(ROUTINES_DOCUMENT, state);
+      return result;
+    });
+  }
+
   mutatePairingAndDelivery<T>(
     operation: (pairing: PairingState, delivery: FileDeliveryState) => T,
   ): T {
@@ -227,6 +255,7 @@ class SqliteStateBackend {
       let pairingImported = false;
       let accessImported = false;
       let memoryImported = false;
+      let routinesImported = false;
       if (!this.hasDocument(DELIVERY_DOCUMENT)) {
         const legacy = readLegacyState(
           options.legacyDeliveryFile,
@@ -261,12 +290,22 @@ class SqliteStateBackend {
         memoryImported = legacy.imported;
         this.writeDocument(MEMORY_DOCUMENT, legacy.state);
       }
+      if (!this.hasDocument(ROUTINES_DOCUMENT)) {
+        const legacy = readLegacyState(
+          options.legacyRoutineFile,
+          (input) => normalizeRoutineState(input),
+          createEmptyRoutineState,
+        );
+        routinesImported = legacy.imported;
+        this.writeDocument(ROUTINES_DOCUMENT, legacy.state);
+      }
       this.database.pragma(`user_version = ${SCHEMA_VERSION}`);
       return {
         deliveryImported,
         pairingImported,
         accessImported,
         memoryImported,
+        routinesImported,
       };
     });
   }
@@ -383,11 +422,28 @@ class SqliteMemoryStore extends StateMemoryStore {
   }
 }
 
+class SqliteRoutineStore extends FileRoutineStore {
+  constructor(private readonly backend: SqliteStateBackend) {
+    super(path.dirname(backend.databasePath));
+  }
+
+  protected override async readState(): Promise<RoutineState> {
+    return this.backend.readRoutines();
+  }
+
+  protected override async mutate<T>(
+    operation: (state: RoutineState) => T,
+  ): Promise<T> {
+    return this.backend.mutateRoutines(operation);
+  }
+}
+
 export class SqliteOpenTagStore {
   readonly deliveryStore: SqliteDeliveryStore;
   readonly pairingStore: SqlitePairingStore;
   readonly accessStore: SqliteWorkspaceAccessStore;
   readonly memoryStore: SqliteMemoryStore;
+  readonly routineStore: SqliteRoutineStore;
   readonly migration: SqliteMigrationSummary;
   readonly databasePath: string;
   private readonly backend: SqliteStateBackend;
@@ -403,6 +459,7 @@ export class SqliteOpenTagStore {
     );
     this.accessStore = new SqliteWorkspaceAccessStore(this.backend);
     this.memoryStore = new SqliteMemoryStore(this.backend);
+    this.routineStore = new SqliteRoutineStore(this.backend);
   }
 
   async consumePairingAndConfigureBinding(

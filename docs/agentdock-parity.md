@@ -19,7 +19,7 @@ many clients.
 | Workspace governance | SQLite-backed workspace members and project roles for client ingress, plus named operator tokens with workspace scopes, owner/admin/viewer control-plane roles, signed principal sessions, and authoritative operator audit identity |
 | Durable delivery | SQLite WAL outbox, turn delivery records, atomic cross-process claims, scoped cancel, stale recovery, and bindings; legacy file mode remains available |
 | Agent run queue | SQLite WAL run status, timeline events, cancel requests, inline or standalone worker claim, restart persistence, and stale recovery |
-| Scheduled tasks | File-backed workspace/project routines with interval or daily schedules, IANA time zones, manual trigger, deduped execution claims, stale reclaim, and shared run-queue execution; Lark and Telegram topics support bilingual create/list/pause/resume/delete commands with requester audit |
+| Scheduled tasks | SQLite WAL-backed workspace/project routines with interval or daily schedules, IANA time zones, manual trigger, atomic cross-process claims, stale reclaim, deterministic run enqueue, inline/external/manual scheduler modes, and shared worker execution; Lark and Telegram topics support bilingual create/list/pause/resume/delete commands with requester audit |
 | Inbound callback ledger | Lark token/timestamp and Telegram webhook-secret checks, event idempotency, and duplicate short-circuit |
 | Native Telegram client | Bot API webhook normalization, forum topics, send/edit progress, reply chunking, outgoing files, and tracked delivery |
 | Executor boundary | Project-selectable Codex and Claude dry-run/local CLI modes with bounded output, cancellation, timeout, and filtered child environments |
@@ -39,7 +39,7 @@ many clients.
 | Operator credential lifecycle | Add in-product credential creation, revocation, rotation, finer-grained operator capabilities, and optional SSO/OIDC; environment-configured named principals and workspace enforcement are implemented |
 | Encrypted Lark callbacks | Implement decrypt path before enabling encrypted events in production |
 | Memory governance | Add optional approval policy, retention/compaction controls, diff rendering, and export; durable transactional writes, audit history, legacy import, and admin restore are implemented |
-| Routine production hardening | Move routine state and claims to the production database, run scheduler under a supervisor, and verify real Lark delivery and restart recovery |
+| Routine production hardening | Add production supervisor manifests, queue-depth/lease metrics, and real Lark delivery plus restart smoke evidence for the independent scheduler |
 | Dynamic workflows | Add saved workflow definitions and async workflow runs |
 | Tooling depth | Replace direct CLI permission mapping with brokered GitHub, Lark Docs/Base, browser, and shell tools |
 

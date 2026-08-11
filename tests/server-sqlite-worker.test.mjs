@@ -176,6 +176,7 @@ test(
       pairingImported: false,
       accessImported: false,
       memoryImported: false,
+      routinesImported: false,
     });
     const afterRestart = await fetch(
       `${secondServer.baseUrl}/v1/runs?limit=20`,

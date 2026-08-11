@@ -9,6 +9,7 @@ import {
   FileWorkspaceAccessStore,
 } from '../packages/config/dist/index.js';
 import { FileDeliveryStore } from '../packages/delivery/dist/index.js';
+import { FileRoutineStore } from '../packages/routines/dist/index.js';
 import { SqliteOpenTagStore } from '../packages/storage-sqlite/dist/index.js';
 
 const workerFile = new URL('./fixtures/sqlite-storage-worker.mjs', import.meta.url);
@@ -65,7 +66,9 @@ test('SQLite storage imports existing file state once and preserves it', async (
   const filePairing = new FilePairingStore(pairingDir, { ttlMs: 600_000 });
   const accessDir = path.join(root, 'access');
   const memoryDir = path.join(root, 'memory');
+  const routineDir = path.join(root, 'routines');
   const fileAccess = new FileWorkspaceAccessStore(accessDir);
+  const fileRoutines = new FileRoutineStore(routineDir);
   await fileDelivery.configureThreadBinding({
     platform: 'lark',
     externalId: 'legacy-channel',
@@ -106,6 +109,18 @@ test('SQLite storage imports existing file state once and preserves it', async (
     '- legacy project memory\n',
     'utf8',
   );
+  const legacyRoutine = await fileRoutines.upsertRoutine({
+    workspaceId: 'dev-workspace',
+    projectId: 'legacy-project',
+    name: 'Legacy digest',
+    instructions: 'Summarize legacy project activity.',
+    schedule: { kind: 'interval', everyMinutes: 60 },
+    destination: {
+      platform: 'lark',
+      externalId: 'legacy-channel',
+      visibility: 'public',
+    },
+  });
 
   const databasePath = path.join(root, 'opentag.sqlite');
   const sqlite = new SqliteOpenTagStore({
@@ -115,12 +130,14 @@ test('SQLite storage imports existing file state once and preserves it', async (
     legacyPairingFile: path.join(pairingDir, 'pairing-state.json'),
     legacyAccessFile: path.join(accessDir, 'workspace-access.json'),
     legacyMemoryDir: memoryDir,
+    legacyRoutineFile: path.join(routineDir, 'routine-state.json'),
   });
   assert.deepEqual(sqlite.migration, {
     deliveryImported: true,
     pairingImported: true,
     accessImported: true,
     memoryImported: true,
+    routinesImported: true,
   });
   assert.equal((await sqlite.deliveryStore.listThreadBindings()).length, 1);
   assert.equal((await sqlite.deliveryStore.listOutbox()).length, 1);
@@ -148,6 +165,10 @@ test('SQLite storage imports existing file state once and preserves it', async (
     })).revisions[0].action,
     'import',
   );
+  assert.equal(
+    (await sqlite.routineStore.getRoutine(legacyRoutine.id))?.name,
+    'Legacy digest',
+  );
 
   const paired = await sqlite.consumePairingAndConfigureBinding({
     platform: 'lark',
@@ -167,12 +188,14 @@ test('SQLite storage imports existing file state once and preserves it', async (
     legacyPairingFile: path.join(pairingDir, 'pairing-state.json'),
     legacyAccessFile: path.join(accessDir, 'workspace-access.json'),
     legacyMemoryDir: memoryDir,
+    legacyRoutineFile: path.join(routineDir, 'routine-state.json'),
   });
   assert.deepEqual(reopened.migration, {
     deliveryImported: false,
     pairingImported: false,
     accessImported: false,
     memoryImported: false,
+    routinesImported: false,
   });
   assert.equal(
     (await reopened.deliveryStore.getThreadBinding('lark', 'sqlite-channel'))
@@ -195,6 +218,10 @@ test('SQLite storage imports existing file state once and preserves it', async (
       })
     ).scopes[0].content,
     /legacy project memory/,
+  );
+  assert.equal(
+    (await reopened.routineStore.getRoutine(legacyRoutine.id))?.name,
+    'Legacy digest',
   );
 });
 
@@ -306,5 +333,31 @@ test(
     assert.equal(history.revisions.length, 2);
     assert.match(history.document.content, /memory from worker A/);
     assert.match(history.document.content, /memory from worker B/);
+
+    const routine = await store.routineStore.upsertRoutine({
+      workspaceId: 'workspace-race',
+      projectId: 'project-race',
+      name: 'Race-safe digest',
+      instructions: 'Summarize the project once.',
+      schedule: { kind: 'interval', everyMinutes: 60 },
+      destination: {
+        platform: 'telegram',
+        externalId: 'same-target',
+        visibility: 'public',
+      },
+    });
+    const execution = await store.routineStore.triggerRoutine(routine.id);
+    const routineClaims = await runContendingWorkers(
+      databasePath,
+      'routine-claim',
+      [{ claimerId: 'scheduler-a' }, { claimerId: 'scheduler-b' }],
+    );
+    assert.equal(routineClaims.flat().length, 1);
+    assert.equal(routineClaims.flat()[0].execution.id, execution.id);
+    assert.equal(
+      (await store.routineStore.listExecutions({ routineId: routine.id }))[0]
+        .attempts,
+      1,
+    );
   },
 );
