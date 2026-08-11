@@ -2,10 +2,15 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {
+  AgentRunEventType,
+  AgentRunRecord,
+  AgentRunStatus,
+  AgentRunTimelineEvent,
   CancelOutboxOptions,
   CancelOutboxResult,
   ClaimOutboundOptions,
   ConfigureThreadBindingInput,
+  CreateAgentRunInput,
   CreateOutboundInput,
   DeliverySummary,
   FileDeliveryState,
@@ -22,6 +27,7 @@ import type {
   ThreadBindingScope,
   TurnDeliveryRecord,
   TurnDeliveryStatus,
+  ListAgentRunsOptions,
   UpsertThreadBindingInput,
 } from './types.js';
 
@@ -31,6 +37,8 @@ const EMPTY_STATE: FileDeliveryState = {
   turnDeliveries: [],
   threadBindings: [],
   inboundEvents: [],
+  agentRuns: [],
+  agentRunEvents: [],
 };
 
 function now(): string {
@@ -44,6 +52,8 @@ function cloneEmptyState(): FileDeliveryState {
     turnDeliveries: [],
     threadBindings: [],
     inboundEvents: [],
+    agentRuns: [],
+    agentRunEvents: [],
   };
 }
 
@@ -130,6 +140,14 @@ function emptySummary(): DeliverySummary {
       rejected: 0,
       duplicates: 0,
     },
+    agentRuns: {
+      queued: 0,
+      running: 0,
+      cancel_requested: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+    },
     bindings: 0,
   };
 }
@@ -153,6 +171,8 @@ export class FileDeliveryStore {
         turnDeliveries: parsed.turnDeliveries ?? [],
         threadBindings: parsed.threadBindings ?? [],
         inboundEvents: parsed.inboundEvents ?? [],
+        agentRuns: parsed.agentRuns ?? [],
+        agentRunEvents: parsed.agentRunEvents ?? [],
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -406,6 +426,169 @@ export class FileDeliveryStore {
     });
   }
 
+  async createAgentRun(input: CreateAgentRunInput): Promise<AgentRunRecord> {
+    return this.mutate((state) => {
+      const timestamp = now();
+      const existing = state.agentRuns.find((run) => run.id === input.runId);
+      if (existing) return { ...existing };
+      const record: AgentRunRecord = {
+        id: input.runId,
+        status: 'queued',
+        platform: input.thread.platform,
+        threadId: input.thread.id,
+        threadExternalId: input.thread.externalId,
+        workspaceId: input.thread.workspaceId,
+        projectId: input.thread.projectId,
+        messageId: input.message?.id,
+        actorId: input.message?.actor.id,
+        bindingId: input.bindingId,
+        executorId: input.executorId,
+        transportMode: input.transportMode,
+        title: input.thread.title,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        metadata: input.metadata,
+      };
+      state.agentRuns.push(record);
+      this.appendAgentRunEventInState(state, input.runId, 'created', {
+        message: 'Agent run created',
+        metadata: {
+          threadId: input.thread.id,
+          messageId: input.message?.id,
+          bindingId: input.bindingId,
+        },
+      });
+      return { ...record };
+    });
+  }
+
+  async markAgentRunRunning(id: string): Promise<AgentRunRecord | undefined> {
+    return this.updateAgentRun(id, 'running', {
+      startedAt: now(),
+      event: {
+        type: 'started',
+        message: 'Agent run started',
+      },
+    });
+  }
+
+  async markAgentRunCompleted(
+    id: string,
+    summary?: string,
+  ): Promise<AgentRunRecord | undefined> {
+    const timestamp = now();
+    return this.updateAgentRun(id, 'completed', {
+      completedAt: timestamp,
+      summary,
+      event: {
+        type: 'completed',
+        message: summary ?? 'Agent run completed',
+      },
+    });
+  }
+
+  async markAgentRunFailed(
+    id: string,
+    error: string,
+  ): Promise<AgentRunRecord | undefined> {
+    const timestamp = now();
+    return this.updateAgentRun(id, 'failed', {
+      failedAt: timestamp,
+      lastError: error,
+      event: {
+        type: 'failed',
+        message: error,
+      },
+    });
+  }
+
+  async requestAgentRunCancel(
+    id: string,
+    reason?: string,
+  ): Promise<AgentRunRecord | undefined> {
+    return this.mutate((state) => {
+      const run = state.agentRuns.find((item) => item.id === id);
+      if (!run) return undefined;
+      if (
+        run.status === 'completed' ||
+        run.status === 'failed' ||
+        run.status === 'cancelled'
+      ) {
+        return { ...run };
+      }
+      const timestamp = now();
+      run.status = 'cancel_requested';
+      run.cancelRequestedAt = timestamp;
+      run.lastError = reason ?? run.lastError;
+      run.updatedAt = timestamp;
+      this.appendAgentRunEventInState(state, id, 'cancel_requested', {
+        message: reason ?? 'Cancel requested',
+      });
+      return { ...run };
+    });
+  }
+
+  async markAgentRunCancelled(
+    id: string,
+    reason?: string,
+  ): Promise<AgentRunRecord | undefined> {
+    const timestamp = now();
+    return this.updateAgentRun(id, 'cancelled', {
+      cancelledAt: timestamp,
+      lastError: reason,
+      event: {
+        type: 'cancelled',
+        message: reason ?? 'Agent run cancelled',
+      },
+    });
+  }
+
+  async appendAgentRunEvent(
+    runId: string,
+    type: AgentRunEventType,
+    input?: {
+      message?: string;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<AgentRunTimelineEvent> {
+    return this.mutate((state) =>
+      this.appendAgentRunEventInState(state, runId, type, input),
+    );
+  }
+
+  async getAgentRun(id: string): Promise<AgentRunRecord | undefined> {
+    const state = await this.readState();
+    const run = state.agentRuns.find((item) => item.id === id);
+    return run ? { ...run } : undefined;
+  }
+
+  async listAgentRuns(
+    options: ListAgentRunsOptions = {},
+  ): Promise<AgentRunRecord[]> {
+    const state = await this.readState();
+    const limit = options.limit ?? 50;
+    return state.agentRuns
+      .filter((item) => !options.status || item.status === options.status)
+      .filter((item) => !options.workspaceId || item.workspaceId === options.workspaceId)
+      .filter((item) => !options.projectId || item.projectId === options.projectId)
+      .filter((item) => !options.threadId || item.threadId === options.threadId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, limit)
+      .map((item) => ({ ...item }));
+  }
+
+  async listAgentRunEvents(
+    runId: string,
+    limit = 100,
+  ): Promise<AgentRunTimelineEvent[]> {
+    const state = await this.readState();
+    return state.agentRunEvents
+      .filter((item) => item.runId === runId)
+      .sort((a, b) => a.at.localeCompare(b.at))
+      .slice(-limit)
+      .map((item) => ({ ...item }));
+  }
+
   async listOutbox(options?: {
     runId?: string;
     status?: OutboundStatus;
@@ -609,8 +792,74 @@ export class FileDeliveryStore {
       summary.inboundEvents[item.status] += 1;
       summary.inboundEvents.duplicates += item.duplicateCount;
     }
+    for (const item of state.agentRuns) {
+      summary.agentRuns[item.status] += 1;
+    }
     summary.bindings = state.threadBindings.length;
     return summary;
+  }
+
+  private appendAgentRunEventInState(
+    state: FileDeliveryState,
+    runId: string,
+    type: AgentRunEventType,
+    input?: {
+      message?: string;
+      metadata?: Record<string, unknown>;
+    },
+  ): AgentRunTimelineEvent {
+    const event: AgentRunTimelineEvent = {
+      id: randomUUID(),
+      runId,
+      type,
+      at: now(),
+      message: input?.message,
+      metadata: input?.metadata,
+    };
+    state.agentRunEvents.push(event);
+    return { ...event };
+  }
+
+  private async updateAgentRun(
+    id: string,
+    status: AgentRunStatus,
+    input?: {
+      startedAt?: string;
+      completedAt?: string;
+      failedAt?: string;
+      cancelRequestedAt?: string;
+      cancelledAt?: string;
+      summary?: string;
+      lastError?: string;
+      event?: {
+        type: AgentRunEventType;
+        message?: string;
+        metadata?: Record<string, unknown>;
+      };
+    },
+  ): Promise<AgentRunRecord | undefined> {
+    return this.mutate((state) => {
+      const run = state.agentRuns.find((item) => item.id === id);
+      if (!run) return undefined;
+      const timestamp = now();
+      run.status = status;
+      run.startedAt = input?.startedAt ?? run.startedAt;
+      run.completedAt = input?.completedAt ?? run.completedAt;
+      run.failedAt = input?.failedAt ?? run.failedAt;
+      run.cancelRequestedAt =
+        input?.cancelRequestedAt ?? run.cancelRequestedAt;
+      run.cancelledAt = input?.cancelledAt ?? run.cancelledAt;
+      run.summary = input?.summary ?? run.summary;
+      run.lastError = input?.lastError ?? run.lastError;
+      run.updatedAt = timestamp;
+      if (input?.event) {
+        this.appendAgentRunEventInState(state, id, input.event.type, {
+          message: input.event.message,
+          metadata: input.event.metadata,
+        });
+      }
+      return { ...run };
+    });
   }
 
   private upsertBindingInState(

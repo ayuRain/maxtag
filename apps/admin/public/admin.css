@@ -227,7 +227,8 @@ select:focus {
 .scope-list,
 .parity-list,
 .delivery-list,
-.binding-list {
+.binding-list,
+.run-list {
   display: grid;
 }
 
@@ -235,7 +236,8 @@ select:focus {
 .scope-row,
 .parity-row,
 .delivery-row,
-.binding-row {
+.binding-row,
+.run-row {
   display: grid;
   align-items: center;
   gap: 12px;
@@ -263,7 +265,7 @@ select:focus {
 
 .delivery-actions {
   display: grid;
-  grid-template-columns: auto auto;
+  grid-template-columns: auto auto auto;
   justify-content: start;
   gap: 8px;
 }
@@ -315,6 +317,10 @@ select:focus {
 
 .binding-row {
   grid-template-columns: minmax(88px, 0.8fr) minmax(88px, 0.8fr) 84px;
+}
+
+.run-row {
+  grid-template-columns: minmax(110px, 1fr) 118px minmax(110px, 1fr);
 }
 
 .binding-form {
@@ -415,6 +421,19 @@ select:focus {
 
 .state.always {
   color: var(--green);
+}
+
+.state.running,
+.state.queued {
+  color: var(--amber);
+}
+
+.state.completed {
+  color: var(--green);
+}
+
+.state.cancel_requested {
+  color: var(--amber);
 }
 
 .state.failed {
@@ -565,7 +584,8 @@ pre {
   .scope-row,
   .parity-row,
   .delivery-row,
-  .binding-row {
+  .binding-row,
+  .run-row {
     grid-template-columns: 1fr;
     gap: 4px;
   }

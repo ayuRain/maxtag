@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import {
   OpenTagRuntime,
   StaticThreadConfigStore,
+  type AgentRunEvent,
   type MemoryScopeKind,
   type Project,
   type SourceMessage,
@@ -57,6 +58,7 @@ const larkCallbackMaxSkewSeconds = Number(
 );
 const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
 const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
+const activeRuns = new Map<string, AbortController>();
 const threadConfigStore = new StaticThreadConfigStore({
   identity: {
     displayName: 'OpenTag',
@@ -543,6 +545,39 @@ function formatMemoryContent(content: string): string {
   return trimmed.length <= 1500 ? trimmed : `${trimmed.slice(0, 1500)}...`;
 }
 
+function agentRunEventSummary(event: AgentRunEvent): {
+  message?: string;
+  metadata?: Record<string, unknown>;
+} {
+  if (event.type === 'progress') {
+    return {
+      message: event.message ?? event.item.label,
+      metadata: {
+        item: event.item,
+      },
+    };
+  }
+  if (event.type === 'artifact') {
+    return {
+      message: event.artifact.title,
+      metadata: {
+        artifact: event.artifact,
+      },
+    };
+  }
+  if (event.type === 'text_delta') {
+    return {
+      message: event.text,
+    };
+  }
+  return {
+    message: event.message,
+    metadata: {
+      level: event.level,
+    },
+  };
+}
+
 async function applyMemoryCommand(input: {
   command: ParsedMemoryCommand;
   thread: SourceThread;
@@ -633,11 +668,32 @@ async function runDryMessage(input: {
   const memoryCommand = parseMemoryCommand(routed.message.text, {
     defaultScope: memoryCommandDefaultScope(routed.thread),
   });
+  await deliveryStore.createAgentRun({
+    runId,
+    thread: routed.thread,
+    message: routed.message,
+    bindingId: routeBinding.id,
+    executorId: memoryCommand ? 'memory-command' : 'codex',
+    transportMode: larkTransport.mode,
+    metadata: {
+      memoryCommand: memoryCommand
+        ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
+        : undefined,
+    },
+  });
   if (memoryCommand) {
     try {
+      await deliveryStore.markAgentRunRunning(runId);
       const commandResult = await applyMemoryCommand({
         command: memoryCommand,
         thread: routed.thread,
+      });
+      await deliveryStore.appendAgentRunEvent(runId, 'memory_command', {
+        message: String(commandResult.summary),
+        metadata: {
+          kind: memoryCommand.kind,
+          scope: memoryCommand.scope,
+        },
       });
       await trackedTransport.sendText({
         chatId: routed.thread.channelId || routed.thread.externalId,
@@ -658,11 +714,16 @@ async function runDryMessage(input: {
           messageId: routed.message.id,
         });
       }
+      await deliveryStore.markAgentRunCompleted(
+        runId,
+        String(commandResult.summary),
+      );
       return {
         result: {
           summary: commandResult.summary,
           artifacts: [],
         },
+        run: await deliveryStore.getAgentRun(runId),
         route,
         memoryCommand: {
           kind: memoryCommand.kind,
@@ -679,21 +740,34 @@ async function runDryMessage(input: {
           : undefined,
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await deliveryStore.markAgentRunFailed(runId, message);
       if (options?.inboundEventId) {
         await deliveryStore.markInboundEventFailed(
           options.inboundEventId,
-          error instanceof Error ? error.message : String(error),
+          message,
         );
       }
       throw error;
     }
   }
   let result;
+  const abortController = new AbortController();
+  activeRuns.set(runId, abortController);
   try {
+    await deliveryStore.markAgentRunRunning(runId);
     result = await runtime.handleMessage({
       runId,
       thread: routed.thread,
       message: routed.message,
+      abortSignal: abortController.signal,
+      onEvent: async (event) => {
+        await deliveryStore.appendAgentRunEvent(
+          runId,
+          event.type,
+          agentRunEventSummary(event),
+        );
+      },
     });
     if (options?.inboundEventId) {
       await deliveryStore.markInboundEventProcessed(options.inboundEventId, {
@@ -703,18 +777,28 @@ async function runDryMessage(input: {
         messageId: routed.message.id,
       });
     }
+    await deliveryStore.markAgentRunCompleted(runId, result.summary);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (abortController.signal.aborted) {
+      await deliveryStore.markAgentRunCancelled(runId, message);
+    } else {
+      await deliveryStore.markAgentRunFailed(runId, message);
+    }
     if (options?.inboundEventId) {
       await deliveryStore.markInboundEventFailed(
         options.inboundEventId,
-        error instanceof Error ? error.message : String(error),
+        message,
       );
     }
     throw error;
+  } finally {
+    activeRuns.delete(runId);
   }
   const delivery = await deliverySnapshot(20);
   return {
     result,
+    run: await deliveryStore.getAgentRun(runId),
     route,
     delivery,
     larkTransport: { mode: larkTransport.mode },
@@ -883,6 +967,80 @@ const server = createServer(async (request, response) => {
       );
       sendJson(response, 200, {
         retried: await deliveryStore.retryFailedOutbox(id),
+        delivery: await deliverySnapshot(20),
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/runs') {
+      const query = Object.fromEntries(url.searchParams.entries());
+      sendJson(response, 200, {
+        runs: await deliveryStore.listAgentRuns({
+          status:
+            query.status === 'queued' ||
+            query.status === 'running' ||
+            query.status === 'cancel_requested' ||
+            query.status === 'completed' ||
+            query.status === 'failed' ||
+            query.status === 'cancelled'
+              ? query.status
+              : undefined,
+          workspaceId: stringValue(query, 'workspaceId'),
+          projectId: stringValue(query, 'projectId'),
+          threadId: stringValue(query, 'threadId'),
+          limit: numberValue(query, 'limit', 20),
+        }),
+      });
+      return;
+    }
+
+    if (
+      request.method === 'GET' &&
+      url.pathname.startsWith('/v1/runs/') &&
+      url.pathname.endsWith('/events')
+    ) {
+      const id = decodeURIComponent(
+        url.pathname.slice('/v1/runs/'.length, -'/events'.length),
+      );
+      const run = await deliveryStore.getAgentRun(id);
+      if (!run) {
+        sendJson(response, 404, { error: 'run_not_found' });
+        return;
+      }
+      sendJson(response, 200, {
+        run,
+        events: await deliveryStore.listAgentRunEvents(
+          id,
+          Number(url.searchParams.get('limit') || 100),
+        ),
+      });
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      url.pathname.startsWith('/v1/runs/') &&
+      url.pathname.endsWith('/cancel')
+    ) {
+      const id = decodeURIComponent(
+        url.pathname.slice('/v1/runs/'.length, -'/cancel'.length),
+      );
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const reason = stringValue(body, 'reason', 'operator_cancelled_run');
+      const run = await deliveryStore.requestAgentRunCancel(id, reason);
+      if (!run) {
+        sendJson(response, 404, { error: 'run_not_found' });
+        return;
+      }
+      activeRuns.get(id)?.abort(reason);
+      const cancelledOutbox = await deliveryStore.cancelOutbox({
+        runId: id,
+        reason,
+      });
+      sendJson(response, 200, {
+        run: await deliveryStore.getAgentRun(id),
+        active: activeRuns.has(id),
+        cancelledOutbox,
         delivery: await deliverySnapshot(20),
       });
       return;

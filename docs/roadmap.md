@@ -13,6 +13,7 @@
 - File-backed outbox, inbound event ledger, turn delivery tracker, and
   configured channel/project bindings.
 - Outbox recovery controls for stale `sending` records and scoped cancellation.
+- File-backed agent run ledger with status, cancel request, and timeline events.
 - Memory and GitHub tool contracts.
 
 ## Phase 1: Lark Tag MVP
@@ -41,7 +42,8 @@
 - Run Codex and Claude through a common `Executor` contract.
 - Support turn steering while a run is active.
 - Attach artifacts: final message, file, patch, hosted report, PR link.
-- Record agent-run timeline for admin and audit views.
+- Move agent runs to resumable background workers with DB-backed timeline
+  storage.
 
 ## Phase 3: Access Bundles
 

@@ -1,4 +1,4 @@
-import type { PlatformKind, SourceThread } from '@opentag/core';
+import type { PlatformKind, SourceMessage, SourceThread } from '@opentag/core';
 
 export type OutboundStatus =
   | 'pending'
@@ -19,6 +19,27 @@ export type ThreadActivationMode = 'mention' | 'always';
 export type ThreadBindingScope = 'thread' | 'channel';
 
 export type ThreadBindingSource = 'observed' | 'configured';
+
+export type AgentRunStatus =
+  | 'queued'
+  | 'running'
+  | 'cancel_requested'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type AgentRunEventType =
+  | 'created'
+  | 'started'
+  | 'progress'
+  | 'text_delta'
+  | 'artifact'
+  | 'log'
+  | 'completed'
+  | 'failed'
+  | 'cancel_requested'
+  | 'cancelled'
+  | 'memory_command';
 
 export type InboundEventStatus =
   | 'received'
@@ -99,6 +120,59 @@ export interface CancelOutboxOptions extends OutboxScopeFilter {
 export interface CancelOutboxResult {
   cancelled: number;
   records: OutboundEnvelope[];
+}
+
+export interface AgentRunRecord {
+  id: string;
+  status: AgentRunStatus;
+  platform: PlatformKind;
+  threadId: string;
+  threadExternalId: string;
+  workspaceId?: string;
+  projectId?: string;
+  messageId?: string;
+  actorId?: string;
+  bindingId?: string;
+  executorId?: string;
+  transportMode?: string;
+  title?: string;
+  summary?: string;
+  lastError?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  failedAt?: string;
+  cancelRequestedAt?: string;
+  cancelledAt?: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AgentRunTimelineEvent {
+  id: string;
+  runId: string;
+  type: AgentRunEventType;
+  at: string;
+  message?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateAgentRunInput {
+  runId: string;
+  thread: SourceThread;
+  message?: SourceMessage;
+  bindingId?: string;
+  executorId?: string;
+  transportMode?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ListAgentRunsOptions {
+  status?: AgentRunStatus;
+  workspaceId?: string;
+  projectId?: string;
+  threadId?: string;
+  limit?: number;
 }
 
 export interface TurnDeliveryRecord {
@@ -201,6 +275,7 @@ export interface DeliverySummary {
   outbox: Record<OutboundStatus, number>;
   turnDeliveries: Record<TurnDeliveryStatus, number>;
   inboundEvents: Record<InboundEventStatus, number> & { duplicates: number };
+  agentRuns: Record<AgentRunStatus, number>;
   bindings: number;
 }
 
@@ -210,4 +285,6 @@ export interface FileDeliveryState {
   turnDeliveries: TurnDeliveryRecord[];
   threadBindings: ThreadBinding[];
   inboundEvents: InboundEventRecord[];
+  agentRuns: AgentRunRecord[];
+  agentRunEvents: AgentRunTimelineEvent[];
 }

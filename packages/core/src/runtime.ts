@@ -39,6 +39,7 @@ export class OpenTagRuntime {
     thread: SourceThread;
     message: SourceMessage;
     abortSignal?: AbortSignal;
+    onEvent?: (event: AgentRunEvent) => void | Promise<void>;
   }): Promise<AgentRunResult> {
     const now = () => (this.deps.clock ?? (() => new Date()))().toISOString();
     let state: ProgressState = {
@@ -104,6 +105,7 @@ export class OpenTagRuntime {
     await progress.update(surfaceId, state);
 
     const onEvent = async (event: AgentRunEvent): Promise<void> => {
+      await input.onEvent?.(event);
       if (event.type === 'progress') {
         state = {
           ...state,

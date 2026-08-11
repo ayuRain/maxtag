@@ -10,7 +10,9 @@ const parity = document.querySelector('#parity');
 const routeLine = document.querySelector('#route-line');
 const delivery = document.querySelector('#delivery');
 const recoverDeliveryButton = document.querySelector('#recover-delivery');
+const cancelRunButton = document.querySelector('#cancel-run');
 const cancelDeliveryButton = document.querySelector('#cancel-delivery');
+const runs = document.querySelector('#runs');
 const bindings = document.querySelector('#bindings');
 const bindingForm = document.querySelector('#binding-form');
 const bindingExternalId = document.querySelector('#binding-external-id');
@@ -26,6 +28,7 @@ const memoryOutput = document.querySelector('#memory-output');
 const showMemoryButton = document.querySelector('#show-memory');
 const saveMemoryButton = document.querySelector('#save-memory');
 const forgetMemoryButton = document.querySelector('#forget-memory');
+let runsCache = [];
 
 async function getJson(url, options) {
   const response = await fetch(url, options);
@@ -222,6 +225,22 @@ function renderBindings(items) {
   });
 }
 
+function renderRuns(items) {
+  runsCache = items;
+  renderRows(runs, items, (item) => {
+    const row = document.createElement('div');
+    row.className = 'run-row';
+    appendText(row, 'row-main', item.summary || item.id);
+    appendState(row, item.status);
+    appendText(
+      row,
+      'row-detail',
+      `${item.workspaceId || 'workspace'} / ${item.projectId || 'project'}`,
+    );
+    return row;
+  });
+}
+
 async function refreshHealth() {
   try {
     await getJson('/health');
@@ -250,6 +269,15 @@ async function refreshDelivery() {
     renderDelivery(await getJson('/v1/deliveries?limit=4'));
   } catch (error) {
     delivery.textContent = error.message;
+  }
+}
+
+async function refreshRuns() {
+  try {
+    const data = await getJson('/v1/runs?limit=6');
+    renderRuns(data.runs || []);
+  } catch (error) {
+    runs.textContent = error.message;
   }
 }
 
@@ -295,6 +323,33 @@ async function cancelProjectDelivery() {
   } finally {
     cancelDeliveryButton.disabled = false;
     cancelDeliveryButton.textContent = 'Cancel project';
+  }
+}
+
+async function cancelLatestRun() {
+  const run = runsCache.find((item) =>
+    ['queued', 'running', 'cancel_requested'].includes(item.status),
+  );
+  if (!run) {
+    routeLine.textContent = 'no active run';
+    return;
+  }
+  cancelRunButton.disabled = true;
+  cancelRunButton.textContent = 'Cancelling';
+  try {
+    const data = await getJson(`/v1/runs/${encodeURIComponent(run.id)}/cancel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: 'admin_cancel_run' }),
+    });
+    renderDelivery(data.delivery);
+    await refreshRuns();
+    routeLine.textContent = `cancel requested ${run.id.slice(0, 8)}`;
+  } catch (error) {
+    routeLine.textContent = error.message;
+  } finally {
+    cancelRunButton.disabled = false;
+    cancelRunButton.textContent = 'Cancel run';
   }
 }
 
@@ -419,6 +474,7 @@ async function runDryRun() {
     if (firstCard) renderCard(firstCard);
     output.textContent = firstText || JSON.stringify(data.result, null, 2);
     renderDelivery(data.delivery);
+    await refreshRuns();
     routeLine.textContent = data.route
       ? `${data.route.workspaceId || 'workspace'} / ${data.route.projectId || 'project'}`
       : 'completed';
@@ -437,6 +493,10 @@ runButton.addEventListener('click', () => {
 
 recoverDeliveryButton.addEventListener('click', () => {
   void recoverDelivery();
+});
+
+cancelRunButton.addEventListener('click', () => {
+  void cancelLatestRun();
 });
 
 cancelDeliveryButton.addEventListener('click', () => {
@@ -462,4 +522,5 @@ forgetMemoryButton.addEventListener('click', () => {
 await refreshHealth();
 await refreshCapabilities();
 await refreshDelivery();
+await refreshRuns();
 await refreshBindings();
