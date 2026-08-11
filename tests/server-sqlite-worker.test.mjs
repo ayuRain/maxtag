@@ -155,6 +155,7 @@ test(
     assert.deepEqual(secondServer.health.storage.migration, {
       deliveryImported: false,
       pairingImported: false,
+      accessImported: false,
     });
     const afterRestart = await fetch(
       `${secondServer.baseUrl}/v1/runs?limit=20`,

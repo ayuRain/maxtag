@@ -223,6 +223,11 @@ export class OpenTagWorkerHost {
               'pairing',
               'pairing-state.json',
             ),
+            legacyAccessFile: path.join(
+              config.dataDir,
+              'access',
+              'workspace-access.json',
+            ),
           })
         : undefined;
     this.deliveryStore =
@@ -266,7 +271,11 @@ export class OpenTagWorkerHost {
   storageStatus(): {
     driver: 'file' | 'sqlite';
     wal: boolean;
-    migration?: { deliveryImported: boolean; pairingImported: boolean };
+    migration?: {
+      deliveryImported: boolean;
+      pairingImported: boolean;
+      accessImported: boolean;
+    };
   } {
     return {
       driver: this.sqliteStorage ? 'sqlite' : 'file',

@@ -9,6 +9,10 @@ clients of the same thread-agent core.
   Slack thread, GitHub issue, GitHub pull request comment thread.
 - `Workspace`: the installation-level boundary for one global bot.
 - `Project`: the group/repo/team boundary that keeps memory and grants separate.
+- `WorkspaceMember`: a person linked to stable identities from one or more
+  clients.
+- `ProjectMembership`: the project role used to authorize invocation, memory
+  writes, and standing-work changes.
 - `PlatformAdapter`: normalizes inbound events and renders outbound progress.
 - `ProgressSurface`: the best available UI for that client. Lark uses cards;
   Telegram can use edited receipts; GitHub can use comments and checklists.
@@ -25,6 +29,9 @@ clients of the same thread-agent core.
 - Lark and Telegram share the same invitation model: an operator targets a
   workspace/project/client, then `/pair CODE` turns the consuming chat into a
   configured channel binding.
+- Lark, Telegram, and generic client events share the same actor authorization
+  model after routing. Projects can be open, workspace-member-only, or
+  project-member-only.
 - Slack: planned.
 - GitHub: planned as both a tool provider and a source client.
 
@@ -37,7 +44,7 @@ AgentDock ideas behind a platform-neutral boundary.
 Every inbound client event is normalized into the same sequence:
 
 ```text
-client event -> SourceThread -> Workspace -> Project -> scoped memory -> Executor
+client event -> SourceThread -> Workspace -> Project -> actor capability -> scoped memory -> Executor
 ```
 
 Client onboarding is separate from execution:

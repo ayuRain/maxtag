@@ -54,6 +54,10 @@
             Projects
             <span class="nav-count" id="project-count">0</span>
           </button>
+          <button class="nav-item" data-view="access" type="button">
+            Access
+            <span class="nav-count" id="member-count">0</span>
+          </button>
           <button class="nav-item" data-view="connectors" type="button">
             Connectors
             <span class="nav-count" id="client-count">0</span>
@@ -253,6 +257,94 @@
                 <button class="primary-button" id="save-project" type="submit">Save project</button>
               </div>
             </form>
+          </div>
+        </section>
+
+        <section class="view" id="view-access" data-view-panel="access" hidden>
+          <div class="summary-strip" id="access-summary"></div>
+
+          <div class="access-layout">
+            <section class="access-pane">
+              <div class="section-heading compact-heading">
+                <div>
+                  <span class="eyebrow">Workspace directory</span>
+                  <h2>Members</h2>
+                </div>
+              </div>
+
+              <form class="access-member-form" id="access-member-form">
+                <label class="field">
+                  <span>Name</span>
+                  <input id="access-member-name" autocomplete="off" required />
+                </label>
+                <label class="field">
+                  <span>Workspace role</span>
+                  <select id="access-member-role">
+                    <option value="owner">Owner</option>
+                    <option value="admin">Admin</option>
+                    <option value="member">Member</option>
+                    <option value="guest">Guest</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Client</span>
+                  <select id="access-member-platform">
+                    <option value="lark">Lark / Feishu</option>
+                    <option value="telegram">Telegram</option>
+                    <option value="slack">Slack</option>
+                    <option value="github">GitHub</option>
+                  </select>
+                </label>
+                <label class="field access-identity-field">
+                  <span>User ID</span>
+                  <input id="access-member-external-id" placeholder="ou_xxx" spellcheck="false" required />
+                </label>
+                <button class="primary-button" id="add-access-member" type="submit">Add member</button>
+              </form>
+              <div class="access-list" id="access-member-list"></div>
+            </section>
+
+            <section class="access-pane access-project-pane">
+              <div class="section-heading compact-heading">
+                <div>
+                  <span class="eyebrow">Project boundary</span>
+                  <h2>Project access</h2>
+                </div>
+                <label class="field compact-select access-project-select">
+                  <span>Project</span>
+                  <select id="access-project"></select>
+                </label>
+              </div>
+
+              <form class="access-policy-form" id="access-policy-form">
+                <label class="field">
+                  <span>Access mode</span>
+                  <select id="access-mode">
+                    <option value="open">Open</option>
+                    <option value="workspace">Workspace members</option>
+                    <option value="members">Project members</option>
+                  </select>
+                </label>
+                <button class="secondary-button" id="save-access-policy" type="submit">Save mode</button>
+              </form>
+
+              <form class="access-membership-form" id="access-membership-form">
+                <label class="field access-membership-person">
+                  <span>Member</span>
+                  <select id="access-project-member"></select>
+                </label>
+                <label class="field">
+                  <span>Project role</span>
+                  <select id="access-project-role">
+                    <option value="manager">Manager</option>
+                    <option value="contributor">Contributor</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+                </label>
+                <button class="primary-button" id="add-project-member" type="submit">Assign</button>
+              </form>
+              <div class="access-list" id="access-project-member-list"></div>
+            </section>
           </div>
         </section>
 

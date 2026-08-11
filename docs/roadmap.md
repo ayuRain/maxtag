@@ -15,6 +15,9 @@
 - SQLite-backed Lark/Telegram pairing invitations with short-lived single-use
   codes, hashed persistence, atomic project route creation, revocation, and
   cascading chat unbind; existing JSON state imports on first startup.
+- SQLite-backed workspace members, stable cross-client identity links,
+  open/workspace/members project access modes, project roles, and capability
+  checks on every external client ingress.
 - Outbox recovery controls for stale `sending` records and scoped cancellation.
 - SQLite WAL agent run ledger with status, cancel request, timeline events, and
   restart-safe cross-process claims.
@@ -35,8 +38,8 @@
   deterministic bridging into the shared agent run queue. Lark and Telegram
   topics can create, list, pause, resume, and delete scoped standing work with
   requester audit.
-- Operator console organized around projects, routines, activity, scoped memory,
-  delivery, and project-aware agent previews.
+- Operator console organized around projects, access, routines, activity,
+  scoped memory, delivery, and project-aware agent previews.
 - Optional operator authentication with Bearer automation, signed HttpOnly
   browser sessions, mutation CSRF protection, and a separate generic-client
   ingress credential.
@@ -44,9 +47,9 @@
 
 ## Phase 1: Lark Tag MVP
 
-- Add workspace roles and project membership checks on top of the operator
-  authentication boundary before public multi-tenant deployment.
-- Add binding audit/export and workspace membership authorization around the
+- Map operator browser sessions and automation credentials to named workspace
+  principals before public multi-tenant deployment.
+- Add binding audit/export and optional actor-restricted invitations around the
   transactional pairing and binding operation.
 - Verify Lark callbacks with token/timestamp checks; add event decrypt before
   production encrypted callbacks.

@@ -20,8 +20,16 @@ import {
 import {
   FilePairingStore,
   FileThreadConfigStore,
+  FileWorkspaceAccessStore,
+  type ActorAuthorizationDecision,
+  type ActorCapability,
   type PairingActivationMode,
+  type ProjectAccessMode,
+  type ProjectRole,
   type UpsertProjectAgentPolicyInput,
+  type WorkspaceMemberIdentity,
+  type WorkspaceMemberStatus,
+  type WorkspaceRole,
 } from '@opentag/config';
 import {
   FileDeliveryStore,
@@ -182,6 +190,11 @@ const sqliteStorage =
           'pairing',
           'pairing-state.json',
         ),
+        legacyAccessFile: path.join(
+          dataDir,
+          'access',
+          'workspace-access.json',
+        ),
       })
     : undefined;
 const routineSchedulerId = `opentag-routines-${process.pid}`;
@@ -198,8 +211,12 @@ const pairingStore =
   new FilePairingStore(path.join(dataDir, 'pairing'), {
     ttlMs: pairingTtlSeconds * 1000,
   });
+const accessStore =
+  sqliteStorage?.accessStore ??
+  new FileWorkspaceAccessStore(path.join(dataDir, 'access'));
 const activeRuns = new Map<string, AbortController>();
 const pairingNoticeAt = new Map<string, number>();
+const accessNoticeAt = new Map<string, number>();
 let agentWorkerTimer: NodeJS.Timeout | undefined;
 let agentWorkerPass: Promise<AgentWorkerPassResult> | undefined;
 let routineTickPass: Promise<RoutineTickResult> | undefined;
@@ -313,6 +330,12 @@ const capabilityManifest = {
       capability: 'Project agent policy',
       agentdock: 'agent templates, tool nodes, and per-session configuration',
       opentag: 'persisted identity, instructions, executor, project grants, network policy, and audit',
+      status: 'partial',
+    },
+    {
+      capability: 'Workspace governance',
+      agentdock: 'owner-scoped sessions and operator permissions',
+      opentag: 'workspace identities, project roles, and capability checks on every client ingress',
       status: 'partial',
     },
     {
@@ -665,7 +688,15 @@ async function deliverySnapshot(limit = 50): Promise<Record<string, unknown>> {
 async function workspaceSnapshot(
   workspaceId = 'dev-workspace',
 ): Promise<Record<string, unknown>> {
-  const [workspacePolicies, projects, bindings, recentRuns, audit, routines] =
+  const [
+    workspacePolicies,
+    projects,
+    bindings,
+    recentRuns,
+    audit,
+    routines,
+    access,
+  ] =
     await Promise.all([
       threadConfigStore.listWorkspacePolicies(),
       threadConfigStore.listProjectPolicies(workspaceId),
@@ -673,6 +704,7 @@ async function workspaceSnapshot(
       deliveryStore.listAgentRuns({ workspaceId, limit: 500 }),
       threadConfigStore.listAudit(25),
       routineStore.summarize(workspaceId),
+      accessStore.snapshot(workspaceId, 10),
     ]);
   const workspacePolicy =
     workspacePolicies.find((item) => item.workspace.id === workspaceId) ??
@@ -688,6 +720,12 @@ async function workspaceSnapshot(
           matchesProject(binding.projectId),
       );
       const projectRuns = recentRuns.filter((run) => matchesProject(run.projectId));
+      const accessPolicy = access.projectPolicies.find((policy) =>
+        matchesProject(policy.projectId),
+      );
+      const projectMembers = access.projectMemberships.filter((membership) =>
+        matchesProject(membership.projectId),
+      );
       const runSummary = {
         queued: 0,
         running: 0,
@@ -703,8 +741,18 @@ async function workspaceSnapshot(
         bindingCount: projectBindings.length,
         runSummary,
         lastRunAt: projectRuns[0]?.updatedAt,
+        accessMode: accessPolicy?.mode ?? 'open',
+        memberCount: projectMembers.length,
       };
     }),
+    accessSummary: {
+      members: access.members.length,
+      activeMembers: access.members.filter((member) => member.status === 'active')
+        .length,
+      managedProjects: access.projectPolicies.filter(
+        (policy) => policy.mode !== 'open',
+      ).length,
+    },
     availableTools: Object.entries(PROJECT_TOOL_LABELS).map(([id, label]) => ({
       id,
       label,
@@ -1244,6 +1292,55 @@ function bindingScopeValue(
   return value === 'thread' || value === 'channel' ? value : undefined;
 }
 
+function workspaceRoleValue(value: unknown): WorkspaceRole | undefined {
+  return value === 'owner' ||
+    value === 'admin' ||
+    value === 'member' ||
+    value === 'guest'
+    ? value
+    : undefined;
+}
+
+function workspaceMemberStatusValue(
+  value: unknown,
+): WorkspaceMemberStatus | undefined {
+  return value === 'active' || value === 'suspended' ? value : undefined;
+}
+
+function projectRoleValue(value: unknown): ProjectRole | undefined {
+  return value === 'manager' ||
+    value === 'contributor' ||
+    value === 'viewer'
+    ? value
+    : undefined;
+}
+
+function projectAccessModeValue(value: unknown): ProjectAccessMode | undefined {
+  return value === 'open' || value === 'workspace' || value === 'members'
+    ? value
+    : undefined;
+}
+
+function workspaceMemberIdentities(
+  body: Record<string, unknown>,
+): WorkspaceMemberIdentity[] {
+  if (Array.isArray(body.identities)) {
+    return body.identities.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const identity = entry as Record<string, unknown>;
+      const platform = stringValue(identity, 'platform');
+      const externalId = stringValue(identity, 'externalId');
+      return platform && externalId
+        ? [{ platform, externalId } as WorkspaceMemberIdentity]
+        : [];
+    });
+  }
+  const platform = stringValue(body, 'platform');
+  const externalId =
+    stringValue(body, 'externalId') || stringValue(body, 'platformUserId');
+  return platform && externalId ? [{ platform, externalId }] : [];
+}
+
 function coerceBindingInput(
   body: Record<string, unknown>,
 ): ConfigureThreadBindingInput | { error: string } {
@@ -1351,6 +1448,120 @@ function shouldHandleMessage(input: {
     input.binding?.requireMention ??
     (input.thread.platform === 'lark' ? Boolean(botOpenId) : true);
   return !requireMention || input.message.mentionsAgent;
+}
+
+function requiredActorCapability(input: {
+  thread: SourceThread;
+  message: SourceMessage;
+}): ActorCapability {
+  const memoryCommand = parseMemoryCommand(input.message.text, {
+    defaultScope: memoryCommandDefaultScope(input.thread),
+  });
+  if (
+    memoryCommand?.kind === 'remember' ||
+    memoryCommand?.kind === 'forget'
+  ) {
+    return 'write_memory';
+  }
+  const routineCommand = routineCommandService.parse(input.message.text);
+  if (
+    routineCommand &&
+    routineCommand.kind !== 'list' &&
+    routineCommand.kind !== 'help'
+  ) {
+    return 'manage_routines';
+  }
+  return 'invoke_agent';
+}
+
+async function authorizeRoutedMessage(input: {
+  thread: SourceThread;
+  message: SourceMessage;
+}): Promise<ActorAuthorizationDecision> {
+  return accessStore.authorize({
+    workspaceId: input.thread.workspaceId || 'dev-workspace',
+    projectId:
+      input.thread.projectId || input.thread.channelId || 'general',
+    platform: input.thread.platform,
+    actor: input.message.actor,
+    capability: requiredActorCapability(input),
+  });
+}
+
+function actorAuthorizationPayload(
+  decision: ActorAuthorizationDecision,
+): Record<string, unknown> {
+  return {
+    allowed: decision.allowed,
+    capability: decision.capability,
+    mode: decision.mode,
+    reason: decision.reason,
+    memberId: decision.member?.id,
+    workspaceRole: decision.member?.role,
+    projectRole: decision.projectMembership?.role,
+    capabilities: decision.capabilities,
+  };
+}
+
+async function accessDeniedNotice(input: {
+  thread: SourceThread;
+  message: SourceMessage;
+}): Promise<{ mode?: string; error?: string; suppressed?: boolean }> {
+  const key = `${input.thread.platform}:${input.thread.id}:${input.message.actor.id}`;
+  const current = Date.now();
+  const last = accessNoticeAt.get(key) ?? 0;
+  if (current - last < 60_000) return { suppressed: true };
+  accessNoticeAt.set(key, current);
+  if (accessNoticeAt.size > 1_000) {
+    for (const [entry, timestamp] of accessNoticeAt) {
+      if (current - timestamp > 60_000) accessNoticeAt.delete(entry);
+    }
+  }
+  return sendControlMessage(
+    input.thread,
+    input.message.id,
+    'OpenTag access is not enabled for you in this project. Ask a workspace owner or project manager.',
+  );
+}
+
+async function rejectUnauthorizedMessage(input: {
+  inboundEventId: string;
+  routed: {
+    thread: SourceThread;
+    message: SourceMessage;
+    binding?: ThreadBinding;
+    establishedThreadBinding?: ThreadBinding;
+  };
+  decision: ActorAuthorizationDecision;
+}): Promise<Record<string, unknown>> {
+  const authorization = actorAuthorizationPayload(input.decision);
+  await deliveryStore.markInboundEventIgnored(
+    input.inboundEventId,
+    'actor_not_authorized',
+    {
+      workspaceId: input.routed.thread.workspaceId,
+      projectId: input.routed.thread.projectId,
+      threadId: input.routed.thread.id,
+      messageId: input.routed.message.id,
+      metadata: { authorization },
+    },
+  );
+  const notice = await accessDeniedNotice(input.routed);
+  return {
+    accepted: false,
+    reason: 'actor_not_authorized',
+    authorization,
+    notice,
+    route: {
+      workspaceId: input.routed.thread.workspaceId,
+      projectId: input.routed.thread.projectId,
+      threadId: input.routed.thread.id,
+      platform: input.routed.thread.platform,
+      bindingId: input.routed.binding?.id,
+      establishedThreadBindingId:
+        input.routed.establishedThreadBinding?.id,
+    },
+  };
 }
 
 function pairingCommandCode(text: string): string | undefined {
@@ -1700,6 +1911,7 @@ async function enqueueMessageRun(input: {
   inboundEventId?: string;
   runId?: string;
   metadata?: Record<string, unknown>;
+  authorization?: ActorAuthorizationDecision;
 }): Promise<QueuedMessageRun> {
   const runId = options?.runId ?? randomUUID();
   const routed = await routeMessage(input);
@@ -1752,6 +1964,9 @@ async function enqueueMessageRun(input: {
     transportMode,
     metadata: {
       ...options?.metadata,
+      actorAuthorization: options?.authorization
+        ? actorAuthorizationPayload(options.authorization)
+        : { allowed: true, reason: 'operator_or_internal' },
       memoryCommand: memoryCommand
         ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
         : undefined,
@@ -2235,6 +2450,7 @@ async function runMessageSync(input: {
   message: SourceMessage;
 }, options?: {
   inboundEventId?: string;
+  authorization?: ActorAuthorizationDecision;
 }): Promise<Record<string, unknown>> {
   const queued = await enqueueMessageRun(input, options);
   const result = await executeAgentRun(queued.run);
@@ -2508,6 +2724,199 @@ const server = createServer(async (request, response) => {
           url.searchParams.get('workspaceId') || 'dev-workspace',
         ),
       );
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/access') {
+      const access = await accessStore.snapshot(
+        url.searchParams.get('workspaceId') || 'dev-workspace',
+        Number(url.searchParams.get('auditLimit') || 50),
+      );
+      sendJson(
+        response,
+        200,
+        { ...access },
+      );
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/access/members') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+      const displayName = stringValue(body, 'displayName');
+      const role = workspaceRoleValue(body.role);
+      const status = workspaceMemberStatusValue(body.status);
+      const identities = workspaceMemberIdentities(body);
+      if (!workspaceId || !displayName || !role || !identities.length) {
+        sendJson(response, 400, {
+          error:
+            'workspace_member_workspace_displayName_role_identity_required',
+        });
+        return;
+      }
+      try {
+        const member = await accessStore.upsertMember({
+          id: stringValue(body, 'id'),
+          workspaceId,
+          displayName,
+          role,
+          status,
+          identities,
+          actor: stringValue(body, 'actor', 'admin-console'),
+        });
+        sendJson(response, 200, {
+          member,
+          access: await accessStore.snapshot(workspaceId),
+        });
+      } catch (error) {
+        sendJson(response, 409, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      url.pathname.startsWith('/v1/access/members/')
+    ) {
+      const memberId = decodeURIComponent(
+        url.pathname.slice('/v1/access/members/'.length),
+      );
+      const workspaceId =
+        url.searchParams.get('workspaceId') || 'dev-workspace';
+      try {
+        const member = await accessStore.removeMember(
+          workspaceId,
+          memberId,
+          url.searchParams.get('actor') || 'admin-console',
+        );
+        if (!member) {
+          sendJson(response, 404, { error: 'workspace_member_not_found' });
+          return;
+        }
+        sendJson(response, 200, {
+          member,
+          access: await accessStore.snapshot(workspaceId),
+        });
+      } catch (error) {
+        sendJson(response, 409, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      url.pathname === '/v1/access/project-policy'
+    ) {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+      const projectId = stringValue(body, 'projectId');
+      const mode = projectAccessModeValue(body.mode);
+      if (!workspaceId || !projectId || !mode) {
+        sendJson(response, 400, {
+          error: 'project_access_workspace_project_mode_required',
+        });
+        return;
+      }
+      const projects = await threadConfigStore.listProjectPolicies(workspaceId);
+      if (
+        !projects.some(
+          (project) =>
+            project.projectId === projectId || project.id === projectId,
+        )
+      ) {
+        sendJson(response, 404, { error: 'project_access_project_not_found' });
+        return;
+      }
+      const policy = await accessStore.setProjectPolicy({
+        workspaceId,
+        projectId,
+        mode,
+        actor: stringValue(body, 'actor', 'admin-console'),
+      });
+      sendJson(response, 200, {
+        policy,
+        access: await accessStore.snapshot(workspaceId),
+      });
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      url.pathname === '/v1/access/project-memberships'
+    ) {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+      const projectId = stringValue(body, 'projectId');
+      const memberId = stringValue(body, 'memberId');
+      const role = projectRoleValue(body.role);
+      if (!workspaceId || !projectId || !memberId || !role) {
+        sendJson(response, 400, {
+          error: 'project_member_workspace_project_member_role_required',
+        });
+        return;
+      }
+      const projects = await threadConfigStore.listProjectPolicies(workspaceId);
+      if (
+        !projects.some(
+          (project) =>
+            project.projectId === projectId || project.id === projectId,
+        )
+      ) {
+        sendJson(response, 404, { error: 'project_access_project_not_found' });
+        return;
+      }
+      try {
+        const membership = await accessStore.upsertProjectMembership({
+          workspaceId,
+          projectId,
+          memberId,
+          role,
+          actor: stringValue(body, 'actor', 'admin-console'),
+        });
+        sendJson(response, 200, {
+          membership,
+          access: await accessStore.snapshot(workspaceId),
+        });
+      } catch (error) {
+        sendJson(response, 409, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (
+      request.method === 'DELETE' &&
+      url.pathname === '/v1/access/project-memberships'
+    ) {
+      const workspaceId =
+        url.searchParams.get('workspaceId') || 'dev-workspace';
+      const projectId = url.searchParams.get('projectId') || '';
+      const memberId = url.searchParams.get('memberId') || '';
+      if (!projectId || !memberId) {
+        sendJson(response, 400, {
+          error: 'project_member_project_member_required',
+        });
+        return;
+      }
+      const membership = await accessStore.removeProjectMembership(
+        workspaceId,
+        projectId,
+        memberId,
+        url.searchParams.get('actor') || 'admin-console',
+      );
+      if (!membership) {
+        sendJson(response, 404, { error: 'project_membership_not_found' });
+        return;
+      }
+      sendJson(response, 200, {
+        membership,
+        access: await accessStore.snapshot(workspaceId),
+      });
       return;
     }
 
@@ -3054,9 +3463,24 @@ const server = createServer(async (request, response) => {
         return;
       }
 
+      const authorization = await authorizeRoutedMessage(routed);
+      if (!authorization.allowed) {
+        sendJson(
+          response,
+          202,
+          await rejectUnauthorizedMessage({
+            inboundEventId: inbound.record.id,
+            routed,
+            decision: authorization,
+          }),
+        );
+        return;
+      }
+
       if (asyncRequested) {
         const queued = await enqueueMessageRun(routed, {
           inboundEventId: inbound.record.id,
+          authorization,
         });
         scheduleAgentWorkerPass();
         sendJson(response, 202, {
@@ -3070,6 +3494,7 @@ const server = createServer(async (request, response) => {
 
       sendJson(response, 200, await runMessageSync(routed, {
         inboundEventId: inbound.record.id,
+        authorization,
       }));
       return;
     }
@@ -3204,8 +3629,23 @@ const server = createServer(async (request, response) => {
         return;
       }
 
+      const authorization = await authorizeRoutedMessage(routed);
+      if (!authorization.allowed) {
+        sendJson(
+          response,
+          202,
+          await rejectUnauthorizedMessage({
+            inboundEventId: inbound.record.id,
+            routed,
+            decision: authorization,
+          }),
+        );
+        return;
+      }
+
       const queued = await enqueueMessageRun(routed, {
         inboundEventId: inbound.record.id,
+        authorization,
       });
       scheduleAgentWorkerPass();
       sendJson(response, 202, {
@@ -3339,8 +3779,22 @@ const server = createServer(async (request, response) => {
         });
         return;
       }
+      const authorization = await authorizeRoutedMessage(routed);
+      if (!authorization.allowed) {
+        sendJson(
+          response,
+          202,
+          await rejectUnauthorizedMessage({
+            inboundEventId: inbound.record.id,
+            routed,
+            decision: authorization,
+          }),
+        );
+        return;
+      }
       const queued = await enqueueMessageRun(routed, {
         inboundEventId: inbound.record.id,
+        authorization,
       });
       scheduleAgentWorkerPass();
       sendJson(response, 202, {
@@ -3366,7 +3820,7 @@ server.listen(port, host, () => {
   console.log(
     `OpenTag storage driver=${storageDriver}${
       sqliteStorage
-        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_pairing=${sqliteStorage.migration.pairingImported}`
+        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_pairing=${sqliteStorage.migration.pairingImported} migrated_access=${sqliteStorage.migration.accessImported}`
         : ''
     }`,
   );

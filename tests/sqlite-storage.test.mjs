@@ -4,7 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
-import { FilePairingStore } from '../packages/config/dist/index.js';
+import {
+  FilePairingStore,
+  FileWorkspaceAccessStore,
+} from '../packages/config/dist/index.js';
 import { FileDeliveryStore } from '../packages/delivery/dist/index.js';
 import { SqliteOpenTagStore } from '../packages/storage-sqlite/dist/index.js';
 
@@ -60,6 +63,8 @@ test('SQLite storage imports existing file state once and preserves it', async (
   const pairingDir = path.join(root, 'pairing');
   const fileDelivery = new FileDeliveryStore(deliveryDir);
   const filePairing = new FilePairingStore(pairingDir, { ttlMs: 600_000 });
+  const accessDir = path.join(root, 'access');
+  const fileAccess = new FileWorkspaceAccessStore(accessDir);
   await fileDelivery.configureThreadBinding({
     platform: 'lark',
     externalId: 'legacy-channel',
@@ -78,6 +83,12 @@ test('SQLite storage imports existing file state once and preserves it', async (
     workspaceId: 'dev-workspace',
     projectId: 'sqlite-project',
   });
+  await fileAccess.upsertMember({
+    workspaceId: 'dev-workspace',
+    displayName: 'Legacy owner',
+    role: 'owner',
+    identities: [{ platform: 'lark', externalId: 'ou-legacy-owner' }],
+  });
 
   const databasePath = path.join(root, 'opentag.sqlite');
   const sqlite = new SqliteOpenTagStore({
@@ -85,14 +96,17 @@ test('SQLite storage imports existing file state once and preserves it', async (
     pairingTtlMs: 600_000,
     legacyDeliveryFile: path.join(deliveryDir, 'delivery-state.json'),
     legacyPairingFile: path.join(pairingDir, 'pairing-state.json'),
+    legacyAccessFile: path.join(accessDir, 'workspace-access.json'),
   });
   assert.deepEqual(sqlite.migration, {
     deliveryImported: true,
     pairingImported: true,
+    accessImported: true,
   });
   assert.equal((await sqlite.deliveryStore.listThreadBindings()).length, 1);
   assert.equal((await sqlite.deliveryStore.listOutbox()).length, 1);
   assert.equal((await sqlite.pairingStore.listInvitations()).length, 1);
+  assert.equal((await sqlite.accessStore.snapshot('dev-workspace')).members.length, 1);
 
   const paired = await sqlite.consumePairingAndConfigureBinding({
     platform: 'lark',
@@ -110,10 +124,12 @@ test('SQLite storage imports existing file state once and preserves it', async (
     databasePath,
     legacyDeliveryFile: path.join(deliveryDir, 'delivery-state.json'),
     legacyPairingFile: path.join(pairingDir, 'pairing-state.json'),
+    legacyAccessFile: path.join(accessDir, 'workspace-access.json'),
   });
   assert.deepEqual(reopened.migration, {
     deliveryImported: false,
     pairingImported: false,
+    accessImported: false,
   });
   assert.equal(
     (await reopened.deliveryStore.getThreadBinding('lark', 'sqlite-channel'))
@@ -123,6 +139,10 @@ test('SQLite storage imports existing file state once and preserves it', async (
   assert.equal(
     (await reopened.pairingStore.listInvitations())[0].status,
     'consumed',
+  );
+  assert.equal(
+    (await reopened.accessStore.snapshot('dev-workspace')).members[0].displayName,
+    'Legacy owner',
   );
 });
 

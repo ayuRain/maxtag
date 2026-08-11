@@ -27,6 +27,7 @@ those lessons, but starts from a different product model:
 @OpenTag in Lark or /opentag in a Telegram topic
   -> normalize platform event into SourceThread + SourceMessage
   -> resolve workspace/project/thread
+  -> authorize the platform actor against workspace and project roles
   -> load agent identity, access bundle, scoped memory, and default executor
   -> start an AgentRun
   -> update a progress card/checklist while work runs
@@ -37,9 +38,9 @@ those lessons, but starts from a different product model:
 
 ```text
 apps/server                 HTTP/event ingestion and runtime host
-apps/admin                  Operator console for projects, routines, runs, and memory
+apps/admin                  Operator console for projects, access, connectors, routines, runs, and memory
 packages/core               Platform-neutral domain model and runtime contract
-packages/config             Workspace/project agent policy and audit store
+packages/config             Agent policy, workspace identities, project roles, and audit
 packages/platform-lark      Feishu/Lark adapter
 packages/platform-telegram  Telegram webhook and Bot API adapter
 packages/executor-cli       Bounded, cancellable local CLI process runtime
@@ -71,12 +72,17 @@ packages/ui-cards           Progress/checklist card models
 - Workspace and project agent policies are persisted separately from memory,
   including identity, instructions, executor choice, project tool grants,
   network policy, and an admin change audit.
+- Workspace members link stable client identities such as Lark `open_id` or
+  Telegram user IDs to workspace roles. Projects can stay open, require any
+  active workspace member, or require an explicit project role. Client ingress
+  checks separate capabilities for agent invocation, memory writes, and routine
+  management before a run is queued.
 - Codex and Claude executors are selected per project. They support safe-by-default
   dry-runs or explicit local CLI execution, and the standalone worker resolves
   the same policy and runtime mode as the HTTP server.
-- Delivery, run, inbound-event, binding, and pairing state defaults to a shared
-  SQLite WAL database. The outbox and run claims are transactional across the
-  HTTP server and standalone workers.
+- Delivery, run, inbound-event, binding, pairing, and workspace-access state
+  defaults to a shared SQLite WAL database. The outbox and run claims are
+  transactional across the HTTP server and standalone workers.
 - Delivery recovery can requeue stale `sending` records and cancel only the
   selected run/thread/workspace/project scope.
 - Agent runs are recorded in the durable run ledger with status, timeline
@@ -114,10 +120,11 @@ packages/ui-cards           Progress/checklist card models
 - Scoped memory can be viewed and updated through `/v1/memory`, the admin
   console, or chat commands such as `remember project ...` and
   `forget project ...`.
-- The admin console exposes Overview, Projects, Connectors, Routines, Activity,
-  and Memory workspaces, with project policy editing, self-service chat pairing,
-  channel unbinding, scheduler controls, routine execution history, run
-  timelines, delivery ledgers, and a project-aware client preview.
+- The admin console exposes Overview, Projects, Access, Connectors, Routines,
+  Activity, and Memory workspaces, with workspace identity linking, project
+  roles, project policy editing, self-service chat pairing, channel unbinding,
+  scheduler controls, routine execution history, run timelines, delivery
+  ledgers, and a project-aware client preview.
 - Operator authentication is opt-in for local development and required for a
   shared deployment. It supports Bearer automation and signed, expiring,
   HttpOnly browser sessions with CSRF protection for mutations.
@@ -159,7 +166,7 @@ For one-shot smoke tests, set `OPENTAG_WORKER_ONCE=1`; tune claim batch size wit
 ## Storage
 
 SQLite WAL is the default for delivery, run, inbound-event, channel-binding,
-and pairing state:
+pairing, and workspace-access state:
 
 ```bash
 OPENTAG_STORAGE_DRIVER=sqlite
@@ -171,7 +178,8 @@ The HTTP server and standalone worker can safely share this database. Outbox
 and run claims use immediate write transactions, and consuming a pairing code
 plus creating its channel binding commits atomically. On first startup, OpenTag
 imports existing `delivery-state.json` and `pairing-state.json` files when the
-SQLite documents do not yet exist; later restarts use only the database.
+SQLite documents do not yet exist. It also imports a legacy
+`workspace-access.json` file when present; later restarts use only the database.
 
 Set `OPENTAG_STORAGE_DRIVER=file` only for legacy or isolated local operation.
 Project policy, scoped memory, and routines are still file-backed and remain on
@@ -204,6 +212,27 @@ verification token or webhook secret. Generic adapters use a separate
 `OPENTAG_CLIENT_INGRESS_TOKEN` Bearer credential. When operator authentication
 is enabled without that credential, `/v1/client/events` is disabled instead of
 accepting anonymous events.
+
+## Workspace Access
+
+Open **Access** to link a member to one or more stable client identities and
+assign workspace and project roles. Each project has one access mode:
+
+- `open`: preserves the original behavior and accepts any actor that reaches the
+  configured route.
+- `workspace`: requires an active workspace member.
+- `members`: requires a project membership, while workspace owners and admins
+  retain administrative access across projects.
+
+Project managers can invoke the agent, write scoped memory, and manage standing
+work. Contributors can invoke the agent and write memory. Viewers cannot start
+agent work. Workspace guests can invoke the agent in `workspace` mode but cannot
+write memory or manage routines. Authorization denials are recorded in the
+inbound ledger, and native clients receive a rate-limited access notice.
+
+The current browser/operator credential still has installation-wide control of
+the console. Mapping operator sessions to named workspace principals remains a
+separate multi-tenant hardening step.
 
 ## Routines
 

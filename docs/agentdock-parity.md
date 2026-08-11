@@ -16,6 +16,7 @@ many clients.
 | Self-service pairing | Lark and Telegram `/pair` commands use expiring, single-use, platform-bound codes; salted hashes persist across restarts, successful pairing creates a configured project route, and operators can revoke invitations or unbind chats |
 | Topic continuation | Mention establishes a Lark or Telegram topic binding; later messages in that topic continue without repeating the mention |
 | Project agent policy | File-backed per-project identity, instructions, Codex/Claude choice, tool grants, network policy, and audit history |
+| Workspace governance | SQLite-backed workspace members, stable platform identity links, open/workspace/members project modes, owner/admin override, project manager/contributor/viewer roles, and capability checks on Lark, Telegram, and generic client ingress |
 | Durable delivery | SQLite WAL outbox, turn delivery records, atomic cross-process claims, scoped cancel, stale recovery, and bindings; legacy file mode remains available |
 | Agent run queue | SQLite WAL run status, timeline events, cancel requests, inline or standalone worker claim, restart persistence, and stale recovery |
 | Scheduled tasks | File-backed workspace/project routines with interval or daily schedules, IANA time zones, manual trigger, deduped execution claims, stale reclaim, and shared run-queue execution; Lark and Telegram topics support bilingual create/list/pause/resume/delete commands with requester audit |
@@ -34,7 +35,8 @@ many clients.
 | Async run execution | Add production supervisor/deployment manifests and cross-process cancellation heartbeat |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |
 | Real Lark smoke | Verify app scopes, bot-in-chat permissions, text replies, and card patching against a live app |
-| Pairing and binding governance | Add workspace roles and membership permission checks plus binding audit history and import/export; pairing consumption and binding creation are already one SQLite transaction |
+| Pairing and binding governance | Add binding audit/import/export and optional actor-restricted pairing invitations; project role enforcement already applies after a chat is routed, and pairing consumption plus binding creation are one SQLite transaction |
+| Operator identity | Map browser sessions and automation credentials to named workspace principals instead of the current installation-wide operator credential |
 | Encrypted Lark callbacks | Implement decrypt path before enabling encrypted events in production |
 | Memory governance | Add durable write queue, audit history, approval policy, and admin restore |
 | Routine production hardening | Move routine state and claims to the production database, run scheduler under a supervisor, and verify real Lark delivery and restart recovery |

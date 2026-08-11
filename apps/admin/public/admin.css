@@ -737,6 +737,7 @@ h3 {
 }
 
 .state-pill.ready,
+.state-pill.active,
 .state-pill.completed,
 .state-pill.delivered,
 .state-pill.processed,
@@ -760,6 +761,7 @@ h3 {
 }
 
 .state-pill.failed,
+.state-pill.suspended,
 .state-pill.rejected {
   background: var(--red-soft);
   color: var(--red);
@@ -1057,6 +1059,118 @@ input:disabled {
   border-top: 1px solid var(--line);
   background: var(--surface);
   justify-content: space-between;
+}
+
+.access-layout {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.access-pane {
+  min-width: 0;
+  padding: 18px 20px 24px;
+}
+
+.access-pane:first-child {
+  border-right: 1px solid var(--line);
+}
+
+.access-member-form,
+.access-membership-form {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0;
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(100px, 0.7fr);
+  align-items: end;
+  gap: 10px;
+}
+
+.access-member-form .primary-button,
+.access-membership-form .primary-button {
+  justify-self: start;
+}
+
+.access-policy-form {
+  border-top: 1px solid var(--line);
+  padding: 14px 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.access-membership-form {
+  grid-template-columns: minmax(160px, 1fr) minmax(120px, 0.7fr) auto;
+}
+
+.access-project-select {
+  margin-left: auto;
+}
+
+.access-list {
+  display: grid;
+}
+
+.access-row {
+  min-width: 0;
+  min-height: 62px;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.access-row-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.access-row-copy strong,
+.access-row-copy small {
+  overflow-wrap: anywhere;
+}
+
+.access-row-copy strong {
+  font-size: 12px;
+}
+
+.access-row-copy small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.access-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.access-row-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.access-row-actions button {
+  min-height: 26px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.access-row-actions .remove-access {
+  color: var(--red);
 }
 
 .routine-toolbar {
@@ -1667,7 +1781,8 @@ pre {
 
   .overview-columns,
   .delivery-columns,
-  .memory-layout {
+  .memory-layout,
+  .access-layout {
     grid-template-columns: 1fr;
   }
 
@@ -1676,6 +1791,11 @@ pre {
   }
 
   .memory-current {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .access-pane:first-child {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
@@ -1732,6 +1852,10 @@ pre {
 
   .pairing-project-field {
     grid-column: auto;
+  }
+
+  .access-member-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1840,6 +1964,31 @@ pre {
   .scope-map,
   .test-result {
     grid-template-columns: 1fr;
+  }
+
+  .access-member-form,
+  .access-membership-form,
+  .access-policy-form {
+    grid-template-columns: 1fr;
+  }
+
+  .access-project-pane .section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .access-project-select {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .access-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .access-row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 
   .span-two {

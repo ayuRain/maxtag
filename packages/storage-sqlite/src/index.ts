@@ -3,12 +3,16 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import {
   FilePairingStore,
+  FileWorkspaceAccessStore,
   consumePairingCodeInState,
   createEmptyPairingState,
+  createEmptyWorkspaceAccessState,
   normalizePairingState,
+  normalizeWorkspaceAccessState,
   type ConsumePairingCodeInput,
   type ConsumePairingCodeResult,
   type PairingState,
+  type WorkspaceAccessState,
 } from '@opentag/config';
 import {
   FileDeliveryStore,
@@ -22,6 +26,7 @@ import {
 const SCHEMA_VERSION = 1;
 const DELIVERY_DOCUMENT = 'delivery';
 const PAIRING_DOCUMENT = 'pairing';
+const ACCESS_DOCUMENT = 'access';
 
 interface StateDocumentRow {
   schema_version: number;
@@ -31,6 +36,7 @@ interface StateDocumentRow {
 export interface SqliteMigrationSummary {
   deliveryImported: boolean;
   pairingImported: boolean;
+  accessImported: boolean;
 }
 
 export interface SqliteOpenTagStoreOptions {
@@ -39,6 +45,7 @@ export interface SqliteOpenTagStoreOptions {
   busyTimeoutMs?: number;
   legacyDeliveryFile?: string;
   legacyPairingFile?: string;
+  legacyAccessFile?: string;
 }
 
 export interface AtomicPairingBindingInput extends ConsumePairingCodeInput {
@@ -135,6 +142,14 @@ class SqliteStateBackend {
     );
   }
 
+  readAccess(): WorkspaceAccessState {
+    return this.readDocument(
+      ACCESS_DOCUMENT,
+      normalizeWorkspaceAccessState,
+      createEmptyWorkspaceAccessState,
+    );
+  }
+
   mutateDelivery<T>(operation: (state: FileDeliveryState) => T): T {
     return this.immediateTransaction(() => {
       const state = this.readDelivery();
@@ -150,6 +165,15 @@ class SqliteStateBackend {
       const result = operation(state);
       this.trimPairing(state);
       this.writeDocument(PAIRING_DOCUMENT, state);
+      return result;
+    });
+  }
+
+  mutateAccess<T>(operation: (state: WorkspaceAccessState) => T): T {
+    return this.immediateTransaction(() => {
+      const state = this.readAccess();
+      const result = operation(state);
+      this.writeDocument(ACCESS_DOCUMENT, state);
       return result;
     });
   }
@@ -174,6 +198,7 @@ class SqliteStateBackend {
     return this.immediateTransaction(() => {
       let deliveryImported = false;
       let pairingImported = false;
+      let accessImported = false;
       if (!this.hasDocument(DELIVERY_DOCUMENT)) {
         const legacy = readLegacyState(
           options.legacyDeliveryFile,
@@ -192,8 +217,17 @@ class SqliteStateBackend {
         pairingImported = legacy.imported;
         this.writeDocument(PAIRING_DOCUMENT, legacy.state);
       }
+      if (!this.hasDocument(ACCESS_DOCUMENT)) {
+        const legacy = readLegacyState(
+          options.legacyAccessFile,
+          (input) => normalizeWorkspaceAccessState(input),
+          createEmptyWorkspaceAccessState,
+        );
+        accessImported = legacy.imported;
+        this.writeDocument(ACCESS_DOCUMENT, legacy.state);
+      }
       this.database.pragma(`user_version = ${SCHEMA_VERSION}`);
-      return { deliveryImported, pairingImported };
+      return { deliveryImported, pairingImported, accessImported };
     });
   }
 
@@ -277,9 +311,26 @@ class SqlitePairingStore extends FilePairingStore {
   }
 }
 
+class SqliteWorkspaceAccessStore extends FileWorkspaceAccessStore {
+  constructor(private readonly backend: SqliteStateBackend) {
+    super(path.dirname(backend.databasePath));
+  }
+
+  protected override async readState(): Promise<WorkspaceAccessState> {
+    return this.backend.readAccess();
+  }
+
+  protected override async mutate<T>(
+    operation: (state: WorkspaceAccessState) => T,
+  ): Promise<T> {
+    return this.backend.mutateAccess(operation);
+  }
+}
+
 export class SqliteOpenTagStore {
   readonly deliveryStore: SqliteDeliveryStore;
   readonly pairingStore: SqlitePairingStore;
+  readonly accessStore: SqliteWorkspaceAccessStore;
   readonly migration: SqliteMigrationSummary;
   readonly databasePath: string;
   private readonly backend: SqliteStateBackend;
@@ -293,6 +344,7 @@ export class SqliteOpenTagStore {
       this.backend,
       options.pairingTtlMs,
     );
+    this.accessStore = new SqliteWorkspaceAccessStore(this.backend);
   }
 
   async consumePairingAndConfigureBinding(

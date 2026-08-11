@@ -944,6 +944,7 @@ export class FileDeliveryStore {
       projectId?: string;
       threadId?: string;
       messageId?: string;
+      metadata?: Record<string, unknown>;
     },
   ): Promise<InboundEventRecord | undefined> {
     return this.updateInboundEvent(id, 'processed', input);
@@ -957,6 +958,7 @@ export class FileDeliveryStore {
       projectId?: string;
       threadId?: string;
       messageId?: string;
+      metadata?: Record<string, unknown>;
     },
   ): Promise<InboundEventRecord | undefined> {
     return this.updateInboundEvent(id, 'ignored', { ...input, reason });
@@ -1089,6 +1091,7 @@ export class FileDeliveryStore {
       messageId?: string;
       reason?: string;
       error?: string;
+      metadata?: Record<string, unknown>;
     },
   ): Promise<InboundEventRecord | undefined> {
     return this.mutate((state) => {
@@ -1102,6 +1105,9 @@ export class FileDeliveryStore {
       event.messageId = input?.messageId ?? event.messageId;
       event.reason = input?.reason ?? event.reason;
       event.lastError = input?.error ?? event.lastError;
+      event.metadata = input?.metadata
+        ? { ...event.metadata, ...input.metadata }
+        : event.metadata;
       event.updatedAt = timestamp;
       if (status === 'processed') event.processedAt = timestamp;
       if (status === 'ignored') event.ignoredAt = timestamp;

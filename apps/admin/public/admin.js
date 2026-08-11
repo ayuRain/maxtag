@@ -6,12 +6,14 @@ const state = {
   health: null,
   capabilities: null,
   workspace: null,
+  access: null,
   delivery: null,
   routines: null,
   pairings: null,
   runs: [],
   bindings: [],
   selectedProjectId: null,
+  selectedAccessProjectId: null,
   selectedRoutineId: null,
   selectedRunId: null,
   runFilter: '',
@@ -27,6 +29,7 @@ const state = {
 const viewCopy = {
   overview: { eyebrow: 'Workspace', title: 'Overview' },
   projects: { eyebrow: 'Routing and access', title: 'Projects' },
+  access: { eyebrow: 'Identity and roles', title: 'Access' },
   connectors: { eyebrow: 'Multi-client routing', title: 'Connectors' },
   routines: { eyebrow: 'Proactive work', title: 'Routines' },
   activity: { eyebrow: 'Runs and delivery', title: 'Activity' },
@@ -242,6 +245,7 @@ function renderWorkspaceHeader() {
   $('#workspace-name').textContent = workspace?.name || 'OpenTag Workspace';
   $('#workspace-id').textContent = workspace?.id || 'dev-workspace';
   $('#project-count').textContent = String(state.workspace?.projects?.length || 0);
+  $('#member-count').textContent = String(state.access?.members?.length || 0);
   const clients = state.capabilities?.clients || [];
   $('#client-count').textContent = String(
     clients.filter((client) => client.status !== 'planned').length,
@@ -284,6 +288,303 @@ function renderSummary() {
     metric(active, 'Active runs'),
     metric(failures, 'Needs attention'),
   );
+}
+
+function selectedAccessProject() {
+  return projectById(state.selectedAccessProjectId);
+}
+
+function projectAccessPolicy(project) {
+  return (state.access?.projectPolicies || []).find((policy) =>
+    projectMatches(project, policy.projectId),
+  );
+}
+
+function projectAccessMemberships(project) {
+  return (state.access?.projectMemberships || []).filter((membership) =>
+    projectMatches(project, membership.projectId),
+  );
+}
+
+function accessMember(memberId) {
+  return (state.access?.members || []).find((member) => member.id === memberId);
+}
+
+function renderAccessSummary() {
+  const root = $('#access-summary');
+  const members = state.access?.members || [];
+  const policies = state.access?.projectPolicies || [];
+  root.replaceChildren(
+    metric(members.length, 'Workspace members'),
+    metric(members.filter((member) => member.status === 'active').length, 'Active'),
+    metric(
+      members.filter(
+        (member) => member.role === 'owner' || member.role === 'admin',
+      ).length,
+      'Owners and admins',
+    ),
+    metric(policies.filter((policy) => policy.mode !== 'open').length, 'Managed projects'),
+  );
+}
+
+function accessIdentityLabel(member) {
+  return (member.identities || [])
+    .map((identity) => `${statusLabel(identity.platform)}: ${identity.externalId}`)
+    .join(' / ');
+}
+
+function renderAccessMembers() {
+  const root = $('#access-member-list');
+  const members = state.access?.members || [];
+  root.replaceChildren();
+  if (!members.length) {
+    root.append(element('div', 'empty-state compact-empty', 'No workspace members'));
+    $('#access-member-role').value = 'owner';
+    return;
+  }
+  for (const member of members) {
+    const row = element('div', 'access-row');
+    const copy = element('div', 'access-row-copy');
+    copy.append(
+      element('strong', '', member.displayName),
+      element('small', '', accessIdentityLabel(member)),
+    );
+    const status = element('div', 'access-row-status');
+    status.append(statePill(member.role), statePill(member.status));
+    const actions = element('div', 'access-row-actions');
+    const toggle = element(
+      'button',
+      '',
+      member.status === 'active' ? 'Suspend' : 'Activate',
+    );
+    toggle.type = 'button';
+    toggle.addEventListener('click', () =>
+      void updateAccessMember(member, {
+        status: member.status === 'active' ? 'suspended' : 'active',
+      }),
+    );
+    const remove = element('button', 'remove-access', 'Remove');
+    remove.type = 'button';
+    remove.addEventListener('click', () => void removeAccessMember(member));
+    actions.append(toggle, remove);
+    row.append(copy, status, actions);
+    root.append(row);
+  }
+}
+
+function fillAccessProjectControls() {
+  const projects = state.workspace?.projects || [];
+  const projectSelect = $('#access-project');
+  const memberSelect = $('#access-project-member');
+  const selected = projectById(state.selectedAccessProjectId) || projects[0];
+  state.selectedAccessProjectId = selected?.projectId || null;
+  projectSelect.replaceChildren();
+  for (const project of projects) {
+    const option = element('option', '', project.name);
+    option.value = project.projectId;
+    option.selected = projectMatches(project, state.selectedAccessProjectId);
+    projectSelect.append(option);
+  }
+
+  memberSelect.replaceChildren();
+  for (const member of state.access?.members || []) {
+    if (member.status !== 'active') continue;
+    const option = element('option', '', `${member.displayName} / ${statusLabel(member.role)}`);
+    option.value = member.id;
+    memberSelect.append(option);
+  }
+  memberSelect.disabled = !memberSelect.options.length;
+  $('#add-project-member').disabled = !selected || !memberSelect.options.length;
+}
+
+function renderProjectAccess() {
+  const root = $('#access-project-member-list');
+  const project = selectedAccessProject();
+  const policy = project ? projectAccessPolicy(project) : undefined;
+  $('#access-mode').value = policy?.mode || 'open';
+  root.replaceChildren();
+  if (!project) {
+    root.append(element('div', 'empty-state compact-empty', 'No project selected'));
+    return;
+  }
+  const memberships = projectAccessMemberships(project);
+  if (!memberships.length) {
+    root.append(element('div', 'empty-state compact-empty', 'No project members'));
+    return;
+  }
+  for (const membership of memberships) {
+    const member = accessMember(membership.memberId);
+    const row = element('div', 'access-row');
+    const copy = element('div', 'access-row-copy');
+    copy.append(
+      element('strong', '', member?.displayName || membership.memberId),
+      element('small', '', member ? accessIdentityLabel(member) : membership.memberId),
+    );
+    const role = statePill(membership.role);
+    const actions = element('div', 'access-row-actions');
+    const remove = element('button', 'remove-access', 'Remove');
+    remove.type = 'button';
+    remove.addEventListener('click', () =>
+      void removeProjectMembership(project, membership),
+    );
+    actions.append(remove);
+    row.append(copy, role, actions);
+    root.append(row);
+  }
+}
+
+function renderAccess() {
+  renderAccessSummary();
+  renderAccessMembers();
+  fillAccessProjectControls();
+  renderProjectAccess();
+}
+
+function accessErrorMessage(error) {
+  const messages = {
+    workspace_first_member_must_be_owner: 'The first workspace member must be an owner.',
+    workspace_last_owner_required: 'Add another active owner before changing this owner.',
+    workspace_member_identity_already_linked: 'That client user ID is already linked.',
+  };
+  return messages[error.message] || error.message;
+}
+
+async function saveAccessMember(event) {
+  event.preventDefault();
+  const button = $('#add-access-member');
+  setButtonBusy(button, true, 'Adding', 'Add member');
+  try {
+    const data = await getJson('/v1/access/members', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: currentWorkspaceId(),
+        displayName: $('#access-member-name').value,
+        role: $('#access-member-role').value,
+        platform: $('#access-member-platform').value,
+        externalId: $('#access-member-external-id').value,
+        actor: 'admin-console',
+      }),
+    });
+    state.access = data.access;
+    $('#access-member-form').reset();
+    $('#access-member-role').value = state.access.members.length ? 'member' : 'owner';
+    await refreshAll({ quiet: true });
+    showToast('Workspace member added');
+  } catch (error) {
+    showToast(accessErrorMessage(error), 'error');
+  } finally {
+    setButtonBusy(button, false, 'Adding', 'Add member');
+  }
+}
+
+async function updateAccessMember(member, updates) {
+  try {
+    const data = await getJson('/v1/access/members', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...member,
+        ...updates,
+        actor: 'admin-console',
+      }),
+    });
+    state.access = data.access;
+    renderAccess();
+    showToast(`${member.displayName} updated`);
+  } catch (error) {
+    showToast(accessErrorMessage(error), 'error');
+  }
+}
+
+async function removeAccessMember(member) {
+  if (!window.confirm(`Remove ${member.displayName} from this workspace?`)) return;
+  try {
+    const query = new URLSearchParams({ workspaceId: currentWorkspaceId() });
+    const data = await getJson(
+      `/v1/access/members/${encodeURIComponent(member.id)}?${query}`,
+      { method: 'DELETE' },
+    );
+    state.access = data.access;
+    await refreshAll({ quiet: true });
+    showToast(`${member.displayName} removed`);
+  } catch (error) {
+    showToast(accessErrorMessage(error), 'error');
+  }
+}
+
+async function saveAccessPolicy(event) {
+  event.preventDefault();
+  const project = selectedAccessProject();
+  if (!project) return;
+  const button = $('#save-access-policy');
+  setButtonBusy(button, true, 'Saving', 'Save mode');
+  try {
+    const data = await getJson('/v1/access/project-policy', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: currentWorkspaceId(),
+        projectId: project.projectId,
+        mode: $('#access-mode').value,
+        actor: 'admin-console',
+      }),
+    });
+    state.access = data.access;
+    await refreshAll({ quiet: true });
+    showToast(`${project.name} access updated`);
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Saving', 'Save mode');
+  }
+}
+
+async function assignProjectMember(event) {
+  event.preventDefault();
+  const project = selectedAccessProject();
+  const memberId = $('#access-project-member').value;
+  if (!project || !memberId) return;
+  const button = $('#add-project-member');
+  setButtonBusy(button, true, 'Assigning', 'Assign');
+  try {
+    const data = await getJson('/v1/access/project-memberships', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: currentWorkspaceId(),
+        projectId: project.projectId,
+        memberId,
+        role: $('#access-project-role').value,
+        actor: 'admin-console',
+      }),
+    });
+    state.access = data.access;
+    await refreshAll({ quiet: true });
+    showToast('Project role assigned');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, 'Assigning', 'Assign');
+  }
+}
+
+async function removeProjectMembership(project, membership) {
+  try {
+    const query = new URLSearchParams({
+      workspaceId: currentWorkspaceId(),
+      projectId: project.projectId,
+      memberId: membership.memberId,
+    });
+    const data = await getJson(`/v1/access/project-memberships?${query}`, {
+      method: 'DELETE',
+    });
+    state.access = data.access;
+    await refreshAll({ quiet: true });
+    showToast('Project role removed');
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
 }
 
 function projectRunState(project) {
@@ -1578,6 +1879,7 @@ function renderAll() {
   renderSummary();
   renderOverviewProjects();
   renderConnectors();
+  renderAccess();
   fillProjectSelects();
   renderConnectorConsole();
   renderOverviewRuns();
@@ -1597,11 +1899,22 @@ async function refreshAll({ quiet = false } = {}) {
   const button = $('#refresh-all');
   if (!quiet) setButtonBusy(button, true, 'Refreshing', 'Refresh');
   try {
-    const [health, capabilities, workspace, delivery, runs, bindings, routines, pairings] =
+    const [
+      health,
+      capabilities,
+      workspace,
+      access,
+      delivery,
+      runs,
+      bindings,
+      routines,
+      pairings,
+    ] =
       await Promise.all([
         getJson('/health'),
         getJson('/v1/capabilities'),
         getJson(`/v1/workspace?workspaceId=${encodeURIComponent(currentWorkspaceId())}`),
+        getJson(`/v1/access?workspaceId=${encodeURIComponent(currentWorkspaceId())}`),
         getJson('/v1/deliveries?limit=20'),
         getJson('/v1/runs?limit=50'),
         getJson('/v1/bindings?limit=100'),
@@ -1611,6 +1924,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.health = health;
     state.capabilities = capabilities;
     state.workspace = workspace;
+    state.access = access;
     state.delivery = delivery;
     state.runs = runs.runs || [];
     state.bindings = bindings.bindings || [];
@@ -1618,6 +1932,8 @@ async function refreshAll({ quiet = false } = {}) {
     state.pairings = pairings;
     const fallback = workspace.projects?.[0]?.projectId;
     state.selectedProjectId = projectById(state.selectedProjectId)?.projectId || fallback;
+    state.selectedAccessProjectId =
+      projectById(state.selectedAccessProjectId)?.projectId || fallback;
     state.memoryProjectId = projectById(state.memoryProjectId)?.projectId || fallback;
     renderAll();
     $('#sync-label').textContent = `Synced ${formatTime(new Date().toISOString())}`;
@@ -1646,6 +1962,11 @@ $('#open-test').addEventListener('click', () => $('#test-dialog').showModal());
 $('#test-form').addEventListener('submit', (event) => void runTest(event));
 $('#new-project').addEventListener('click', newProject);
 $('#project-form').addEventListener('submit', (event) => void saveProject(event));
+$('#access-member-form').addEventListener('submit', (event) => void saveAccessMember(event));
+$('#access-policy-form').addEventListener('submit', (event) => void saveAccessPolicy(event));
+$('#access-membership-form').addEventListener('submit', (event) =>
+  void assignProjectMember(event),
+);
 $('#save-binding').addEventListener('click', () => void saveBinding());
 $('#pairing-form').addEventListener('submit', (event) => void generatePairing(event));
 $('#copy-pairing').addEventListener('click', () => void copyPairingCommand());
@@ -1689,6 +2010,11 @@ $('#test-project').addEventListener('change', (event) => {
 
 $('#pairing-project').addEventListener('change', (event) => {
   state.pairingProjectId = event.target.value;
+});
+
+$('#access-project').addEventListener('change', (event) => {
+  state.selectedAccessProjectId = event.target.value;
+  renderProjectAccess();
 });
 
 for (const button of $$('#memory-scope button')) {
