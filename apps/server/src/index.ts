@@ -74,6 +74,26 @@ const agentWorkerEnabled = agentWorkerMode !== 'manual';
 const agentWorkerIntervalMs = Number(process.env.OPENTAG_AGENT_WORKER_INTERVAL_MS || 2000);
 const agentWorkerStaleMs = Number(process.env.OPENTAG_AGENT_WORKER_STALE_MS || 120_000);
 const agentWorkerId = `opentag-${process.pid}`;
+const executorMode =
+  process.env.OPENTAG_EXECUTOR_MODE === 'local-cli' ? 'local-cli' : 'dry-run';
+const executorWorkspaceRoot =
+  process.env.OPENTAG_EXECUTOR_WORKSPACE_ROOT || process.cwd();
+const executorTimeoutMs = numberEnvironmentValue(
+  'OPENTAG_EXECUTOR_TIMEOUT_MS',
+  20 * 60_000,
+);
+const executorMaxOutputBytes = numberEnvironmentValue(
+  'OPENTAG_EXECUTOR_MAX_OUTPUT_BYTES',
+  2_000_000,
+);
+const executorInheritEnv = listEnvironmentValue('OPENTAG_EXECUTOR_INHERIT_ENV');
+const codexCommand = process.env.OPENTAG_CODEX_COMMAND || 'codex';
+const codexModel = process.env.OPENTAG_CODEX_MODEL;
+const claudeCommand = process.env.OPENTAG_CLAUDE_COMMAND || 'claude';
+const claudeModel = process.env.OPENTAG_CLAUDE_MODEL;
+const claudeMaxBudgetUsd = optionalNumberEnvironmentValue(
+  'OPENTAG_CLAUDE_MAX_BUDGET_USD',
+);
 const deliveryStore = new FileDeliveryStore(path.join(dataDir, 'delivery'));
 const memoryStore = new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
 const activeRuns = new Map<string, AbortController>();
@@ -101,7 +121,7 @@ const capabilityManifest = {
     model: 'one workspace bot routes every client event into the same thread-agent runtime',
   },
   platforms: ['lark', 'telegram-generic', 'slack-planned', 'github-planned'],
-  executors: ['codex-dry-run', 'claude-placeholder'],
+  executors: [`codex-${executorMode}`, `claude-${executorMode}`],
   clients: [
     {
       id: 'lark',
@@ -212,6 +232,46 @@ const capabilityManifest = {
 
 function larkDomainValue(value: string | undefined): LarkOpenApiDomain {
   return value === 'lark' ? 'lark' : 'feishu';
+}
+
+function numberEnvironmentValue(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (!value) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function optionalNumberEnvironmentValue(name: string): number | undefined {
+  const value = process.env[name];
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function listEnvironmentValue(name: string): string[] | undefined {
+  const values = process.env[name]
+    ?.split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return values?.length ? values : undefined;
+}
+
+function executorStatus(): Record<string, unknown> {
+  return {
+    mode: executorMode,
+    workspaceRoot: path.resolve(executorWorkspaceRoot),
+    timeoutMs: executorTimeoutMs,
+    maxOutputBytes: executorMaxOutputBytes,
+    codex: {
+      command: codexCommand,
+      model: codexModel,
+    },
+    claude: {
+      command: claudeCommand,
+      model: claudeModel,
+      maxBudgetUsd: claudeMaxBudgetUsd,
+    },
+  };
 }
 
 function larkTransportStatus(): Record<string, unknown> {
@@ -409,16 +469,32 @@ async function workspaceSnapshot(
       label,
     })),
     executors: [
-      { id: 'codex', label: 'Codex' },
-      { id: 'claude', label: 'Claude' },
+      { id: 'codex', label: 'Codex', mode: executorMode },
+      { id: 'claude', label: 'Claude', mode: executorMode },
     ],
     audit,
   };
 }
 
 function createRuntimeForPlatform(platform: PlatformAdapter): OpenTagRuntime {
-  const codex = createCodexExecutor({ mode: 'dry-run' });
-  const claude = createClaudeExecutor({ mode: 'dry-run' });
+  const common = {
+    mode: executorMode,
+    workspaceRoot: executorWorkspaceRoot,
+    timeoutMs: executorTimeoutMs,
+    maxOutputBytes: executorMaxOutputBytes,
+    inheritEnv: executorInheritEnv,
+  } as const;
+  const codex = createCodexExecutor({
+    ...common,
+    command: codexCommand,
+    model: codexModel,
+  });
+  const claude = createClaudeExecutor({
+    ...common,
+    command: claudeCommand,
+    model: claudeModel,
+    maxBudgetUsd: claudeMaxBudgetUsd,
+  });
   return new OpenTagRuntime({
     platform,
     executor: codex,
@@ -1465,6 +1541,7 @@ const server = createServer(async (request, response) => {
           activeRuns: activeRuns.size,
           passRunning: Boolean(agentWorkerPass),
         },
+        executors: executorStatus(),
       });
       return;
     }
@@ -1496,6 +1573,7 @@ const server = createServer(async (request, response) => {
           activeRuns: activeRuns.size,
           passRunning: Boolean(agentWorkerPass),
         },
+        executorRuntime: executorStatus(),
       });
       return;
     }

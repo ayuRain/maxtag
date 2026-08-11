@@ -18,7 +18,7 @@ many clients.
 | Durable delivery skeleton | File-backed outbox, turn delivery records, scoped cancel, stale recovery, and bindings |
 | Agent run queue | File-backed run status, timeline events, cancel requests, inline or standalone worker claim, and stale recovery |
 | Inbound callback ledger | Lark token/timestamp checks, event idempotency, and duplicate short-circuit |
-| Executor boundary | Project-selectable Codex and Claude dry-runs behind `Executor` |
+| Executor boundary | Project-selectable Codex and Claude dry-run/local CLI modes with bounded output, cancellation, timeout, and filtered child environments |
 
 ## Gaps To Close
 
@@ -34,7 +34,7 @@ many clients.
 | Memory governance | Add durable write queue, audit history, approval policy, and admin restore |
 | Scheduled tasks | Add workspace/project routines on top of the runtime |
 | Dynamic workflows | Add saved workflow definitions and async workflow runs |
-| Tooling depth | Wire GitHub, Lark Docs/Base, browser, and shell grants |
+| Tooling depth | Replace direct CLI permission mapping with brokered GitHub, Lark Docs/Base, browser, and shell tools |
 
 ## Product Constraint
 

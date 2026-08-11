@@ -22,6 +22,8 @@
   memory scopes, and tracked text delivery.
 - Shared file-backed workspace/project agent policy with per-project identity,
   instructions, executor selection, tool grants, network policy, and audit.
+- Opt-in local Codex and Claude CLI execution with bounded output, process-group
+  cancellation, timeout, project workspace resolution, and filtered child env.
 - Operator console organized around projects, activity, scoped memory, delivery,
   and project-aware agent previews.
 - Memory and GitHub tool contracts.
@@ -53,7 +55,8 @@
 
 ## Phase 2: Agent Runs
 
-- Run Codex and Claude through a common `Executor` contract.
+- Harden Codex and Claude local CLI execution behind the common `Executor`
+  contract with provider event parsing and runtime evidence.
 - Add production supervisor/deployment manifests for independent worker
   processes.
 - Add cross-process cancellation heartbeat for active runs.

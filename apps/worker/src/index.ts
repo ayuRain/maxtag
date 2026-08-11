@@ -19,6 +19,27 @@ function booleanEnv(name: string, fallback = false): boolean {
   return value === '1' || value === 'true' || value === 'yes';
 }
 
+function optionalNumberEnv(name: string): number | undefined {
+  const value = process.env[name];
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function listEnv(name: string): string[] | undefined {
+  const values = process.env[name]
+    ?.split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return values?.length ? values : undefined;
+}
+
+function executorMode(): 'dry-run' | 'local-cli' {
+  return process.env.OPENTAG_EXECUTOR_MODE === 'local-cli'
+    ? 'local-cli'
+    : 'dry-run';
+}
+
 function larkDomainValue(value: string | undefined): LarkOpenApiDomain {
   return value === 'lark' ? 'lark' : 'feishu';
 }
@@ -66,6 +87,18 @@ async function main(): Promise<void> {
       domain: larkDomainValue(process.env.OPENTAG_LARK_DOMAIN),
       baseUrl: process.env.OPENTAG_LARK_BASE_URL,
     },
+    executors: {
+      mode: executorMode(),
+      workspaceRoot: process.env.OPENTAG_EXECUTOR_WORKSPACE_ROOT,
+      timeoutMs: optionalNumberEnv('OPENTAG_EXECUTOR_TIMEOUT_MS'),
+      maxOutputBytes: optionalNumberEnv('OPENTAG_EXECUTOR_MAX_OUTPUT_BYTES'),
+      inheritEnv: listEnv('OPENTAG_EXECUTOR_INHERIT_ENV'),
+      codexCommand: process.env.OPENTAG_CODEX_COMMAND,
+      codexModel: process.env.OPENTAG_CODEX_MODEL,
+      claudeCommand: process.env.OPENTAG_CLAUDE_COMMAND,
+      claudeModel: process.env.OPENTAG_CLAUDE_MODEL,
+      claudeMaxBudgetUsd: optionalNumberEnv('OPENTAG_CLAUDE_MAX_BUDGET_USD'),
+    },
   });
 
   let stopping = false;
@@ -83,6 +116,7 @@ async function main(): Promise<void> {
     staleMs,
     once,
     larkTransport: host.larkTransportStatus(),
+    executors: host.executorStatus(),
   });
 
   const recovered = await host.recoverStaleAgentRuns({

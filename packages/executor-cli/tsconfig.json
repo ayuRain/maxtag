@@ -5,9 +5,6 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "references": [
-    { "path": "../core" },
-    { "path": "../executor-cli" }
-  ],
+  "references": [{ "path": "../core" }],
   "include": ["src/**/*.ts"]
 }

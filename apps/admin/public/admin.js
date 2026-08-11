@@ -156,7 +156,8 @@ function renderWorkspaceHeader() {
   );
   const transport = state.capabilities?.larkTransport?.mode || 'memory';
   const workerMode = state.capabilities?.runWorker?.mode || 'manual';
-  $('#runtime-label').textContent = `${transport} transport / ${workerMode} worker`;
+  const executorMode = state.capabilities?.executorRuntime?.mode || 'dry-run';
+  $('#runtime-label').textContent = `${transport} / ${executorMode} / ${workerMode}`;
 }
 
 function metric(value, label) {
@@ -299,7 +300,9 @@ function fillExecutorOptions(selected) {
   for (const executor of state.workspace?.executors || []) {
     const option = document.createElement('option');
     option.value = executor.id;
-    option.textContent = executor.label;
+    option.textContent = executor.mode
+      ? `${executor.label} (${executor.mode})`
+      : executor.label;
     option.selected = executor.id === selected;
     select.append(option);
   }

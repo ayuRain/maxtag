@@ -16,7 +16,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@opentag/core": "0.1.0"
+    "@opentag/core": "0.1.0",
+    "@opentag/executor-cli": "0.1.0"
   }
 }
-

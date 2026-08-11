@@ -1,5 +1,5 @@
 {
-  "name": "@opentag/executor-claude",
+  "name": "@opentag/executor-cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,7 +16,6 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@opentag/core": "0.1.0",
-    "@opentag/executor-cli": "0.1.0"
+    "@opentag/core": "0.1.0"
   }
 }

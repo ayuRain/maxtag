@@ -42,8 +42,9 @@ packages/core               Platform-neutral domain model and runtime contract
 packages/config             Workspace/project agent policy and audit store
 packages/platform-lark      Feishu/Lark adapter
 packages/platform-telegram  Telegram adapter placeholder
-packages/executor-codex     Codex executor contract and dry-run implementation
-packages/executor-claude    Claude executor contract and dry-run implementation
+packages/executor-cli       Bounded, cancellable local CLI process runtime
+packages/executor-codex     Codex dry-run and local CLI executor
+packages/executor-claude    Claude dry-run and local CLI executor
 packages/runtime-host       Shared runtime host for independent workers
 packages/tools-github       GitHub tool contract placeholder
 packages/memory             Global/workspace/project/thread memory stores
@@ -63,8 +64,9 @@ packages/ui-cards           Progress/checklist card models
 - Workspace and project agent policies are persisted separately from memory,
   including identity, instructions, executor choice, project tool grants,
   network policy, and an admin change audit.
-- Codex and Claude dry-run executors are selected per project, and the standalone
-  worker resolves the same policy file as the HTTP server.
+- Codex and Claude executors are selected per project. They support safe-by-default
+  dry-runs or explicit local CLI execution, and the standalone worker resolves
+  the same policy and runtime mode as the HTTP server.
 - Dry-run Lark delivery now runs through a file-backed outbox, per-run delivery
   records, and thread-to-project bindings.
 - Delivery recovery can requeue stale `sending` records and cancel only the
@@ -127,6 +129,30 @@ npm run worker
 
 For one-shot smoke tests, set `OPENTAG_WORKER_ONCE=1`; tune claim batch size with
 `OPENTAG_WORKER_BATCH`.
+
+## Local CLI Executors
+
+Real Codex or Claude execution is opt-in. Both CLIs must already be installed and
+authenticated for the service account running OpenTag:
+
+```bash
+OPENTAG_EXECUTOR_MODE=local-cli
+OPENTAG_EXECUTOR_WORKSPACE_ROOT=/srv/opentag/workspaces
+OPENTAG_EXECUTOR_TIMEOUT_MS=1200000
+```
+
+OpenTag uses `<workspace root>/<project id>` when that directory exists, falling
+back to the configured root. Projects without `shell` or `github` grants run
+Codex read-only; Claude receives only repository read tools. The process runner
+kills the full child process group on cancellation or timeout, bounds retained
+stdout/stderr, and filters service secrets such as Lark credentials from the CLI
+environment. Additional variables must be named explicitly through
+`OPENTAG_EXECUTOR_INHERIT_ENV`.
+
+`deny-by-default` and `allow-all` network policy map onto the Codex workspace
+sandbox. Claude built-in web tools are enabled only for an `allow-all` project
+with a `browser` grant. Host-level enforcement for Claude shell networking still
+requires deploying the worker in a container or OS sandbox.
 
 ## Generic Client Ingress
 

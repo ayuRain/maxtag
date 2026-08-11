@@ -41,10 +41,24 @@ export interface RuntimeHostLarkConfig {
   baseUrl?: string;
 }
 
+export interface RuntimeHostExecutorConfig {
+  mode?: 'dry-run' | 'local-cli';
+  workspaceRoot?: string;
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+  inheritEnv?: string[];
+  codexCommand?: string;
+  codexModel?: string;
+  claudeCommand?: string;
+  claudeModel?: string;
+  claudeMaxBudgetUsd?: number;
+}
+
 export interface RuntimeHostConfig {
   dataDir: string;
   workerId?: string;
   lark?: RuntimeHostLarkConfig;
+  executors?: RuntimeHostExecutorConfig;
 }
 
 export interface AgentWorkerPassResult {
@@ -181,6 +195,25 @@ export class OpenTagWorkerHost {
 
   larkTransportStatus(): ReturnType<typeof larkTransportStatus> {
     return larkTransportStatus(this.config.lark);
+  }
+
+  executorStatus(): Record<string, unknown> {
+    const config = this.config.executors ?? {};
+    return {
+      mode: config.mode ?? 'dry-run',
+      workspaceRoot: path.resolve(config.workspaceRoot || process.cwd()),
+      timeoutMs: config.timeoutMs ?? 20 * 60_000,
+      maxOutputBytes: config.maxOutputBytes ?? 2_000_000,
+      codex: {
+        command: config.codexCommand || 'codex',
+        model: config.codexModel,
+      },
+      claude: {
+        command: config.claudeCommand || 'claude',
+        model: config.claudeModel,
+        maxBudgetUsd: config.claudeMaxBudgetUsd,
+      },
+    };
   }
 
   async recoverStaleAgentRuns(
@@ -449,8 +482,25 @@ export class OpenTagWorkerHost {
   }
 
   private createRuntimeForPlatform(platform: PlatformAdapter): OpenTagRuntime {
-    const codex = createCodexExecutor({ mode: 'dry-run' });
-    const claude = createClaudeExecutor({ mode: 'dry-run' });
+    const config = this.config.executors ?? {};
+    const common = {
+      mode: config.mode ?? 'dry-run',
+      workspaceRoot: config.workspaceRoot,
+      timeoutMs: config.timeoutMs,
+      maxOutputBytes: config.maxOutputBytes,
+      inheritEnv: config.inheritEnv,
+    } as const;
+    const codex = createCodexExecutor({
+      ...common,
+      command: config.codexCommand,
+      model: config.codexModel,
+    });
+    const claude = createClaudeExecutor({
+      ...common,
+      command: config.claudeCommand,
+      model: config.claudeModel,
+      maxBudgetUsd: config.claudeMaxBudgetUsd,
+    });
     return new OpenTagRuntime({
       platform,
       executor: codex,
