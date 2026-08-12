@@ -236,12 +236,12 @@
                     <select id="binding-platform">
                       <option value="lark">Lark / Feishu</option>
                       <option value="telegram">Telegram</option>
-                      <option value="slack">Slack adapter</option>
                       <option value="github">GitHub adapter</option>
+                      <option value="slack">Slack adapter</option>
                     </select>
                   </label>
                   <label class="field binding-id-field">
-                    <span>Channel ID</span>
+                    <span id="binding-external-id-label">Channel ID</span>
                     <input id="binding-external-id" placeholder="oc_xxx" spellcheck="false" />
                   </label>
                   <label class="field">
@@ -371,6 +371,7 @@
               <select id="pairing-platform">
                 <option value="lark">Lark</option>
                 <option value="telegram">Telegram</option>
+                <option value="github">GitHub</option>
               </select>
             </label>
             <label class="field pairing-project-field">
@@ -514,12 +515,12 @@
                     <select id="routine-platform">
                       <option value="lark">Lark / Feishu</option>
                       <option value="telegram">Telegram</option>
+                      <option value="github">GitHub issue / PR</option>
                       <option value="slack" disabled>Slack (planned)</option>
-                      <option value="github" disabled>GitHub (planned)</option>
                     </select>
                   </label>
                   <label class="field">
-                    <span>Channel ID</span>
+                    <span id="routine-external-id-label">Channel ID</span>
                     <input id="routine-external-id" placeholder="oc_xxx" spellcheck="false" required />
                   </label>
                   <label class="field">
@@ -643,12 +644,12 @@
                     <select id="workflow-platform">
                       <option value="lark">Lark / Feishu</option>
                       <option value="telegram">Telegram</option>
+                      <option value="github">GitHub issue / PR</option>
                       <option value="slack" disabled>Slack (planned)</option>
-                      <option value="github" disabled>GitHub (planned)</option>
                     </select>
                   </label>
                   <label class="field">
-                    <span>Channel ID</span>
+                    <span id="workflow-external-id-label">Channel ID</span>
                     <input id="workflow-external-id" placeholder="oc_xxx" spellcheck="false" required />
                   </label>
                   <label class="field">
@@ -803,6 +804,7 @@
             <select id="test-client">
               <option value="lark">Lark / Feishu</option>
               <option value="telegram">Telegram</option>
+              <option value="github">GitHub comments</option>
             </select>
           </label>
           <label class="field compact-select">

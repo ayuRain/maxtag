@@ -15,7 +15,7 @@
   history, and restore.
 - SQLite WAL outbox, inbound event ledger, turn delivery tracker, and configured
   channel/project bindings, with transactional claims across server and worker.
-- SQLite-backed Lark/Telegram pairing invitations with short-lived single-use
+- SQLite-backed Lark/Telegram/GitHub pairing invitations with short-lived single-use
   codes, hashed persistence, atomic project route creation, revocation, and
   cascading chat unbind; existing JSON state imports on first startup.
 - SQLite-backed workspace members, stable cross-client identity links,
@@ -36,6 +36,9 @@
 - Native Telegram Bot API webhook/send/edit adapter with forum-topic routing,
   update idempotency, managed inbound downloads, outgoing files, and tracked
   delivery.
+- Native GitHub `issue_comment` webhook/create/update adapter with repository
+  pairing, issue/PR thread routing, HMAC-SHA256 validation, idempotency,
+  self-loop suppression, chunked replies, and tracked delivery.
 - Content-addressed inbound attachment storage isolated by workspace, project,
   thread, and message; generic base64 upload rejects host path injection.
 - Managed CLI artifact declarations with traversal/symlink/size validation,
@@ -143,5 +146,6 @@
 - Keep native platform webhooks thin by mapping them into `/v1/client/events`.
 - Run live Telegram webhook/download/delivery smoke tests for the implemented
   native file pipeline.
+- Run live GitHub webhook/comment create/update and permission smoke tests for
+  the implemented native issue/PR comment client.
 - Slack adapter can map thread_ts to `SourceThread`.
-- GitHub issue/PR comments can become first-class work threads.

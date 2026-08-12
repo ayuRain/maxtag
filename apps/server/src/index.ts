@@ -34,6 +34,7 @@ import {
 } from '@opentag/config';
 import {
   FileDeliveryStore,
+  TrackedGitHubTransport,
   TrackedLarkTransport,
   TrackedTelegramTransport,
   TrackedTextPlatformAdapter,
@@ -55,6 +56,17 @@ import {
   parseMemoryCommand,
   type ParsedMemoryCommand,
 } from '@opentag/memory';
+import {
+  GitHubPlatformAdapter,
+  HttpGitHubTransport,
+  MemoryGitHubTransport,
+  githubCallbackEventType,
+  githubCallbackExternalId,
+  normalizeGitHubWebhook,
+  parseAndValidateGitHubCallback,
+  type GitHubTransport,
+  type GitHubWebhookPayload,
+} from '@opentag/platform-github';
 import {
   HttpLarkTransport,
   LarkPlatformAdapter,
@@ -147,6 +159,19 @@ const telegramWorkspaceId =
   process.env.OPENTAG_TELEGRAM_WORKSPACE_ID || 'dev-workspace';
 const telegramRequireBinding = ['1', 'true', 'yes'].includes(
   String(process.env.OPENTAG_TELEGRAM_REQUIRE_BINDING || 'false').toLowerCase(),
+);
+const githubTransportMode = process.env.OPENTAG_GITHUB_TRANSPORT || 'memory';
+const githubToken =
+  process.env.OPENTAG_GITHUB_TOKEN ||
+  process.env.GH_TOKEN ||
+  process.env.GITHUB_TOKEN;
+const githubBotLogin = process.env.OPENTAG_GITHUB_BOT_LOGIN;
+const githubWebhookSecret = process.env.OPENTAG_GITHUB_WEBHOOK_SECRET;
+const githubBaseUrl = process.env.OPENTAG_GITHUB_BASE_URL;
+const githubWorkspaceId =
+  process.env.OPENTAG_GITHUB_WORKSPACE_ID || 'dev-workspace';
+const githubRequireBinding = ['1', 'true', 'yes'].includes(
+  String(process.env.OPENTAG_GITHUB_REQUIRE_BINDING || 'true').toLowerCase(),
 );
 const pairingTtlSeconds = Math.max(
   30,
@@ -341,10 +366,7 @@ const memoryStore =
 const toolBroker = createOpenTagToolBroker({
   memory: memoryStore,
   github: {
-    token:
-      process.env.OPENTAG_GITHUB_TOKEN ||
-      process.env.GH_TOKEN ||
-      process.env.GITHUB_TOKEN,
+    token: githubToken,
   },
   lark:
     larkAppId && larkAppSecret && larkTransportStatus().mode === 'http'
@@ -405,6 +427,7 @@ const routineScheduler = new RoutineSchedulerService({
     if (platform === 'telegram') {
       return `telegram-${telegramTransportStatus().mode}`;
     }
+    if (platform === 'github') return `github-${githubTransportStatus().mode}`;
     return 'tracked-text';
   },
   onRunQueued: () => scheduleAgentWorkerPass(),
@@ -421,6 +444,7 @@ const workflowCoordinator = new WorkflowCoordinatorService({
     if (platform === 'telegram') {
       return `telegram-${telegramTransportStatus().mode}`;
     }
+    if (platform === 'github') return `github-${githubTransportStatus().mode}`;
     return platform === 'workflow' ? 'workflow-internal' : 'tracked-text';
   },
   onRunQueued: () => scheduleAgentWorkerPass(),
@@ -433,7 +457,7 @@ const capabilityManifest = {
     status: 'partial',
     model: 'one workspace bot routes every client event into the same thread-agent runtime',
   },
-  platforms: ['lark', 'telegram', 'slack-planned', 'github-planned'],
+  platforms: ['lark', 'telegram', 'github', 'slack-planned'],
   executors: [`codex-${executorMode}`, `claude-${executorMode}`],
   clients: [
     {
@@ -451,15 +475,15 @@ const capabilityManifest = {
       surface: 'editable progress message + topic reply + files',
     },
     {
-      id: 'slack',
-      label: 'Slack',
-      status: 'planned',
-      inbound: 'not wired',
-      surface: 'planned',
-    },
-    {
       id: 'github',
       label: 'GitHub comments',
+      status: 'ready',
+      inbound: 'native issue_comment webhook',
+      surface: 'editable progress comment + issue/PR reply',
+    },
+    {
+      id: 'slack',
+      label: 'Slack',
       status: 'planned',
       inbound: 'not wired',
       surface: 'planned',
@@ -495,8 +519,8 @@ const capabilityManifest = {
     {
       capability: 'Multi-client routing',
       agentdock: 'Feishu, Telegram, QQ, Web adapters',
-      opentag: 'shared client ingress plus native Lark and Telegram adapters',
-      status: 'partial',
+      opentag: 'shared client ingress plus native Lark, Telegram, and GitHub comments adapters',
+      status: 'ready',
     },
     {
       capability: 'Scoped memory',
@@ -717,6 +741,33 @@ function telegramTransportStatus(): {
     webhookSecretConfigured: Boolean(telegramWebhookSecret),
     workspaceId: telegramWorkspaceId,
     requireBinding: telegramRequireBinding,
+  };
+}
+
+function githubTransportStatus(): {
+  requested: string;
+  mode: 'memory' | 'http';
+  hasToken: boolean;
+  botLogin?: string;
+  baseUrl?: string;
+  webhookSecretConfigured: boolean;
+  workspaceId: string;
+  requireBinding: boolean;
+} {
+  const requested = githubTransportMode;
+  const hasToken = Boolean(githubToken);
+  return {
+    requested,
+    mode:
+      requested === 'http' || (requested === 'auto' && hasToken)
+        ? 'http'
+        : 'memory',
+    hasToken,
+    botLogin: githubBotLogin,
+    baseUrl: githubBaseUrl || undefined,
+    webhookSecretConfigured: Boolean(githubWebhookSecret),
+    workspaceId: githubWorkspaceId,
+    requireBinding: githubRequireBinding,
   };
 }
 
@@ -990,6 +1041,31 @@ function createTelegramTransportForRun(): {
   return { mode: 'memory', transport: dryRun, dryRun };
 }
 
+function createGitHubTransportForRun(): {
+  transport: GitHubTransport;
+  dryRun?: MemoryGitHubTransport;
+  mode: 'memory' | 'http';
+} {
+  const status = githubTransportStatus();
+  if (status.mode === 'http') {
+    if (!githubToken) {
+      throw new Error(
+        'OPENTAG_GITHUB_TRANSPORT=http requires OPENTAG_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN.',
+      );
+    }
+    return {
+      mode: 'http',
+      transport: new HttpGitHubTransport({
+        token: githubToken,
+        baseUrl: githubBaseUrl,
+      }),
+    };
+  }
+
+  const dryRun = new MemoryGitHubTransport();
+  return { mode: 'memory', transport: dryRun, dryRun };
+}
+
 function genericClientCapabilities(
   _platform: PlatformKind,
 ): Partial<PlatformCapabilities> {
@@ -1003,6 +1079,8 @@ function createPlatformForRun(thread: SourceThread): {
   larkTransport?: { mode: 'memory' | 'http' };
   telegramDryRun?: MemoryTelegramTransport;
   telegramTransport?: { mode: 'memory' | 'http' };
+  githubDryRun?: MemoryGitHubTransport;
+  githubTransport?: { mode: 'memory' | 'http' };
 } {
   if (thread.platform === 'lark') {
     const larkTransport = createLarkTransportForRun();
@@ -1028,6 +1106,18 @@ function createPlatformForRun(thread: SourceThread): {
       transportMode: `telegram-${telegramTransport.mode}`,
       telegramDryRun: telegramTransport.dryRun,
       telegramTransport: { mode: telegramTransport.mode },
+    };
+  }
+
+  if (thread.platform === 'github') {
+    const githubTransport = createGitHubTransportForRun();
+    return {
+      platform: new GitHubPlatformAdapter(
+        new TrackedGitHubTransport(githubTransport.transport, deliveryStore),
+      ),
+      transportMode: `github-${githubTransport.mode}`,
+      githubDryRun: githubTransport.dryRun,
+      githubTransport: { mode: githubTransport.mode },
     };
   }
 
@@ -1231,9 +1321,10 @@ function coerceDevMessage(body: Record<string, unknown>): {
   const projectId = stringValue(body, 'projectId', 'opentag');
   const projectName = stringValue(body, 'projectName', projectId);
   const platform = (stringValue(body, 'platform', 'lark') || 'lark') as PlatformKind;
-  const channelId = `dev-${projectId}`;
-  const topicId = platform === 'telegram' ? '1' : 'root';
-  const externalId = `${channelId}:${topicId}`;
+  const channelId = platform === 'github' ? 'opentag/dev-preview' : `dev-${projectId}`;
+  const topicId = platform === 'telegram' || platform === 'github' ? '1' : 'root';
+  const externalId =
+    platform === 'github' ? `${channelId}#${topicId}` : `${channelId}:${topicId}`;
   const thread: SourceThread = {
     id: `${platform}:${externalId}`,
     platform,
@@ -1241,12 +1332,20 @@ function coerceDevMessage(body: Record<string, unknown>): {
     workspaceId,
     projectId,
     channelId,
-    rootMessageId: platform === 'lark' ? 'root' : undefined,
+    rootMessageId: platform === 'lark' ? 'root' : platform === 'github' ? topicId : undefined,
     topicId,
     title: projectName,
     visibility: 'public',
     metadata: {
       projectId,
+      ...(platform === 'github'
+        ? {
+            owner: 'opentag',
+            repo: 'dev-preview',
+            repository: channelId,
+            issueNumber: 1,
+          }
+        : {}),
     },
   };
   return {
@@ -1442,6 +1541,15 @@ function coerceRoutineSchedule(
   return { error: 'unsupported_routine_schedule' };
 }
 
+function githubThreadAddress(
+  value: string,
+): { repository: string; issueNumber: string } | undefined {
+  const match = /^([^/#\s]+\/[^/#\s]+)#([1-9]\d*)$/u.exec(value.trim());
+  return match
+    ? { repository: match[1], issueNumber: match[2] }
+    : undefined;
+}
+
 function coerceRoutineInput(
   body: Record<string, unknown>,
 ): UpsertRoutineInput | { error: string } {
@@ -1459,6 +1567,11 @@ function coerceRoutineInput(
         'routine_workspace_name_instructions_platform_destination_required',
     };
   }
+  const githubDestination =
+    platform === 'github' ? githubThreadAddress(externalId) : undefined;
+  if (platform === 'github' && !githubDestination) {
+    return { error: 'github_destination_must_be_owner_repo_issue' };
+  }
   return {
     id: stringValue(body, 'id'),
     workspaceId,
@@ -1470,10 +1583,15 @@ function coerceRoutineInput(
     destination: {
       platform: platform as PlatformKind,
       externalId,
-      channelId: stringValue(destination, 'channelId', externalId),
+      channelId:
+        githubDestination?.repository ||
+        stringValue(destination, 'channelId', externalId),
       threadId: stringValue(destination, 'threadId'),
-      rootMessageId: stringValue(destination, 'rootMessageId'),
-      topicId: stringValue(destination, 'topicId'),
+      rootMessageId:
+        githubDestination?.issueNumber ||
+        stringValue(destination, 'rootMessageId'),
+      topicId:
+        githubDestination?.issueNumber || stringValue(destination, 'topicId'),
       visibility: visibilityValue(destination.visibility) || 'public',
       title: stringValue(destination, 'title', name),
     },
@@ -1527,13 +1645,24 @@ function coerceWorkflowInput(
       error: 'workflow_workspace_project_name_platform_destination_required',
     };
   }
+  const githubDestination =
+    platform === 'github' ? githubThreadAddress(externalId) : undefined;
+  if (platform === 'github' && !githubDestination) {
+    return { error: 'github_destination_must_be_owner_repo_issue' };
+  }
   const destination: WorkflowDestination = {
     platform: platform as PlatformKind,
     externalId,
-    channelId: stringValue(destinationBody, 'channelId', externalId),
+    channelId:
+      githubDestination?.repository ||
+      stringValue(destinationBody, 'channelId', externalId),
     threadId: stringValue(destinationBody, 'threadId'),
-    rootMessageId: stringValue(destinationBody, 'rootMessageId'),
-    topicId: stringValue(destinationBody, 'topicId'),
+    rootMessageId:
+      githubDestination?.issueNumber ||
+      stringValue(destinationBody, 'rootMessageId'),
+    topicId:
+      githubDestination?.issueNumber ||
+      stringValue(destinationBody, 'topicId'),
     visibility: visibilityValue(destinationBody.visibility) || 'public',
     title: stringValue(destinationBody, 'title', name),
   };
@@ -2295,6 +2424,7 @@ function pairingCommandCode(text: string): string | undefined {
 function requiresConfiguredBinding(platform: PlatformKind): boolean {
   if (platform === 'lark') return larkRequireBinding;
   if (platform === 'telegram') return telegramRequireBinding;
+  if (platform === 'github') return githubRequireBinding;
   return false;
 }
 
@@ -2799,6 +2929,9 @@ interface QueuedMessageRun {
   telegramTransport?: {
     mode: 'memory' | 'http';
   };
+  githubTransport?: {
+    mode: 'memory' | 'http';
+  };
 }
 
 interface AgentWorkerPassResult {
@@ -2849,11 +2982,15 @@ async function enqueueMessageRun(input: {
     routed.thread.platform === 'telegram'
       ? telegramTransportStatus()
       : undefined;
+  const githubTransport =
+    routed.thread.platform === 'github' ? githubTransportStatus() : undefined;
   const transportMode = larkTransport
     ? `lark-${String(larkTransport.mode)}`
     : telegramTransport
       ? `telegram-${telegramTransport.mode}`
-      : 'tracked-text';
+      : githubTransport
+        ? `github-${githubTransport.mode}`
+        : 'tracked-text';
   const route = {
     workspaceId: routed.thread.workspaceId,
     projectId: routed.thread.projectId,
@@ -2923,6 +3060,9 @@ async function enqueueMessageRun(input: {
       : undefined,
     telegramTransport: telegramTransport
       ? { mode: telegramTransport.mode }
+      : undefined,
+    githubTransport: githubTransport
+      ? { mode: githubTransport.mode }
       : undefined,
   };
 }
@@ -3122,6 +3262,13 @@ async function executeAgentRun(
               documents: runPlatform.telegramDryRun.documents,
             }
           : undefined,
+        githubTransport: runPlatform.githubTransport,
+        githubDryRun: runPlatform.githubDryRun
+          ? {
+              comments: runPlatform.githubDryRun.comments,
+              updates: runPlatform.githubDryRun.updates,
+            }
+          : undefined,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -3195,6 +3342,13 @@ async function executeAgentRun(
               texts: runPlatform.telegramDryRun.texts,
               edits: runPlatform.telegramDryRun.edits,
               documents: runPlatform.telegramDryRun.documents,
+            }
+          : undefined,
+        githubTransport: runPlatform.githubTransport,
+        githubDryRun: runPlatform.githubDryRun
+          ? {
+              comments: runPlatform.githubDryRun.comments,
+              updates: runPlatform.githubDryRun.updates,
             }
           : undefined,
       };
@@ -3281,6 +3435,13 @@ async function executeAgentRun(
             texts: runPlatform.telegramDryRun.texts,
             edits: runPlatform.telegramDryRun.edits,
             documents: runPlatform.telegramDryRun.documents,
+          }
+        : undefined,
+      githubTransport: runPlatform.githubTransport,
+      githubDryRun: runPlatform.githubDryRun
+        ? {
+            comments: runPlatform.githubDryRun.comments,
+            updates: runPlatform.githubDryRun.updates,
           }
         : undefined,
     };
@@ -3403,6 +3564,7 @@ const server = createServer(async (request, response) => {
         clients: {
           lark: larkTransportStatus(),
           telegram: telegramTransportStatus(),
+          github: githubTransportStatus(),
         },
         pairing: {
           ttlSeconds: pairingTtlSeconds,
@@ -3543,6 +3705,8 @@ const server = createServer(async (request, response) => {
       request.method === 'POST' && url.pathname === '/v1/lark/events';
     const isTelegramIngress =
       request.method === 'POST' && url.pathname === '/v1/telegram/events';
+    const isGitHubIngress =
+      request.method === 'POST' && url.pathname === '/v1/github/events';
     const isGenericClientIngress =
       request.method === 'POST' && url.pathname === '/v1/client/events';
     const isWorkflowIngress =
@@ -3600,6 +3764,7 @@ const server = createServer(async (request, response) => {
       url.pathname.startsWith('/v1/') &&
       !isLarkIngress &&
       !isTelegramIngress &&
+      !isGitHubIngress &&
       !isGenericClientIngress &&
       !isWorkflowIngress
     ) {
@@ -3618,6 +3783,7 @@ const server = createServer(async (request, response) => {
         ...capabilityManifest,
         larkTransport: larkTransportStatus(),
         telegramTransport: telegramTransportStatus(),
+        githubTransport: githubTransportStatus(),
         pairing: {
           ttlSeconds: pairingTtlSeconds,
           summary: await pairingStore.summarize(selection.workspaceId),
@@ -4440,7 +4606,7 @@ const server = createServer(async (request, response) => {
       const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
       const projectId = stringValue(body, 'projectId');
       if (
-        (platform !== 'lark' && platform !== 'telegram') ||
+        (platform !== 'lark' && platform !== 'telegram' && platform !== 'github') ||
         !workspaceId ||
         !projectId
       ) {
@@ -5223,6 +5389,192 @@ const server = createServer(async (request, response) => {
         inboundEventId: inbound.record.id,
         authorization,
       }));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/github/events') {
+      if (!githubWebhookSecret) {
+        sendJson(response, 503, {
+          accepted: false,
+          reason: 'github_webhook_secret_required',
+          message:
+            'Set OPENTAG_GITHUB_WEBHOOK_SECRET before enabling GitHub ingress.',
+        });
+        return;
+      }
+      const rawBody = await readTextBody(request);
+      const parsed = parseAndValidateGitHubCallback(
+        rawBody,
+        request.headers,
+        { webhookSecret: githubWebhookSecret },
+      );
+      const body = parsed.body as GitHubWebhookPayload;
+      const externalId = githubCallbackExternalId(request.headers, body);
+      const eventType = githubCallbackEventType(request.headers);
+      if (!parsed.validation.ok) {
+        const rejected = await deliveryStore.recordInboundEvent({
+          platform: 'github',
+          externalId: `rejected:${externalId}:${randomUUID()}`,
+          eventType,
+          metadata: {
+            ingress: 'github-webhook',
+            originalExternalId: externalId,
+            reason: parsed.validation.reason,
+          },
+        });
+        await deliveryStore.markInboundEventRejected(
+          rejected.record.id,
+          parsed.validation.reason,
+        );
+        sendJson(response, parsed.validation.statusCode, {
+          accepted: false,
+          reason: parsed.validation.reason,
+        });
+        return;
+      }
+
+      const normalized = normalizeGitHubWebhook(body, {
+        eventType,
+        botLogin: githubBotLogin,
+        workspaceId: githubWorkspaceId,
+      });
+      const inbound = await deliveryStore.recordInboundEvent({
+        platform: 'github',
+        externalId,
+        eventType,
+        workspaceId: normalized?.thread.workspaceId,
+        projectId: normalized?.thread.projectId,
+        threadId: normalized?.thread.id,
+        messageId: normalized?.message.id,
+        metadata: {
+          ingress: 'github-webhook',
+          action: body.action,
+          deliveryId: request.headers['x-github-delivery'],
+        },
+      });
+      if (inbound.duplicate) {
+        sendJson(response, 200, {
+          accepted: true,
+          duplicate: true,
+          inbound: inbound.record,
+        });
+        return;
+      }
+      if (eventType === 'ping') {
+        await deliveryStore.markInboundEventProcessed(inbound.record.id);
+        sendJson(response, 200, { accepted: true, pong: true });
+        return;
+      }
+      if (!normalized) {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'unsupported_github_event',
+        );
+        sendJson(response, 202, {
+          accepted: false,
+          reason: 'unsupported_github_event',
+        });
+        return;
+      }
+
+      const pairing = await handlePairingCommand(
+        normalized,
+        inbound.record.id,
+      );
+      if (pairing) {
+        sendJson(response, 200, pairing);
+        return;
+      }
+
+      const routed = await routeMessage(normalized);
+      if (
+        requiresConfiguredBinding(routed.thread.platform) &&
+        routed.binding?.source !== 'configured'
+      ) {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'binding_required',
+          {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            messageId: routed.message.id,
+          },
+        );
+        const notice = await pairingRequiredNotice(routed);
+        sendJson(response, 202, {
+          accepted: false,
+          reason: 'binding_required',
+          notice,
+          route: {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            platform: routed.thread.platform,
+          },
+        });
+        return;
+      }
+      if (!shouldHandleMessage(routed)) {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'mention_required',
+          {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            messageId: routed.message.id,
+          },
+        );
+        sendJson(response, 202, {
+          accepted: false,
+          reason: 'mention_required',
+          route: {
+            workspaceId: routed.thread.workspaceId,
+            projectId: routed.thread.projectId,
+            threadId: routed.thread.id,
+            platform: routed.thread.platform,
+            bindingId: routed.binding?.id,
+            establishedThreadBindingId: routed.establishedThreadBinding?.id,
+          },
+        });
+        return;
+      }
+
+      const authorization = await authorizeRoutedMessage(routed);
+      if (!authorization.allowed) {
+        sendJson(
+          response,
+          202,
+          await rejectUnauthorizedMessage({
+            inboundEventId: inbound.record.id,
+            routed,
+            decision: authorization,
+          }),
+        );
+        return;
+      }
+
+      const control = await handleRunControlCommand(
+        routed,
+        inbound.record.id,
+      );
+      if (control) {
+        sendJson(response, 200, control);
+        return;
+      }
+
+      const queued = await enqueueMessageRun(routed, {
+        inboundEventId: inbound.record.id,
+        authorization,
+      });
+      scheduleAgentWorkerPass();
+      sendJson(response, 202, {
+        accepted: true,
+        queued: true,
+        ...queued,
+        delivery: await deliverySnapshot(20, routed.thread.workspaceId),
+      });
       return;
     }
 

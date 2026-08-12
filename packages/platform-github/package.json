@@ -1,5 +1,5 @@
 {
-  "name": "@opentag/delivery",
+  "name": "@opentag/platform-github",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,9 +16,6 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@opentag/core": "0.1.0",
-    "@opentag/platform-github": "0.1.0",
-    "@opentag/platform-lark": "0.1.0",
-    "@opentag/platform-telegram": "0.1.0"
+    "@opentag/core": "0.1.0"
   }
 }

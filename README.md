@@ -4,8 +4,8 @@ OpenTag is an open agent-mention runtime for work threads.
 
 The product principle is **Lark first, not Lark only**. Feishu/Lark groups and
 topic threads remain the first product surface, Telegram is the second native
-client, and the core runtime stays platform-neutral for Slack, GitHub, Linear,
-or future work surfaces.
+client, GitHub comments are the third, and the core runtime stays
+platform-neutral for Slack, Linear, or future work surfaces.
 
 ## Why This Repo
 
@@ -24,7 +24,7 @@ those lessons, but starts from a different product model:
 ## Target Shape
 
 ```text
-@OpenTag in Lark or /opentag in a Telegram topic
+@OpenTag in Lark, /opentag in Telegram, or @OpenTagBot in a GitHub comment
   -> normalize platform event into SourceThread + SourceMessage
   -> resolve workspace/project/thread
   -> authorize the platform actor against workspace and project roles
@@ -43,6 +43,7 @@ packages/core               Platform-neutral domain model and runtime contract
 packages/config             Agent policy, workspace identities, project roles, and audit
 packages/platform-lark      Feishu/Lark adapter
 packages/platform-telegram  Telegram webhook and Bot API adapter
+packages/platform-github    GitHub issue and PR comment adapter
 packages/executor-cli       Bounded, cancellable local CLI process runtime
 packages/executor-codex     Codex dry-run and local CLI executor
 packages/executor-claude    Claude dry-run and local CLI executor
@@ -66,6 +67,10 @@ packages/ui-cards           Progress/checklist card models
   idempotency, chat/forum-topic normalization, editable progress messages,
   long-message chunking, topic replies, managed inbound downloads, outgoing
   files, and memory/http transports.
+- GitHub has native `issue_comment` webhook ingestion for issues and pull
+  requests, HMAC-SHA256 validation, repository/issue normalization, editable
+  progress comments, chunked final replies, self-loop suppression, tracked
+  delivery, and memory/http transports.
 - The core model is client-neutral: Lark, Telegram, Slack, and GitHub comments
   are clients of the same runtime contract.
 - Other clients can enter through `/v1/client/events`, which normalizes a
@@ -77,8 +82,8 @@ packages/ui-cards           Progress/checklist card models
 - Workspace and project agent policies are persisted separately from memory,
   including identity, instructions, executor choice, project tool grants,
   network policy, and an admin change audit.
-- Workspace members link stable client identities such as Lark `open_id` or
-  Telegram user IDs to workspace roles. Projects can stay open, require any
+- Workspace members link stable client identities such as Lark `open_id`,
+  Telegram user IDs, or GitHub logins to workspace roles. Projects can stay open, require any
   active workspace member, or require an explicit project role. Client ingress
   checks separate capabilities for agent invocation, memory writes, and routine
   management before a run is queued.
@@ -549,7 +554,7 @@ defaults to 30 MB and is checked before decoded bytes are written.
 
 ## Chat Pairing
 
-Open **Connectors**, choose Lark or Telegram and a target project, then generate
+Open **Connectors**, choose Lark, Telegram, or GitHub and a target project, then generate
 an invitation. Send the returned command in the chat that should serve that
 project:
 
@@ -566,6 +571,7 @@ with:
 ```bash
 OPENTAG_LARK_REQUIRE_BINDING=true
 OPENTAG_TELEGRAM_REQUIRE_BINDING=true
+OPENTAG_GITHUB_REQUIRE_BINDING=true
 OPENTAG_PAIRING_TTL_SECONDS=300
 ```
 
@@ -617,3 +623,31 @@ those topics to project-scoped identity, grants, and memory.
 Incoming Telegram file IDs are resolved with `getFile`, downloaded through the
 Bot API, bounded, and copied into the same managed content store before work is
 queued. Local managed artifacts are uploaded with `sendDocument`.
+
+## GitHub Comments Mode
+
+Local development defaults to `OPENTAG_GITHUB_TRANSPORT=memory`, so issue and
+pull request comments can be exercised without writing to GitHub. For a real
+repository webhook:
+
+```bash
+OPENTAG_GITHUB_TRANSPORT=http
+OPENTAG_GITHUB_TOKEN=github_pat_xxx
+OPENTAG_GITHUB_BOT_LOGIN=OpenTagBot
+OPENTAG_GITHUB_WEBHOOK_SECRET=replace-with-a-random-secret
+OPENTAG_GITHUB_WORKSPACE_ID=dev-workspace
+OPENTAG_GITHUB_REQUIRE_BINDING=true
+```
+
+Register `https://your-host/v1/github/events` as a JSON webhook, set the same
+secret, and subscribe to **Issue comments**. The token must be allowed to create
+and update comments in the target repositories. A `/pair CODE` comment binds
+the whole `owner/repo` channel to a project; each `owner/repo#issue` then becomes
+an isolated OpenTag thread. The first comment in a new issue must mention the
+configured bot login (or use `/opentag`), while later comments in that issue
+continue the established thread without another mention.
+
+Progress uses one comment that is updated in place. Final responses are new
+comments. OpenTag adds hidden ownership markers and ignores both those markers
+and the configured bot account on ingress so its own comments cannot start a
+reply loop.

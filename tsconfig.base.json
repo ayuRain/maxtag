@@ -17,6 +17,7 @@
       "@opentag/delivery": ["packages/delivery/src/index.ts"],
       "@opentag/platform-lark": ["packages/platform-lark/src/index.ts"],
       "@opentag/platform-telegram": ["packages/platform-telegram/src/index.ts"],
+      "@opentag/platform-github": ["packages/platform-github/src/index.ts"],
       "@opentag/executor-cli": ["packages/executor-cli/src/index.ts"],
       "@opentag/executor-codex": ["packages/executor-codex/src/index.ts"],
       "@opentag/executor-claude": ["packages/executor-claude/src/index.ts"],

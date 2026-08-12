@@ -98,6 +98,14 @@ async function main(): Promise<void> {
       botToken: process.env.OPENTAG_TELEGRAM_BOT_TOKEN,
       baseUrl: process.env.OPENTAG_TELEGRAM_BASE_URL,
     },
+    github: {
+      transportMode: process.env.OPENTAG_GITHUB_TRANSPORT,
+      token:
+        process.env.OPENTAG_GITHUB_TOKEN ||
+        process.env.GH_TOKEN ||
+        process.env.GITHUB_TOKEN,
+      baseUrl: process.env.OPENTAG_GITHUB_BASE_URL,
+    },
     executors: {
       mode: executorMode(),
       workspaceRoot: process.env.OPENTAG_EXECUTOR_WORKSPACE_ROOT,
@@ -160,6 +168,7 @@ async function main(): Promise<void> {
     once,
     larkTransport: host.larkTransportStatus(),
     telegramTransport: host.telegramTransportStatus(),
+    githubTransport: host.githubTransportStatus(),
     executors: host.executorStatus(),
     storage: host.storageStatus(),
   });

@@ -12,6 +12,7 @@
     { "path": "../../packages/executor-claude" },
     { "path": "../../packages/executor-codex" },
     { "path": "../../packages/memory" },
+    { "path": "../../packages/platform-github" },
     { "path": "../../packages/platform-lark" },
     { "path": "../../packages/platform-telegram" },
     { "path": "../../packages/routines" },

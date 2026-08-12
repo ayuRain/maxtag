@@ -10,11 +10,11 @@ many clients.
 | --- | --- |
 | Client-neutral event model | `SourceThread`, `SourceMessage`, and `PlatformAdapter` |
 | Lark first client | Lark normalization, progress cards, HTTP OpenAPI transport, managed resource download, and native file/image replies |
-| Multiple clients | Native Lark and Telegram ingress/delivery plus generic `/v1/client/events` for adapters in development |
+| Multiple clients | Native Lark, Telegram, and GitHub issue/PR comment ingress/delivery plus generic `/v1/client/events` for adapters in development |
 | Scoped memory | SQLite-backed global, workspace, project, and thread documents; transactional cross-process writes; immutable remember/forget/import/restore revisions with trusted actor provenance; Lark groups route to project scope |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
-| Self-service pairing | Lark and Telegram `/pair` commands use expiring, single-use, platform-bound codes; salted hashes persist across restarts, successful pairing creates a configured project route, and operators can revoke invitations or unbind chats |
-| Topic continuation | Mention establishes a Lark or Telegram topic binding; later messages continue without another mention, reuse a provider session when available, and fall back to a bounded durable transcript |
+| Self-service pairing | Lark, Telegram, and GitHub `/pair` commands use expiring, single-use, platform-bound codes; salted hashes persist across restarts, successful pairing creates a configured project route, and operators can revoke invitations or unbind chats |
+| Topic continuation | Mention establishes a Lark topic, Telegram topic, or GitHub issue binding; later messages continue without another mention, reuse a provider session when available, and fall back to a bounded durable transcript |
 | Shared task control | Durable cross-process follow-up mailbox, same-thread single-flight claims, live Claude stream input, resumed Codex next turns, authorized thread `/stop`, and operator steering/cancel controls |
 | Project agent policy | File-backed per-project identity, instructions, Codex/Claude choice, tool grants, network policy, and audit history |
 | Workspace governance | SQLite-backed workspace members and project roles for client ingress, plus named operator tokens with workspace scopes, owner/admin/viewer control-plane roles, signed principal sessions, and authoritative operator audit identity |
@@ -22,8 +22,9 @@ many clients.
 | Agent run queue | SQLite WAL run status, timeline events, cancel requests, inline or standalone worker claim, restart persistence, and stale recovery |
 | Scheduled tasks | SQLite WAL-backed workspace/project routines with interval or daily schedules, IANA time zones, manual trigger, atomic cross-process claims, stale reclaim, deterministic run enqueue, inline/external/manual scheduler modes, and shared worker execution; Lark and Telegram topics support bilingual create/list/pause/resume/delete commands with requester audit |
 | Dynamic workflows | SQLite WAL-backed saved DAGs with immutable execution snapshots, manual and typed-event triggers, event-id deduplication, atomic node claims, stale reclaim, dependency failure propagation, and deterministic bridging of every node into the shared run queue; sink nodes publish to a real client destination |
-| Inbound callback ledger | Lark token/timestamp and Telegram webhook-secret checks, event idempotency, and duplicate short-circuit |
+| Inbound callback ledger | Lark token/timestamp, Telegram webhook-secret, and GitHub HMAC-SHA256 checks, event idempotency, and duplicate short-circuit |
 | Native Telegram client | Bot API webhook normalization, forum topics, send/edit progress, reply chunking, outgoing files, and tracked delivery |
+| Native GitHub client | `issue_comment` webhook normalization, repository binding, issue/PR threads, create/update progress comments, chunked replies, self-loop suppression, and tracked delivery |
 | Files and artifacts | Isolated content-addressed input storage; generic base64 upload; Lark/Telegram native download and upload; CLI artifact validation, durable timeline provenance, Activity downloads, and hash checks |
 | Executor boundary | Project-selectable Codex and Claude dry-run/local CLI modes with bounded output, cancellation, timeout, and filtered child environments |
 | Brokered tools | Per-run loopback MCP capability with schema validation, resource allowlists, explicit read/write grants, call/time/result limits, durable audit, scoped memory read/write, GitHub repository/issue reads plus issue/comment writes, Lark document read/append, and Base query/create/update; host credentials are not inherited by executors |
@@ -33,8 +34,9 @@ many clients.
 
 | AgentDock capability | OpenTag next step |
 | --- | --- |
-| More native clients | Add Slack, GitHub comment, QQ, and Web adapters behind the shared platform contract |
+| More native clients | Add Slack, QQ, and Web adapters behind the shared platform contract |
 | Telegram production depth | Verify webhook, download, send, edit, and file behavior against a live bot; local HTTP contract and end-to-end managed storage tests pass |
+| GitHub production depth | Verify webhook, comment create/update, permissions, and delivery recovery against a live GitHub App or token; local HTTP contract and end-to-end routing tests pass |
 | High-volume storage | Normalize the current transactional SQLite state documents or add Postgres before high-volume multi-replica deployment; add retention and compaction metrics |
 | Async run execution | Add production supervisor/deployment manifests; durable cross-process cancellation polling is implemented |
 | Provider-level live steering | Claude local CLI consumes active `stream-json` follow-ups; add true mid-turn steering for Codex when its provider exposes a stable streaming input API |

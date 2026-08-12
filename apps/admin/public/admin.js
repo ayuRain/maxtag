@@ -766,12 +766,14 @@ function renderConnectors() {
 function clientTransport(client) {
   if (client.id === 'lark') return state.capabilities?.larkTransport;
   if (client.id === 'telegram') return state.capabilities?.telegramTransport;
+  if (client.id === 'github') return state.capabilities?.githubTransport;
   return null;
 }
 
 function clientEndpoint(client) {
   if (client.id === 'lark') return '/v1/lark/events';
   if (client.id === 'telegram') return '/v1/telegram/events';
+  if (client.id === 'github') return '/v1/github/events';
   return '/v1/client/events';
 }
 
@@ -782,6 +784,13 @@ function clientRuntimeLabel(client) {
     return transport.mode === 'http'
       ? 'HTTP / credentials set'
       : `Memory / ${transport.hasCredentials ? 'credentials set' : 'no credentials'}`;
+  }
+  if (client.id === 'github') {
+    const transportState = transport.hasToken ? 'token set' : 'no token';
+    const webhookState = transport.webhookSecretConfigured
+      ? 'secret set'
+      : 'webhook off';
+    return `${statusLabel(transport.mode)} / ${transportState} / ${webhookState}`;
   }
   return transport.mode === 'http'
     ? `HTTP / ${transport.webhookSecretConfigured ? 'secret set' : 'no secret'}`
@@ -1378,12 +1387,30 @@ function updateRoutineScheduleFields() {
   $('#routine-time-zone-field').hidden = !daily;
 }
 
+function updateClientDestinationFields() {
+  const bindingGitHub = $('#binding-platform').value === 'github';
+  $('#binding-external-id-label').textContent = bindingGitHub
+    ? 'Repository'
+    : 'Channel ID';
+  $('#binding-external-id').placeholder = bindingGitHub ? 'owner/repo' : 'oc_xxx';
+
+  for (const kind of ['routine', 'workflow']) {
+    const github = $(`#${kind}-platform`).value === 'github';
+    $(`#${kind}-external-id-label`).textContent = github
+      ? 'Issue / PR'
+      : 'Channel ID';
+    $(`#${kind}-external-id`).placeholder = github
+      ? 'owner/repo#123'
+      : 'oc_xxx';
+  }
+}
+
 function preferredRoutineBinding(projectId, platform) {
   const project = projectById(projectId);
   const candidates = project
     ? projectBindings(project)
     : state.bindings.filter((binding) => binding.workspaceId === currentWorkspaceId());
-  return candidates.find((binding) => binding.platform === platform) || candidates[0];
+  return candidates.find((binding) => binding.platform === platform);
 }
 
 function fillRoutineDestination(force = false) {
@@ -1397,8 +1424,10 @@ function fillRoutineDestination(force = false) {
     if (force) externalId.value = '';
     return;
   }
-  $('#routine-platform').value = binding.platform;
-  externalId.value = binding.externalId;
+  externalId.value =
+    binding.platform === 'github' && !binding.externalId.includes('#')
+      ? `${binding.externalId}#`
+      : binding.externalId;
 }
 
 function routineExecutions(routineId) {
@@ -1523,6 +1552,7 @@ function fillRoutineForm(routine) {
   $('#routine-visibility').value = routine?.destination?.visibility || 'public';
   $('#routine-thread-id').value = routine?.destination?.threadId || '';
   if (isNew) fillRoutineDestination();
+  updateClientDestinationFields();
   $('#routine-next-run').textContent = routine?.nextRunAt
     ? `Next ${formatTime(routine.nextRunAt, true)}`
     : 'Not scheduled';
@@ -1562,6 +1592,12 @@ function routinePayload() {
   const externalId = $('#routine-external-id').value.trim();
   if (!name || !instructions || !externalId) {
     throw new Error('Name, instructions, and channel ID are required');
+  }
+  if (
+    $('#routine-platform').value === 'github' &&
+    !/^[^/#\s]+\/[^/#\s]+#[1-9]\d*$/.test(externalId)
+  ) {
+    throw new Error('GitHub destination must be owner/repo#issue');
   }
   if (kind === 'interval' && (!Number.isFinite(everyMinutes) || everyMinutes < 1)) {
     throw new Error('Interval must be at least one minute');
@@ -1749,8 +1785,10 @@ function fillWorkflowDestination(force = false) {
     if (force) externalId.value = '';
     return;
   }
-  $('#workflow-platform').value = binding.platform;
-  externalId.value = binding.externalId;
+  externalId.value =
+    binding.platform === 'github' && !binding.externalId.includes('#')
+      ? `${binding.externalId}#`
+      : binding.externalId;
 }
 
 function defaultWorkflowSteps() {
@@ -2035,6 +2073,7 @@ function fillWorkflowForm(workflow) {
   $('#workflow-visibility').value = workflow?.destination?.visibility || 'public';
   $('#workflow-thread-id').value = workflow?.destination?.threadId || '';
   if (isNew) fillWorkflowDestination();
+  updateClientDestinationFields();
   const nodes = workflow?.nodes || defaultWorkflowSteps();
   state.workflowGraphMode = sequentialWorkflowNodes(nodes) ? 'sequential' : 'advanced';
   $('#workflow-destination-label').textContent =
@@ -2091,6 +2130,12 @@ function workflowPayload() {
   const eventType = $('#workflow-event-type').value.trim();
   if (!name || !projectId || !externalId) {
     throw new Error('Name, project, and channel ID are required');
+  }
+  if (
+    $('#workflow-platform').value === 'github' &&
+    !/^[^/#\s]+\/[^/#\s]+#[1-9]\d*$/.test(externalId)
+  ) {
+    throw new Error('GitHub destination must be owner/repo#issue');
   }
   if (state.workflowTriggerKind === 'event' && !eventType) {
     throw new Error('Event type is required');
@@ -2904,6 +2949,8 @@ async function runTest(event) {
     const texts = data.larkDryRun?.texts || [];
     const telegramTexts = data.telegramDryRun?.texts || [];
     const telegramEdits = data.telegramDryRun?.edits || [];
+    const githubComments = data.githubDryRun?.comments || [];
+    const githubUpdates = data.githubDryRun?.updates || [];
     if (cards.length) {
       renderCard(cards.at(-1).card);
     } else if (data.telegramDryRun) {
@@ -2911,8 +2958,14 @@ async function runTest(event) {
       receipt.className = 'lark-card telegram-receipt';
       receipt.textContent =
         telegramEdits.at(-1)?.text || telegramTexts[0]?.text || 'No progress receipt';
+    } else if (data.githubDryRun) {
+      const receipt = $('#card');
+      receipt.className = 'lark-card telegram-receipt';
+      receipt.textContent =
+        githubUpdates.at(-1)?.body || githubComments[0]?.body || 'No progress comment';
     }
     $('#test-output').textContent =
+      githubComments.at(-1)?.body ||
       telegramTexts.at(-1)?.text ||
       texts.at(-1)?.text ||
       data.result?.summary ||
@@ -3046,6 +3099,7 @@ $('#access-membership-form').addEventListener('submit', (event) =>
   void assignProjectMember(event),
 );
 $('#save-binding').addEventListener('click', () => void saveBinding());
+$('#binding-platform').addEventListener('change', updateClientDestinationFields);
 $('#pairing-form').addEventListener('submit', (event) => void generatePairing(event));
 $('#copy-pairing').addEventListener('click', () => void copyPairingCommand());
 $('#new-routine').addEventListener('click', newRoutine);
@@ -3090,9 +3144,15 @@ $('#workflow-event-type').addEventListener('input', () =>
 
 $('#routine-schedule-kind').addEventListener('change', updateRoutineScheduleFields);
 $('#routine-project').addEventListener('change', () => fillRoutineDestination(true));
-$('#routine-platform').addEventListener('change', () => fillRoutineDestination(true));
+$('#routine-platform').addEventListener('change', () => {
+  fillRoutineDestination(true);
+  updateClientDestinationFields();
+});
 $('#workflow-project').addEventListener('change', () => fillWorkflowDestination(true));
-$('#workflow-platform').addEventListener('change', () => fillWorkflowDestination(true));
+$('#workflow-platform').addEventListener('change', () => {
+  fillWorkflowDestination(true);
+  updateClientDestinationFields();
+});
 
 $('#project-id').addEventListener('input', () => {
   if (state.selectedProjectId === '__new__') {

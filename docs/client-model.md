@@ -34,10 +34,13 @@ clients of the same thread-agent core.
 - Lark: native callback adapter with progress cards and HTTP OpenAPI delivery.
 - Telegram: native Bot API webhook adapter with forum-topic routing, editable
   progress messages, chunked replies, outgoing documents, and tracked delivery.
-- Lark and Telegram share the same invitation model: an operator targets a
+- GitHub: native `issue_comment` webhook adapter with repository-level project
+  binding, issue/PR threads, editable progress comments, chunked replies,
+  HMAC-SHA256 verification, self-loop suppression, and tracked delivery.
+- Lark, Telegram, and GitHub share the same invitation model: an operator targets a
   workspace/project/client, then `/pair CODE` turns the consuming chat into a
   configured channel binding.
-- Lark, Telegram, and generic client events share the same actor authorization
+- Lark, Telegram, GitHub, and generic client events share the same actor authorization
   model after routing. Projects can be open, workspace-member-only, or
   project-member-only.
 - Client-thread membership and operator access are separate trust planes.
@@ -50,8 +53,9 @@ clients of the same thread-agent core.
 - Manual and typed-event workflows resolve the same project policy, executor,
   scoped memory, run queue, and client destination as an inbound conversation.
 - Slack: planned.
-- GitHub: repository and issue reads are a brokered tool provider; GitHub
-  comments remain planned as a source client.
+- GitHub tools and GitHub as a source client are separate capabilities: the
+  client adapter handles comments, while project grants govern repository and
+  issue reads/writes inside an agent run.
 
 The goal is not to clone AgentDock feature-for-feature. AgentDock is the mature
 workbench; OpenTag is the shared-thread product layer that can reuse selected
@@ -71,13 +75,14 @@ Client onboarding is separate from execution:
 pairing invitation -> client chat -> configured project binding -> SourceThread route
 ```
 
-Lark groups/topics and Telegram chats/forum topics now share this route. Slack
-threads and GitHub comments should only add adapters; they should not add new
-executor or memory concepts.
+Lark groups/topics, Telegram chats/forum topics, and GitHub repositories/issues
+now share this route. Slack threads should only add an adapter; they should not
+add new executor or memory concepts.
 
-Standing work follows the same rule. A routine created in a Lark topic or
-Telegram forum topic retains the resolved workspace, project, destination, and
-requesting user, then re-enters the shared run queue when its schedule is due.
+Standing work follows the same rule. A routine created in a Lark topic,
+Telegram forum topic, or GitHub issue retains the resolved workspace, project,
+destination, and requesting user, then re-enters the shared run queue when its
+schedule is due.
 
 Workflow events add no alternate execution plane:
 

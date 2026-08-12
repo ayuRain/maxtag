@@ -13,6 +13,7 @@ import {
 import { FileThreadConfigStore } from '@opentag/config';
 import {
   FileDeliveryStore,
+  TrackedGitHubTransport,
   TrackedLarkTransport,
   TrackedTelegramTransport,
   TrackedTextPlatformAdapter,
@@ -28,6 +29,12 @@ import {
   parseMemoryCommand,
   type ParsedMemoryCommand,
 } from '@opentag/memory';
+import {
+  GitHubPlatformAdapter,
+  HttpGitHubTransport,
+  MemoryGitHubTransport,
+  type GitHubTransport,
+} from '@opentag/platform-github';
 import {
   HttpLarkTransport,
   LarkPlatformAdapter,
@@ -85,6 +92,12 @@ export interface RuntimeHostTelegramConfig {
   baseUrl?: string;
 }
 
+export interface RuntimeHostGitHubConfig {
+  transportMode?: string;
+  token?: string;
+  baseUrl?: string;
+}
+
 export interface RuntimeHostExecutorConfig {
   mode?: 'dry-run' | 'local-cli';
   workspaceRoot?: string;
@@ -131,6 +144,7 @@ export interface RuntimeHostConfig {
   workerId?: string;
   lark?: RuntimeHostLarkConfig;
   telegram?: RuntimeHostTelegramConfig;
+  github?: RuntimeHostGitHubConfig;
   executors?: RuntimeHostExecutorConfig;
   routines?: RuntimeHostRoutineConfig;
   workflows?: RuntimeHostWorkflowConfig;
@@ -175,6 +189,25 @@ function telegramTransportStatus(config: RuntimeHostTelegramConfig = {}): {
 } {
   const requested = config.transportMode || 'memory';
   const hasToken = Boolean(config.botToken);
+  return {
+    requested,
+    mode:
+      requested === 'http' || (requested === 'auto' && hasToken)
+        ? 'http'
+        : 'memory',
+    hasToken,
+    baseUrl: config.baseUrl,
+  };
+}
+
+function githubTransportStatus(config: RuntimeHostGitHubConfig = {}): {
+  requested: string;
+  mode: 'memory' | 'http';
+  hasToken: boolean;
+  baseUrl?: string;
+} {
+  const requested = config.transportMode || 'memory';
+  const hasToken = Boolean(config.token);
   return {
     requested,
     mode:
@@ -369,6 +402,9 @@ export class OpenTagWorkerHost {
         if (platform === 'telegram') {
           return `telegram-${this.telegramTransportStatus().mode}`;
         }
+        if (platform === 'github') {
+          return `github-${this.githubTransportStatus().mode}`;
+        }
         return platform === 'workflow' ? 'workflow-internal' : 'tracked-text';
       },
     });
@@ -411,6 +447,10 @@ export class OpenTagWorkerHost {
 
   telegramTransportStatus(): ReturnType<typeof telegramTransportStatus> {
     return telegramTransportStatus(this.config.telegram);
+  }
+
+  githubTransportStatus(): ReturnType<typeof githubTransportStatus> {
+    return githubTransportStatus(this.config.github);
   }
 
   executorStatus(): Record<string, unknown> {
@@ -614,6 +654,8 @@ export class OpenTagWorkerHost {
           telegramDryRun: this.telegramDryRunPayload(
             runPlatform.telegramDryRun,
           ),
+          githubTransport: runPlatform.githubTransport,
+          githubDryRun: this.githubDryRunPayload(runPlatform.githubDryRun),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -679,6 +721,8 @@ export class OpenTagWorkerHost {
           telegramDryRun: this.telegramDryRunPayload(
             runPlatform.telegramDryRun,
           ),
+          githubTransport: runPlatform.githubTransport,
+          githubDryRun: this.githubDryRunPayload(runPlatform.githubDryRun),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -755,6 +799,8 @@ export class OpenTagWorkerHost {
         telegramDryRun: this.telegramDryRunPayload(
           runPlatform.telegramDryRun,
         ),
+        githubTransport: runPlatform.githubTransport,
+        githubDryRun: this.githubDryRunPayload(runPlatform.githubDryRun),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -884,6 +930,8 @@ export class OpenTagWorkerHost {
     larkTransport?: { mode: 'memory' | 'http' };
     telegramDryRun?: MemoryTelegramTransport;
     telegramTransport?: { mode: 'memory' | 'http' };
+    githubDryRun?: MemoryGitHubTransport;
+    githubTransport?: { mode: 'memory' | 'http' };
   } {
     if (thread.platform === 'lark') {
       const larkTransport = this.createLarkTransportForRun();
@@ -909,6 +957,21 @@ export class OpenTagWorkerHost {
         transportMode: `telegram-${telegramTransport.mode}`,
         telegramDryRun: telegramTransport.dryRun,
         telegramTransport: { mode: telegramTransport.mode },
+      };
+    }
+
+    if (thread.platform === 'github') {
+      const githubTransport = this.createGitHubTransportForRun();
+      return {
+        platform: new GitHubPlatformAdapter(
+          new TrackedGitHubTransport(
+            githubTransport.transport,
+            this.deliveryStore,
+          ),
+        ),
+        transportMode: `github-${githubTransport.mode}`,
+        githubDryRun: githubTransport.dryRun,
+        githubTransport: { mode: githubTransport.mode },
       };
     }
 
@@ -991,6 +1054,31 @@ export class OpenTagWorkerHost {
     return { mode: 'memory', transport: dryRun, dryRun };
   }
 
+  private createGitHubTransportForRun(): {
+    transport: GitHubTransport;
+    dryRun?: MemoryGitHubTransport;
+    mode: 'memory' | 'http';
+  } {
+    const status = this.githubTransportStatus();
+    if (status.mode === 'http') {
+      if (!this.config.github?.token) {
+        throw new Error(
+          'OPENTAG_GITHUB_TRANSPORT=http requires OPENTAG_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN.',
+        );
+      }
+      return {
+        mode: 'http',
+        transport: new HttpGitHubTransport({
+          token: this.config.github.token,
+          baseUrl: status.baseUrl,
+        }),
+      };
+    }
+
+    const dryRun = new MemoryGitHubTransport();
+    return { mode: 'memory', transport: dryRun, dryRun };
+  }
+
   private larkDryRunPayload(
     dryRun: MemoryLarkTransport | undefined,
   ): Record<string, unknown> | undefined {
@@ -1011,6 +1099,17 @@ export class OpenTagWorkerHost {
           texts: dryRun.texts,
           edits: dryRun.edits,
           documents: dryRun.documents,
+        }
+      : undefined;
+  }
+
+  private githubDryRunPayload(
+    dryRun: MemoryGitHubTransport | undefined,
+  ): Record<string, unknown> | undefined {
+    return dryRun
+      ? {
+          comments: dryRun.comments,
+          updates: dryRun.updates,
         }
       : undefined;
   }
