@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {
+  memoryScopeGranted,
   OpenTagRuntime,
   type AgentRunEvent,
   type MemoryScopeKind,
@@ -679,6 +680,8 @@ export class OpenTagWorkerHost {
             initialRun.message.actor.id,
           ),
           source: `${initialRun.thread.platform}-command`,
+          workspaceMemoryWriteAllowed:
+            initialRun.metadata?.workspaceMemoryWriteAllowed === true,
         });
         await this.deliveryStore.appendAgentRunEvent(runId, 'memory_command', {
           message: String(commandResult.summary),
@@ -765,6 +768,8 @@ export class OpenTagWorkerHost {
         executorId: initialRun.executorId,
         thread: initialRun.thread,
         message: initialRun.message,
+        workspaceMemoryWriteAllowed:
+          initialRun.metadata?.workspaceMemoryWriteAllowed === true,
         transcript,
         providerSession,
         abortSignal: abortController.signal,
@@ -830,10 +835,26 @@ export class OpenTagWorkerHost {
     thread: SourceThread;
     actorId?: string;
     source?: string;
+    workspaceMemoryWriteAllowed?: boolean;
   }): Promise<Record<string, unknown>> {
     const { workspace, project } = await this.memoryContextForThread(
       input.thread,
     );
+    const access = await this.threadConfigStore.getAccessBundle(input.thread, {
+      workspace,
+      project,
+    });
+    const permission = input.command.kind === 'show' ? 'read' : 'write';
+    if (
+      input.command.scope === 'workspace' &&
+      permission === 'write' &&
+      input.workspaceMemoryWriteAllowed === false
+    ) {
+      throw new Error('memory_workspace_write_not_granted');
+    }
+    if (!memoryScopeGranted(access, input.command.scope, permission)) {
+      throw new Error(`memory_${input.command.scope}_${permission}_not_granted`);
+    }
     if (input.command.kind === 'remember') {
       await this.memoryStore.rememberScoped({
         thread: input.thread,

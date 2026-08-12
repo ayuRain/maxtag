@@ -16,7 +16,9 @@ those lessons, but starts from a different product model:
 - OpenTag is organized around shared work threads, not a single local operator.
 - A workspace-level bot can route many clients into separate projects and
   threads.
-- Each thread can have an agent identity, tool grants, scoped memory, and
+- Workspace identity, tools, and network defaults flow into every project;
+  projects can explicitly override them without creating a second bot.
+- Every routed thread receives policy-granted memory and a client-native
   progress surface.
 - Agent work should be visible, steerable, and auditable inside the collaboration
   channel.
@@ -76,12 +78,12 @@ packages/ui-cards           Progress/checklist card models
 - Other clients can enter through `/v1/client/events`, which normalizes a
   client envelope into the same run queue, scoped memory, and delivery ledger.
   Deployments can protect this adapter-only ingress with its own Bearer token.
-- Memory is scoped into global, workspace, project, and thread documents. In
+- Memory is stored in installation, workspace, project, and thread documents. In
   the default SQLite mode, every remember, forget, restore, and legacy import
   creates an immutable revision with its trusted operator or client actor.
 - Workspace and project agent policies are persisted separately from memory,
-  including identity, instructions, executor choice, project tool grants,
-  network policy, and an admin change audit.
+  including a workspace identity/executor/tool/network baseline and explicit
+  per-project identity, capability, and memory modes with an admin change audit.
 - Workspace members link stable client identities such as Lark `open_id`,
   Telegram user IDs, or GitHub logins to workspace roles. Projects can stay open, require any
   active workspace member, or require an explicit project role. Client ingress
@@ -162,10 +164,12 @@ packages/ui-cards           Progress/checklist card models
   console, or chat commands such as `remember project ...` and
   `forget project ...`. The API and console expose revision history and restore;
   restoring creates a new revision instead of rewriting audit history.
-- Client memory writes follow the scope boundary: authorized project users can
-  update project/thread memory, identified non-guest workspace members can
-  update workspace memory, and global memory is reserved for an installation
-  operator through the authenticated control plane.
+- Client memory follows the resolved project boundary. Workspace-shared public
+  projects load workspace/project/thread memory; isolated projects omit
+  workspace memory; private threads can read but not write workspace memory;
+  direct messages use thread memory only. Workspace writes also require an
+  identified non-guest member. Installation memory stays outside project runs
+  and is reserved for an installation operator.
 - The admin console exposes Overview, Projects, Access, Connectors, Routines,
   Workflows, Activity, and Memory workspaces, with workspace identity linking, project
   roles, project policy editing, self-service chat pairing, channel unbinding,
@@ -307,7 +311,7 @@ export OPENTAG_OPERATOR_PRINCIPALS_JSON='[
 
 `owner` and `admin` can mutate resources inside their workspace scope; `viewer`
 is read-only. A `workspaceIds` entry of `"*"` grants installation scope and is
-required for global memory plus cross-workspace worker and scheduler controls.
+required for installation memory plus cross-workspace worker and scheduler controls.
 Collection APIs are filtered before limiting results, and object actions verify
 the target run, binding, routine, invitation, or delivery belongs to an allowed
 workspace.
@@ -344,7 +348,7 @@ agent work. Workspace guests can invoke the agent in `workspace` mode but cannot
 write memory or manage routines. Authorization denials are recorded in the
 inbound ledger, and native clients receive a rate-limited access notice.
 Project-level write access covers project and thread memory. Workspace memory
-also requires an identified active `owner`, `admin`, or `member`; global memory
+also requires an identified active `owner`, `admin`, or `member`; installation memory
 cannot be mutated from a client thread, including by a workspace owner.
 
 Workspace member roles govern people invoking OpenTag from client threads;
@@ -469,11 +473,15 @@ environment. Additional variables must be named explicitly through
 The executor ignores inherited MCP configuration and injects one per-run
 `opentag` stdio proxy. Project policies must list allowed GitHub repositories,
 Lark document IDs, and Base app tokens. An empty resource allowlist denies the
-call even when the provider grant is enabled. Agents can read all four memory
-scopes by default, while autonomous writes are limited to project and thread
-memory; workspace/global promotion stays on the authenticated control plane.
+  call even when the provider grant is enabled. Agents receive only the memory
+  scopes granted by the resolved project and thread policy. Workspace-shared
+  public projects may read and write workspace, project, and thread memory;
+  isolated projects receive project and thread only; private threads get
+  read-only workspace context; direct messages get thread memory only.
+  Installation memory is never injected into project runs.
 GitHub issue/comment, Lark document append, and Base record create/update tools
-also require the project's explicit write toggle. No delete, close, merge, or
+  also require an explicit write toggle in the inherited workspace policy or a
+  custom project policy. No delete, close, merge, or
 other destructive brokered operation is currently exposed.
 
 ```bash

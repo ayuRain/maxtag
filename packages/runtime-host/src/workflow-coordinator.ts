@@ -347,6 +347,7 @@ export class WorkflowCoordinatorService {
           allowed: true,
           reason: 'operator_or_internal',
         },
+        workspaceMemoryWriteAllowed: true,
         agentId: policy.identity.id,
         agentDisplayName: policy.identity.displayName,
         policyConfigured: policy.configured,

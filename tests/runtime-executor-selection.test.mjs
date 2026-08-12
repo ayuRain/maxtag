@@ -343,3 +343,147 @@ test('runtime exposes a live steering channel to a capable executor', async () =
     'ack:steering-1:Applied in place',
   ]);
 });
+
+test('runtime loads only memory scopes granted by the resolved project policy', async () => {
+  const loaded = [];
+  const received = [];
+  const thread = {
+    id: 'lark:legal:root',
+    platform: 'lark',
+    externalId: 'legal:root',
+    workspaceId: 'acme',
+    projectId: 'legal',
+    visibility: 'public',
+  };
+  const runtime = new OpenTagRuntime({
+    platform: {
+      kind: 'lark',
+      capabilities: {
+        supportsThreads: true,
+        supportsCards: true,
+        supportsFiles: true,
+        supportsReactions: true,
+        supportsMentions: true,
+      },
+      createProgressSurface() {
+        return {
+          async create() {
+            return { surfaceId: 'surface-memory' };
+          },
+          async update() {},
+          async complete() {},
+        };
+      },
+      async sendMessage() {},
+    },
+    executor: {
+      id: 'codex',
+      label: 'Codex',
+      async run(request) {
+        received.push({
+          scopes: request.memorySnapshot.scopes.map((item) => item.scope.kind),
+          workspacePermissions: request.access.grants.find(
+            (grant) => grant.kind === 'memory' && grant.scope === 'workspace',
+          )?.constraints?.permissions,
+        });
+        return { summary: 'done', artifacts: [] };
+      },
+    },
+    memory: {
+      async loadMemory(query) {
+        loaded.push(query.scopes);
+        return {
+          loadedAt: new Date().toISOString(),
+          scopes: query.scopes.map((kind) => ({
+            scope: { kind, label: kind },
+            content: kind,
+          })),
+          text: query.scopes.join(','),
+        };
+      },
+      async loadThreadMemory() {
+        throw new Error('legacy memory path should not be used');
+      },
+      async remember() {},
+      async forget() {},
+    },
+    threadConfig: {
+      async getWorkspace() {
+        return { id: 'acme', name: 'Acme' };
+      },
+      async getProject() {
+        return { id: 'acme:legal', workspaceId: 'acme', key: 'legal', name: 'Legal' };
+      },
+      async getIdentity() {
+        return {
+          id: 'acme-agent',
+          displayName: 'Acme Tag',
+          instructions: 'Serve Acme.',
+          defaultExecutorId: 'codex',
+        };
+      },
+      async getAccessBundle() {
+        return {
+          id: 'access-legal',
+          threadId: thread.id,
+          workspaceId: 'acme',
+          projectId: 'acme:legal',
+          grants: [
+            {
+              id: 'memory:global',
+              kind: 'memory',
+              scope: 'global',
+              label: 'Legacy installation memory',
+              constraints: { permissions: ['read'] },
+            },
+            {
+              id: 'memory:project',
+              kind: 'memory',
+              scope: 'project',
+              label: 'Project memory',
+              constraints: { permissions: ['read', 'write'] },
+            },
+            {
+              id: 'memory:workspace',
+              kind: 'memory',
+              scope: 'workspace',
+              label: 'Workspace memory',
+              constraints: { permissions: ['read', 'write'] },
+            },
+            {
+              id: 'memory:thread',
+              kind: 'memory',
+              scope: 'thread',
+              label: 'Thread memory',
+              constraints: { permissions: ['read', 'write'] },
+            },
+          ],
+          networkPolicy: { mode: 'deny-by-default', allowedHosts: [] },
+        };
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    runId: 'run-memory-policy',
+    thread,
+    workspaceMemoryWriteAllowed: false,
+    message: {
+      id: 'message-memory-policy',
+      threadId: thread.id,
+      platform: 'lark',
+      text: 'Review the contract.',
+      actor: { id: 'user-1' },
+      createdAt: new Date().toISOString(),
+      mentionsAgent: true,
+    },
+  });
+
+  assert.deepEqual(loaded, [['workspace', 'project', 'thread']]);
+  assert.deepEqual(received, [
+    {
+      scopes: ['workspace', 'project', 'thread'],
+      workspacePermissions: ['read'],
+    },
+  ]);
+});

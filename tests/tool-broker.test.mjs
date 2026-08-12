@@ -219,7 +219,7 @@ test('per-run MCP broker filters, authorizes, executes, and audits tools', async
     arguments: { scope: 'global', text: 'Do not allow this.' },
   });
   assert.equal(deniedMemory.isError, true);
-  assert.match(textResult(deniedMemory), /memory_global_write_not_granted/);
+  assert.match(textResult(deniedMemory), /tool_arguments_invalid/);
 
   const repository = await client.callTool({
     name: 'github_repository',

@@ -61,7 +61,7 @@ export function memoryScopeFor(
 ): MemoryScope {
   switch (kind) {
     case 'global':
-      return { kind, label: 'Global memory' };
+      return { kind, label: 'Installation memory' };
     case 'workspace': {
       const workspaceId = workspaceIdFor(query);
       return {
@@ -149,7 +149,7 @@ function importedScope(relativePath: string): {
   if (relativePath === 'global.md') {
     return {
       key: 'global',
-      scope: { kind: 'global', label: 'Global memory' },
+      scope: { kind: 'global', label: 'Installation memory' },
     };
   }
   const workspace = relativePath.match(/^workspaces\/([^/]+)\/memory\.md$/u);

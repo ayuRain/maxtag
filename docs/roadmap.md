@@ -44,8 +44,9 @@
 - Managed CLI artifact declarations with traversal/symlink/size validation,
   durable run events, native Lark/Telegram delivery, and authenticated
   integrity-checked Activity downloads.
-- Shared file-backed workspace/project agent policy with per-project identity,
-  instructions, executor selection, tool grants, network policy, and audit.
+- Shared file-backed workspace/project agent policy with workspace identity,
+  executor, tool, and network defaults; explicit project identity/capability
+  overrides; workspace-shared vs isolated project memory; and audit.
 - Opt-in local Codex and Claude CLI execution with bounded output, process-group
   cancellation, timeout, project workspace resolution, and filtered child env.
 - SQLite WAL-backed workspace/project routines with interval and daily
@@ -81,8 +82,9 @@
 - Require mention for the first handled group topic by default, then allow
   follow-up messages in the established topic without repeating the mention.
 - Resolve workspace and project identity before every run.
-- Support `remember`/`forget` commands for global, workspace, project, and
-  thread memory without invoking the full executor.
+- Support `remember`/`forget` commands for granted workspace, project, and
+  thread memory without invoking the full executor; keep installation memory on
+  the operator control plane.
 - Render live progress cards with checklist items, stop action, and final state.
 - Send text replies and interactive progress cards through a real Lark app bot
   once credentials and scopes are configured.

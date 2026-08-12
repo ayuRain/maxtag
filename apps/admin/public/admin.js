@@ -24,6 +24,7 @@ const state = {
   testProjectId: null,
   pairingProjectId: null,
   latestPairing: null,
+  workspaceDirty: false,
   projectDirty: false,
   routineDirty: false,
   workflowDirty: false,
@@ -112,6 +113,8 @@ function applyOperatorCapabilities() {
   document.body.classList.toggle('operator-viewer', viewer);
   for (const selector of [
     '#new-project',
+    '#save-workspace',
+    '#save-workspace-capabilities',
     '#save-project',
     '#save-binding',
     '#add-access-member',
@@ -698,6 +701,10 @@ function renderOverviewProjects() {
     return;
   }
   for (const project of projects) {
+    const projectIdentity =
+      project.agentMode === 'inherit'
+        ? state.workspace?.workspace?.identity || project.identity
+        : project.identity;
     const card = element('article', 'project-card');
     card.tabIndex = 0;
     card.setAttribute('role', 'button');
@@ -705,18 +712,18 @@ function renderOverviewProjects() {
     const head = element('div', 'project-card-head');
     const identity = element('div', 'project-card-head');
     identity.append(
-      element('span', 'avatar', initials(project.identity?.displayName)),
+      element('span', 'avatar', initials(projectIdentity?.displayName)),
       element('strong', '', project.name),
     );
     head.append(identity, statePill(projectRunState(project)));
 
     const body = element('div', 'project-card-body');
     body.append(
-      element('span', '', project.identity?.displayName || 'OpenTag'),
+      element('span', '', projectIdentity?.displayName || 'OpenTag'),
       element(
         'span',
         '',
-        `${statusLabel(project.identity?.defaultExecutorId)} / ${project.toolCount || 0} authorized`,
+        `${statusLabel(projectIdentity?.defaultExecutorId)} / ${project.toolCount || 0} authorized`,
       ),
       element(
         'span',
@@ -953,10 +960,12 @@ function renderOverviewRuns() {
   }
 }
 
-function renderToolGrid(project) {
-  const root = $('#tool-grid');
+function renderToolGrid(policy, options = {}) {
+  const root = $(options.selector || '#tool-grid');
+  const disabled = Boolean(options.disabled);
+  const markDirty = options.markDirty || markProjectDirty;
   const grants = new Map(
-    (project?.grants || []).map((grant) => [grant.kind, grant]),
+    (policy?.grants || []).map((grant) => [grant.kind, grant]),
   );
   root.replaceChildren();
   for (const tool of state.workspace?.availableTools || []) {
@@ -967,6 +976,7 @@ function renderToolGrid(project) {
     checkbox.type = 'checkbox';
     checkbox.value = tool.id;
     checkbox.checked = Boolean(grant);
+    checkbox.disabled = disabled;
     const copy = element('span', 'tool-option-copy');
     const toolCountLabel = (writeEnabled) => {
       const authorized = writeEnabled
@@ -1020,8 +1030,8 @@ function renderToolGrid(project) {
               .filter(Boolean)
               .join(', ')
           : '';
-        input.disabled = !checkbox.checked;
-        input.addEventListener('input', markProjectDirty);
+        input.disabled = disabled || !checkbox.checked;
+        input.addEventListener('input', markDirty);
         field.append(input);
         constraints.append(field);
       }
@@ -1034,7 +1044,7 @@ function renderToolGrid(project) {
       write.dataset.toolKind = tool.id;
       write.dataset.permission = 'write';
       write.checked = Boolean(grant?.constraints?.permissions?.includes('write'));
-      write.disabled = !checkbox.checked;
+      write.disabled = disabled || !checkbox.checked;
       permission.append(
         write,
         element('span', '', `Write access (+${tool.writeToolCount} tools)`),
@@ -1042,7 +1052,7 @@ function renderToolGrid(project) {
       write.addEventListener('change', () => {
         const count = copy.querySelector('small');
         count.textContent = toolCountLabel(write.checked);
-        markProjectDirty();
+        markDirty();
       });
       card.append(permission);
     }
@@ -1050,22 +1060,28 @@ function renderToolGrid(project) {
       for (const input of card.querySelectorAll(
         '.tool-constraint input, .tool-write-toggle input',
       )) {
-        input.disabled = !checkbox.checked;
+        input.disabled = disabled || !checkbox.checked;
       }
-      markProjectDirty();
+      markDirty();
     });
     root.append(card);
   }
 }
 
-function projectToolConstraints() {
+function selectedTools(rootSelector) {
+  return $$(`${rootSelector} .tool-option-head input[type="checkbox"]:checked`).map(
+    (input) => input.value,
+  );
+}
+
+function toolConstraints(rootSelector) {
   const constraints = {};
   for (const checkbox of $$(
-    '#tool-grid .tool-option-head input[type="checkbox"]:checked',
+    `${rootSelector} .tool-option-head input[type="checkbox"]:checked`,
   )) {
     const values = {};
     for (const input of $$(
-      `#tool-grid input[data-tool-kind="${CSS.escape(checkbox.value)}"]`,
+      `${rootSelector} input[data-tool-kind="${CSS.escape(checkbox.value)}"]`,
     )) {
       if (input.dataset.permission === 'write') {
         values.permissions = input.checked ? ['read', 'write'] : ['read'];
@@ -1082,7 +1098,10 @@ function projectToolConstraints() {
 }
 
 function fillExecutorOptions(selected) {
-  const select = $('#agent-executor');
+  fillExecutorSelect($('#agent-executor'), selected);
+}
+
+function fillExecutorSelect(select, selected) {
   select.replaceChildren();
   for (const executor of state.workspace?.executors || []) {
     const option = document.createElement('option');
@@ -1093,6 +1112,102 @@ function fillExecutorOptions(selected) {
     option.selected = executor.id === selected;
     select.append(option);
   }
+}
+
+function fillWorkspaceForm() {
+  const policy = state.workspace?.workspace;
+  const workspace = policy?.workspace || {};
+  const identity = policy?.identity || {};
+  $('#workspace-policy-name').value = workspace.name || '';
+  $('#workspace-agent-name').value = identity.displayName || 'OpenTag';
+  $('#workspace-agent-instructions').value = identity.instructions || '';
+  fillExecutorSelect(
+    $('#workspace-agent-executor'),
+    identity.defaultExecutorId || 'codex',
+  );
+  const select = $('#workspace-default-project');
+  select.replaceChildren();
+  for (const project of state.workspace?.projects || []) {
+    const option = element('option', '', project.name);
+    option.value = project.projectId;
+    option.selected = projectMatches(project, workspace.defaultProjectId);
+    select.append(option);
+  }
+  fillWorkspaceCapabilities();
+  state.workspaceDirty = false;
+  $('#workspace-save-state').textContent = 'No unsaved changes';
+}
+
+function fillWorkspaceCapabilities() {
+  const policy = state.workspace?.workspace || {};
+  renderToolGrid(policy, {
+    selector: '#workspace-tool-grid',
+    markDirty: markWorkspaceDirty,
+  });
+  $('#workspace-network-mode').value =
+    policy.networkPolicy?.mode || 'deny-by-default';
+  $('#workspace-allowed-hosts').value = (
+    policy.networkPolicy?.allowedHosts || []
+  ).join(', ');
+  const count = policy.grants?.length || 0;
+  $('#workspace-capability-summary').textContent =
+    `${count} default tool ${count === 1 ? 'group' : 'groups'}`;
+}
+
+function openWorkspaceCapabilities() {
+  fillWorkspaceCapabilities();
+  $('#workspace-capability-dialog').showModal();
+}
+
+function markWorkspaceDirty() {
+  state.workspaceDirty = true;
+  $('#workspace-save-state').textContent = 'Unsaved changes';
+}
+
+async function saveWorkspace(event, button = $('#save-workspace')) {
+  event.preventDefault();
+  const idleLabel =
+    button.id === 'save-workspace-capabilities' ? 'Save defaults' : 'Save workspace';
+  setButtonBusy(button, true, 'Saving', idleLabel);
+  try {
+    const identity = state.workspace?.workspace?.identity || {};
+    await getJson('/v1/workspace', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: currentWorkspaceId(),
+        name: $('#workspace-policy-name').value.trim(),
+        defaultProjectId: $('#workspace-default-project').value,
+        agentId: identity.id || 'opentag',
+        agentName: $('#workspace-agent-name').value.trim() || 'OpenTag',
+        instructions: $('#workspace-agent-instructions').value,
+        executorId: $('#workspace-agent-executor').value,
+        tools: selectedTools('#workspace-tool-grid'),
+        toolConstraints: toolConstraints('#workspace-tool-grid'),
+        networkMode: $('#workspace-network-mode').value,
+        allowedHosts: $('#workspace-allowed-hosts')
+          .value.split(',')
+          .map((host) => host.trim())
+          .filter(Boolean),
+      }),
+    });
+    await refreshAll({ quiet: true });
+    showToast('Workspace agent saved');
+    return true;
+  } catch (error) {
+    showToast(error.message, 'error');
+    return false;
+  } finally {
+    setButtonBusy(button, false, 'Saving', idleLabel);
+  }
+}
+
+async function saveWorkspaceCapabilities(event) {
+  const saved = await saveWorkspace(
+    event,
+    $('#save-workspace-capabilities'),
+  );
+  if (saved) $('#workspace-capability-dialog').close();
 }
 
 function projectBindings(project) {
@@ -1129,12 +1244,16 @@ function renderProjectList() {
   const root = $('#project-list');
   root.replaceChildren();
   for (const project of state.workspace?.projects || []) {
+    const identity =
+      project.agentMode === 'inherit'
+        ? state.workspace?.workspace?.identity || project.identity
+        : project.identity;
     const button = element('button', 'project-list-item');
     button.type = 'button';
     button.classList.toggle('active', projectMatches(project, state.selectedProjectId));
     button.append(
       element('strong', '', project.name),
-      element('span', '', `${project.identity?.displayName || 'OpenTag'} / ${project.projectId}`),
+      element('span', '', `${identity?.displayName || 'OpenTag'} / ${project.projectId}`),
     );
     button.addEventListener('click', () => selectProject(project.projectId));
     root.append(button);
@@ -1144,7 +1263,8 @@ function renderProjectList() {
 function fillProjectForm(project) {
   const isNew = !project;
   const fallbackIdentity = state.workspace?.workspace?.identity || {};
-  const identity = project?.identity || fallbackIdentity;
+  const agentMode = project?.agentMode || (isNew ? 'inherit' : 'custom');
+  const identity = agentMode === 'inherit' ? fallbackIdentity : project?.identity || fallbackIdentity;
   $('#project-editor-title').textContent = project?.name || 'New project';
   $('#project-policy-state').textContent = isNew ? 'Draft' : 'Configured';
   $('#project-policy-state').className = `state-pill ${isNew ? 'planned' : 'ready'}`;
@@ -1154,14 +1274,96 @@ function fillProjectForm(project) {
   $('#project-description').value = project?.description || '';
   $('#agent-name').value = identity.displayName || 'OpenTag';
   $('#agent-instructions').value = identity.instructions || '';
-  $('#agent-id-label').textContent = identity.id || 'new-agent';
+  $('#project-agent-mode').value = agentMode;
+  $('#agent-mode-label').textContent =
+    agentMode === 'inherit' ? 'Workspace profile' : identity.id || 'Custom profile';
+  $('#project-memory-mode').value = project?.memoryMode || 'workspace';
+  $('#project-memory-label').textContent =
+    $('#project-memory-mode').value === 'workspace'
+      ? 'Workspace shared'
+      : 'Project isolated';
   fillExecutorOptions(identity.defaultExecutorId || 'codex');
-  $('#network-mode').value = project?.networkPolicy?.mode || 'deny-by-default';
-  $('#allowed-hosts').value = (project?.networkPolicy?.allowedHosts || []).join(', ');
-  renderToolGrid(project);
+  updateProjectAgentFields();
+  $('#project-capability-mode').value =
+    project?.capabilityMode || (isNew ? 'inherit' : 'custom');
+  updateProjectCapabilityFields();
   renderProjectBindings(project);
   state.projectDirty = false;
   $('#project-save-state').textContent = 'No unsaved changes';
+}
+
+function updateProjectCapabilityFields(policyOverride) {
+  const inherited = $('#project-capability-mode').value === 'inherit';
+  const policy = inherited
+    ? state.workspace?.workspace || {}
+    : policyOverride || selectedProject() || {};
+  $('#project-capability-label').textContent = inherited
+    ? 'Workspace defaults'
+    : 'Project custom';
+  $('#project-network-label').textContent = inherited
+    ? 'Workspace defaults'
+    : 'Project custom';
+  $('#network-mode').value = policy.networkPolicy?.mode || 'deny-by-default';
+  $('#allowed-hosts').value = (policy.networkPolicy?.allowedHosts || []).join(', ');
+  $('#project-network-fields').hidden = inherited;
+  const networkSummary = $('#project-network-inherited');
+  networkSummary.hidden = !inherited;
+  if (inherited) {
+    const toolRoot = $('#tool-grid');
+    toolRoot.replaceChildren();
+    const toolSummary = element('div', 'inherited-policy-summary');
+    const toolCopy = element('div', 'inherited-policy-copy');
+    const toolCount = policy.grants?.length || 0;
+    toolCopy.append(
+      element(
+        'strong',
+        '',
+        `${toolCount} workspace tool ${toolCount === 1 ? 'group' : 'groups'}`,
+      ),
+      element('span', '', 'Changes follow the workspace agent automatically'),
+    );
+    const editTools = element('button', 'text-button', 'Edit defaults');
+    editTools.type = 'button';
+    editTools.addEventListener('click', openWorkspaceCapabilities);
+    toolSummary.append(toolCopy, editTools);
+    toolRoot.append(toolSummary);
+    const networkCopy = element('div', 'inherited-policy-copy');
+    networkCopy.append(
+      element(
+        'strong',
+        '',
+        statusLabel(policy.networkPolicy?.mode || 'deny-by-default'),
+      ),
+      element(
+        'span',
+        '',
+        policy.networkPolicy?.allowedHosts?.length
+          ? policy.networkPolicy.allowedHosts.join(', ')
+          : 'No hosts explicitly allowed',
+      ),
+    );
+    networkSummary.replaceChildren(networkCopy);
+    return;
+  }
+  renderToolGrid(policy);
+}
+
+function updateProjectAgentFields() {
+  const inherited = $('#project-agent-mode').value === 'inherit';
+  for (const control of [
+    $('#agent-name'),
+    $('#agent-executor'),
+    $('#agent-instructions'),
+  ]) {
+    control.disabled = inherited;
+  }
+  $('#agent-mode-label').textContent = inherited
+    ? 'Workspace profile'
+    : currentAgentId();
+  $('#project-memory-label').textContent =
+    $('#project-memory-mode').value === 'workspace'
+      ? 'Workspace shared'
+      : 'Project isolated';
 }
 
 function selectProject(projectId) {
@@ -1187,7 +1389,16 @@ function newProject() {
 
 function currentAgentId() {
   const project = selectedProject();
-  if (project?.identity?.id) return project.identity.id;
+  if ($('#project-agent-mode')?.value === 'inherit') {
+    return state.workspace?.workspace?.identity?.id || 'opentag';
+  }
+  const workspaceAgentId = state.workspace?.workspace?.identity?.id;
+  if (
+    project?.identity?.id &&
+    project.identity.id !== workspaceAgentId
+  ) {
+    return project.identity.id;
+  }
   const projectId = $('#project-id').value.trim() || 'project';
   return `${projectId}-agent`;
 }
@@ -1203,6 +1414,7 @@ async function saveProject(event) {
   }
   setButtonBusy(button, true, 'Saving', 'Save project');
   try {
+    const customCapabilities = $('#project-capability-mode').value === 'custom';
     await getJson('/v1/projects', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1211,19 +1423,24 @@ async function saveProject(event) {
         projectId,
         name: $('#project-name').value.trim() || projectId,
         description: $('#project-description').value,
+        agentMode: $('#project-agent-mode').value,
         agentId: currentAgentId(),
         agentName: $('#agent-name').value.trim() || 'OpenTag',
         instructions: $('#agent-instructions').value,
         executorId: $('#agent-executor').value,
-        tools: $$(
-          '#tool-grid .tool-option-head input[type="checkbox"]:checked',
-        ).map((input) => input.value),
-        toolConstraints: projectToolConstraints(),
-        networkMode: $('#network-mode').value,
-        allowedHosts: $('#allowed-hosts')
-          .value.split(',')
-          .map((host) => host.trim())
-          .filter(Boolean),
+        memoryMode: $('#project-memory-mode').value,
+        capabilityMode: $('#project-capability-mode').value,
+        tools: customCapabilities ? selectedTools('#tool-grid') : undefined,
+        toolConstraints: customCapabilities
+          ? toolConstraints('#tool-grid')
+          : undefined,
+        networkMode: customCapabilities ? $('#network-mode').value : undefined,
+        allowedHosts: customCapabilities
+          ? $('#allowed-hosts')
+              .value.split(',')
+              .map((host) => host.trim())
+              .filter(Boolean)
+          : undefined,
       }),
     });
     state.selectedProjectId = projectId;
@@ -2707,13 +2924,32 @@ function memoryThread() {
   };
 }
 
+function updateMemoryScopeControls() {
+  const project = projectById(state.memoryProjectId);
+  const isolated = project?.memoryMode === 'isolated';
+  const direct = projectBindings(project)[0]?.visibility === 'direct';
+  const workspace = $('#memory-scope [data-scope="workspace"]');
+  if (workspace) workspace.disabled = isolated || direct;
+  const projectButton = $('#memory-scope [data-scope="project"]');
+  if (projectButton) projectButton.disabled = direct;
+  if (
+    (state.memoryScope === 'workspace' && (isolated || direct)) ||
+    (state.memoryScope === 'project' && direct)
+  ) {
+    state.memoryScope = 'thread';
+  }
+  for (const item of $$('#memory-scope button')) {
+    item.classList.toggle('active', item.dataset.scope === state.memoryScope);
+  }
+}
+
 function renderScopeMap(route) {
   const root = $('#scope-map');
   const scopes = [
-    ['Global', 'OpenTag installation'],
-    ['Workspace', route.workspaceId],
+    ['Installation', 'Operator controlled'],
+    ['Workspace', `${route.workspaceId} / shared projects`],
     ['Project', route.projectId],
-    ['Thread', route.threadId],
+    ['Thread', `${route.threadId} / conversation`],
   ];
   root.replaceChildren();
   for (const [label, value] of scopes) {
@@ -2785,6 +3021,7 @@ function renderMemoryHistory(history) {
 
 async function refreshMemory() {
   if (!state.workspace) return;
+  updateMemoryScopeControls();
   const route = memoryThread();
   const query = new URLSearchParams(route);
   $('#memory-route').textContent = `${statusLabel(state.memoryScope)} / ${route.projectId}`;
@@ -3008,6 +3245,7 @@ function renderAll() {
   renderConnectorConsole();
   renderOverviewRuns();
   renderProjectList();
+  fillWorkspaceForm();
   renderRoutines();
   renderWorkflows();
   renderRunTable();
@@ -3092,6 +3330,17 @@ $('#refresh-all').addEventListener('click', () => void refreshAll());
 $('#open-test').addEventListener('click', () => $('#test-dialog').showModal());
 $('#test-form').addEventListener('submit', (event) => void runTest(event));
 $('#new-project').addEventListener('click', newProject);
+$('#workspace-form').addEventListener('submit', (event) => void saveWorkspace(event));
+$('#open-workspace-capabilities').addEventListener(
+  'click',
+  openWorkspaceCapabilities,
+);
+$('#close-workspace-capabilities').addEventListener('click', () =>
+  $('#workspace-capability-dialog').close(),
+);
+$('#workspace-capability-form').addEventListener('submit', (event) =>
+  void saveWorkspaceCapabilities(event),
+);
 $('#project-form').addEventListener('submit', (event) => void saveProject(event));
 $('#access-member-form').addEventListener('submit', (event) => void saveAccessMember(event));
 $('#access-policy-form').addEventListener('submit', (event) => void saveAccessPolicy(event));
@@ -3120,6 +3369,16 @@ $('#reload-memory').addEventListener('click', () => void refreshMemory());
 for (const input of $$('#project-form input, #project-form textarea, #project-form select')) {
   input.addEventListener('input', markProjectDirty);
   input.addEventListener('change', markProjectDirty);
+}
+
+for (const input of $$('#workspace-form input, #workspace-form textarea, #workspace-form select')) {
+  input.addEventListener('input', markWorkspaceDirty);
+  input.addEventListener('change', markWorkspaceDirty);
+}
+
+for (const input of $$('#workspace-capability-form input, #workspace-capability-form select')) {
+  input.addEventListener('input', markWorkspaceDirty);
+  input.addEventListener('change', markWorkspaceDirty);
 }
 
 for (const input of $$('#routine-form input, #routine-form textarea, #routine-form select')) {
@@ -3158,6 +3417,29 @@ $('#project-id').addEventListener('input', () => {
   if (state.selectedProjectId === '__new__') {
     $('#agent-id-label').textContent = currentAgentId();
   }
+});
+
+$('#project-agent-mode').addEventListener('change', () => {
+  const inherited = $('#project-agent-mode').value === 'inherit';
+  if (inherited) {
+    const identity = state.workspace?.workspace?.identity || {};
+    $('#agent-name').value = identity.displayName || 'OpenTag';
+    $('#agent-instructions').value = identity.instructions || '';
+    fillExecutorOptions(identity.defaultExecutorId || 'codex');
+  }
+  updateProjectAgentFields();
+});
+
+$('#project-memory-mode').addEventListener('change', updateProjectAgentFields);
+
+$('#project-capability-mode').addEventListener('change', () => {
+  const project = selectedProject();
+  const startsFromWorkspace =
+    $('#project-capability-mode').value === 'custom' &&
+    project?.capabilityMode !== 'custom';
+  updateProjectCapabilityFields(
+    startsFromWorkspace ? state.workspace?.workspace : undefined,
+  );
 });
 
 $('#memory-project').addEventListener('change', (event) => {
@@ -3235,6 +3517,7 @@ setInterval(() => {
   if (
     document.visibilityState === 'visible' &&
     state.auth?.authenticated &&
+    !state.workspaceDirty &&
     !state.projectDirty &&
     !state.routineDirty &&
     !state.workflowDirty

@@ -12,6 +12,10 @@ import type {
   SourceThread,
   ThreadTranscriptSnapshot,
 } from './types.js';
+import {
+  constrainWorkspaceMemoryWrite,
+  readableMemoryScopes,
+} from './memory-policy.js';
 
 function createDefaultChecklist(): ChecklistItem[] {
   return [
@@ -43,6 +47,7 @@ export class OpenTagRuntime {
     executorId?: string;
     thread: SourceThread;
     message: SourceMessage;
+    workspaceMemoryWriteAllowed?: boolean;
     abortSignal?: AbortSignal;
     steering?: AgentSteeringProvider;
     transcript?: ThreadTranscriptSnapshot;
@@ -78,10 +83,13 @@ export class OpenTagRuntime {
         workspace,
       );
       const identity = await this.deps.threadConfig.getIdentity(input.thread);
-      const access = await this.deps.threadConfig.getAccessBundle(input.thread, {
-        workspace,
-        project,
-      });
+      const access = constrainWorkspaceMemoryWrite(
+        await this.deps.threadConfig.getAccessBundle(input.thread, {
+          workspace,
+          project,
+        }),
+        input.workspaceMemoryWriteAllowed,
+      );
       const executorId = input.executorId ?? identity.defaultExecutorId;
       executor = this.deps.executors
         ? this.deps.executors[executorId]
@@ -112,6 +120,7 @@ export class OpenTagRuntime {
           thread: input.thread,
           workspace,
           project,
+          scopes: readableMemoryScopes(access),
         });
       const memory =
         memorySnapshot?.text ??

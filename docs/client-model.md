@@ -21,8 +21,8 @@ clients of the same thread-agent core.
 - `OpenTagToolBroker`: a per-run capability endpoint that turns an access bundle
   into a filtered MCP tool list and durable call audit without giving service
   credentials to the executor.
-- `ScopedMemorySnapshot`: global, workspace, project, and thread memory loaded in
-  deterministic order.
+- `ScopedMemorySnapshot`: only policy-granted installation, workspace, project,
+  and thread memory, loaded in deterministic order.
 - `MemoryDocument` and `MemoryRevision`: the current scoped snapshot plus an
   immutable SQLite history attributed to a trusted client or operator actor.
 - `Executor`: Codex, Claude, or another agent runner.
@@ -47,9 +47,14 @@ clients of the same thread-agent core.
   Named operator principals carry workspace scopes and owner/admin/viewer roles;
   authenticated principal identity, never a request-body actor string, owns
   control-plane audit records.
-- Project/thread memory follows project write capability, workspace memory also
-  requires an identified active non-guest workspace member, and installation
-  global memory is writable only from the operator control plane.
+- A project inherits the workspace agent identity, executor, tool grants, and
+  network policy unless it selects an explicit project override.
+- Memory policy is separate from capability inheritance. Workspace-shared
+  projects load workspace/project/thread memory, isolated projects load
+  project/thread, private threads get read-only workspace context, and direct
+  messages load thread memory only. Installation memory is control-plane only.
+- Workspace memory writes also require an identified active non-guest workspace
+  member; project/thread writes follow project capability.
 - Manual and typed-event workflows resolve the same project policy, executor,
   scoped memory, run queue, and client destination as an inbound conversation.
 - Slack: planned.

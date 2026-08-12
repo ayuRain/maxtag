@@ -870,6 +870,52 @@ h3 {
   grid-template-columns: 250px minmax(0, 1fr);
 }
 
+.workspace-agent {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  padding: 17px 22px;
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 22px;
+}
+
+.workspace-agent-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-agent-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.workspace-agent-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.workspace-agent-instructions {
+  grid-column: 1 / 4;
+}
+
+.workspace-agent-instructions textarea {
+  min-height: 74px;
+}
+
+.workspace-agent-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .project-index {
   border-right: 1px solid var(--line);
   padding: 14px;
@@ -1014,10 +1060,53 @@ input:disabled {
   color: var(--muted);
 }
 
+textarea:disabled,
+select:disabled {
+  background: var(--surface-subtle);
+  color: var(--muted);
+}
+
 .tool-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.policy-mode-field {
+  width: min(320px, 100%);
+  margin-bottom: 10px;
+}
+
+.inherited-policy-summary {
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.inherited-policy-summary[hidden] {
+  display: none;
+}
+
+.inherited-policy-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.inherited-policy-copy strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.inherited-policy-copy span {
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .tool-option {
@@ -2053,6 +2142,20 @@ pre {
   background: rgba(23, 25, 28, 0.38);
 }
 
+.capability-dialog {
+  width: min(780px, calc(100vw - 32px));
+}
+
+.capability-dialog .dialog-shell {
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.capability-network-fields {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
 .dialog-shell {
   padding: 20px;
   display: grid;
@@ -2314,6 +2417,22 @@ pre {
 
   .project-workbench {
     grid-template-columns: 1fr;
+  }
+
+  .workspace-agent {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-agent-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workspace-agent-instructions {
+    grid-column: 1 / -1;
+  }
+
+  .workspace-agent-actions {
+    align-items: center;
   }
 
   .project-index {

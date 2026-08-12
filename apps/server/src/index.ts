@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import {
+  memoryScopeGranted,
   OpenTagRuntime,
   type AgentRunEvent,
   type Artifact,
@@ -28,6 +29,7 @@ import {
   type ProjectAccessMode,
   type ProjectRole,
   type UpsertProjectAgentPolicyInput,
+  type UpsertWorkspaceAgentPolicyInput,
   type WorkspaceMemberIdentity,
   type WorkspaceMemberStatus,
   type WorkspaceRole,
@@ -492,15 +494,15 @@ const capabilityManifest = {
   memoryScopes: [
     {
       id: 'global',
-      label: 'Global',
+      label: 'Installation',
       status: 'ready',
-      description: 'shared across the whole OpenTag installation',
+      description: 'operator-controlled defaults, excluded from project runs by default',
     },
     {
       id: 'workspace',
       label: 'Workspace',
       status: 'ready',
-      description: 'shared by every project under one workspace bot',
+      description: 'shared by projects using the workspace memory profile',
     },
     {
       id: 'project',
@@ -1191,6 +1193,10 @@ async function workspaceSnapshot(
   return {
     workspace: workspacePolicy,
     projects: projects.map((project) => {
+      const effectiveGrants =
+        project.capabilityMode === 'inherit'
+          ? workspacePolicy?.grants ?? []
+          : project.grants;
       const matchesProject = (value?: string): boolean =>
         value === project.projectId || value === project.id;
       const projectBindings = bindings.filter(
@@ -1222,7 +1228,7 @@ async function workspaceSnapshot(
         lastRunAt: projectRuns[0]?.updatedAt,
         accessMode: accessPolicy?.mode ?? 'open',
         memberCount: projectMembers.length,
-        toolCount: project.grants.reduce(
+        toolCount: effectiveGrants.reduce(
           (total, grant) => {
             const entry = OPENTAG_TOOL_CATALOG.find(
               (candidate) => candidate.grantKind === grant.kind,
@@ -1415,18 +1421,13 @@ const PROJECT_TOOL_LABELS: Record<string, string> = Object.fromEntries(
   OPENTAG_TOOL_CATALOG.map((tool) => [tool.grantKind, tool.label]),
 );
 
-function coerceProjectPolicyInput(
+function coerceCapabilityPolicy(
   body: Record<string, unknown>,
-): UpsertProjectAgentPolicyInput | { error: string } {
-  const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
-  const projectId = stringValue(body, 'projectId');
-  if (!workspaceId || !projectId) return { error: 'workspace_and_project_required' };
-
-  const executorId = stringValue(body, 'executorId');
-  if (executorId && executorId !== 'codex' && executorId !== 'claude') {
-    return { error: 'unsupported_executor' };
-  }
-
+  scope: 'workspace' | 'project',
+  grantPrefix: string,
+):
+  | Pick<UpsertProjectAgentPolicyInput, 'grants' | 'networkPolicy'>
+  | { error: string } {
   const tools = stringArrayValue(body, 'tools');
   const unsupportedTool = tools?.find((tool) => !PROJECT_TOOL_LABELS[tool]);
   if (unsupportedTool) return { error: `unsupported_tool:${unsupportedTool}` };
@@ -1436,7 +1437,7 @@ function coerceProjectPolicyInput(
     'lark-docs': ['documentIds', 'permissions'],
     'lark-base': ['appTokens', 'permissions'],
   };
-  const grants: ToolGrant[] | undefined = [];
+  const grants: ToolGrant[] | undefined = tools ? [] : undefined;
   for (const tool of tools ?? []) {
     const raw = recordValue(rawConstraints, tool) ?? {};
     const allowedKeys = constraintKeys[tool] ?? [];
@@ -1463,10 +1464,10 @@ function coerceProjectPolicyInput(
       }
       constraints[key] = [...new Set(values)];
     }
-    grants.push({
-      id: `project:${workspaceId}:${projectId}:${tool}`,
+    grants?.push({
+      id: `${grantPrefix}:${tool}`,
       kind: tool as ToolGrantKind,
-      scope: 'project',
+      scope,
       label: PROJECT_TOOL_LABELS[tool],
       constraints: Object.keys(constraints).length ? constraints : undefined,
     });
@@ -1482,27 +1483,7 @@ function coerceProjectPolicyInput(
     return { error: 'unsupported_network_mode' };
   }
   const allowedHosts = stringArrayValue(body, 'allowedHosts');
-
-  const identityValues = {
-    id: stringValue(body, 'agentId'),
-    displayName: stringValue(body, 'agentName'),
-    description: stringValue(body, 'agentDescription'),
-    instructions: stringValue(body, 'instructions'),
-    defaultExecutorId: executorId,
-  };
-  const identity = Object.fromEntries(
-    Object.entries(identityValues).filter(([, value]) => value !== undefined),
-  );
-
   return {
-    workspaceId,
-    projectId,
-    name: stringValue(body, 'name'),
-    description:
-      typeof body.description === 'string' ? body.description : undefined,
-    identity: Object.keys(identity).length
-      ? (identity as UpsertProjectAgentPolicyInput['identity'])
-      : undefined,
     grants,
     networkPolicy:
       networkMode || allowedHosts
@@ -1515,6 +1496,124 @@ function coerceProjectPolicyInput(
             allowedHosts,
           }
         : undefined,
+  };
+}
+
+function coerceProjectPolicyInput(
+  body: Record<string, unknown>,
+): UpsertProjectAgentPolicyInput | { error: string } {
+  const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+  const projectId = stringValue(body, 'projectId');
+  if (!workspaceId || !projectId) return { error: 'workspace_and_project_required' };
+
+  const executorId = stringValue(body, 'executorId');
+  if (executorId && executorId !== 'codex' && executorId !== 'claude') {
+    return { error: 'unsupported_executor' };
+  }
+
+  const capabilityPolicy = coerceCapabilityPolicy(
+    body,
+    'project',
+    `project:${workspaceId}:${projectId}`,
+  );
+  if ('error' in capabilityPolicy) return capabilityPolicy;
+  const memoryMode = stringValue(body, 'memoryMode');
+  if (
+    memoryMode &&
+    memoryMode !== 'workspace' &&
+    memoryMode !== 'isolated'
+  ) {
+    return { error: 'unsupported_project_memory_mode' };
+  }
+  const agentMode = stringValue(body, 'agentMode');
+  if (agentMode && agentMode !== 'inherit' && agentMode !== 'custom') {
+    return { error: 'unsupported_project_agent_mode' };
+  }
+  const capabilityMode = stringValue(body, 'capabilityMode');
+  if (
+    capabilityMode &&
+    capabilityMode !== 'inherit' &&
+    capabilityMode !== 'custom'
+  ) {
+    return { error: 'unsupported_project_capability_mode' };
+  }
+
+  const identityValues = {
+    id: stringValue(body, 'agentId'),
+    displayName: stringValue(body, 'agentName'),
+    description: stringValue(body, 'agentDescription'),
+    instructions: stringValue(body, 'instructions'),
+    defaultExecutorId: executorId,
+  };
+  const identity = Object.fromEntries(
+    Object.entries(identityValues).filter(([, value]) => value !== undefined),
+  );
+  const resolvedAgentMode =
+    agentMode || (Object.keys(identity).length ? 'custom' : undefined);
+  const resolvedCapabilityMode =
+    capabilityMode ||
+    (capabilityPolicy.grants || capabilityPolicy.networkPolicy
+      ? 'custom'
+      : undefined);
+
+  return {
+    workspaceId,
+    projectId,
+    name: stringValue(body, 'name'),
+    description:
+      typeof body.description === 'string' ? body.description : undefined,
+    identity: resolvedAgentMode !== 'inherit' && Object.keys(identity).length
+      ? (identity as UpsertProjectAgentPolicyInput['identity'])
+      : undefined,
+    grants:
+      resolvedCapabilityMode === 'inherit' ? undefined : capabilityPolicy.grants,
+    agentMode:
+      resolvedAgentMode as UpsertProjectAgentPolicyInput['agentMode'],
+    capabilityMode:
+      resolvedCapabilityMode as UpsertProjectAgentPolicyInput['capabilityMode'],
+    memoryMode:
+      memoryMode as UpsertProjectAgentPolicyInput['memoryMode'],
+    networkPolicy:
+      resolvedCapabilityMode === 'inherit'
+        ? undefined
+        : capabilityPolicy.networkPolicy,
+  };
+}
+
+function coerceWorkspacePolicyInput(
+  body: Record<string, unknown>,
+): UpsertWorkspaceAgentPolicyInput | { error: string } {
+  const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+  if (!workspaceId) return { error: 'workspace_required' };
+  const executorId = stringValue(body, 'executorId');
+  if (executorId && executorId !== 'codex' && executorId !== 'claude') {
+    return { error: 'unsupported_executor' };
+  }
+  const identityValues = {
+    id: stringValue(body, 'agentId'),
+    displayName: stringValue(body, 'agentName'),
+    description: stringValue(body, 'agentDescription'),
+    instructions: stringValue(body, 'instructions'),
+    defaultExecutorId: executorId,
+  };
+  const identity = Object.fromEntries(
+    Object.entries(identityValues).filter(([, value]) => value !== undefined),
+  );
+  const capabilityPolicy = coerceCapabilityPolicy(
+    body,
+    'workspace',
+    `workspace:${workspaceId}`,
+  );
+  if ('error' in capabilityPolicy) return capabilityPolicy;
+  return {
+    workspaceId,
+    name: stringValue(body, 'name'),
+    defaultProjectId: stringValue(body, 'defaultProjectId'),
+    identity: Object.keys(identity).length
+      ? (identity as UpsertWorkspaceAgentPolicyInput['identity'])
+      : undefined,
+    grants: capabilityPolicy.grants,
+    networkPolicy: capabilityPolicy.networkPolicy,
   };
 }
 
@@ -2315,8 +2414,26 @@ async function authorizeRoutedMessage(input: {
   const memoryCommand = parseMemoryCommand(input.message.text, {
     defaultScope: memoryCommandDefaultScope(input.thread),
   });
+  if (!memoryCommand) return decision;
   const mutatesMemory =
-    memoryCommand?.kind === 'remember' || memoryCommand?.kind === 'forget';
+    memoryCommand.kind === 'remember' || memoryCommand.kind === 'forget';
+  const resolvedPolicy = await threadConfigStore.resolveThreadPolicy(input.thread);
+  if (
+    !memoryScopeGranted(
+      resolvedPolicy.access,
+      memoryCommand.scope,
+      mutatesMemory ? 'write' : 'read',
+    )
+  ) {
+    return {
+      ...decision,
+      allowed: false,
+      reason: 'memory_scope_not_granted',
+      capabilities: decision.capabilities.filter(
+        (capability) => capability !== 'write_memory',
+      ),
+    };
+  }
   if (!mutatesMemory) return decision;
   const workspaceRole = decision.member?.role;
   const workspaceWriteAllowed =
@@ -2352,6 +2469,21 @@ function actorAuthorizationPayload(
     projectRole: decision.projectMembership?.role,
     capabilities: decision.capabilities,
   };
+}
+
+function canWriteWorkspaceMemory(
+  decision?: ActorAuthorizationDecision,
+): boolean {
+  if (!decision) return true;
+  return (
+    decision.member?.role === 'owner' ||
+    decision.member?.role === 'admin' ||
+    decision.member?.role === 'member'
+  );
+}
+
+function runCanWriteWorkspaceMemory(run: AgentRunRecord): boolean {
+  return run.metadata?.workspaceMemoryWriteAllowed === true;
 }
 
 async function accessDeniedNotice(input: {
@@ -2850,8 +2982,24 @@ async function applyMemoryCommand(input: {
   thread: SourceThread;
   actorId?: string;
   source?: string;
+  workspaceMemoryWriteAllowed?: boolean;
 }): Promise<Record<string, unknown>> {
   const { workspace, project } = await memoryContextForThread(input.thread);
+  const access = await threadConfigStore.getAccessBundle(input.thread, {
+    workspace,
+    project,
+  });
+  const permission = input.command.kind === 'show' ? 'read' : 'write';
+  if (
+    input.command.scope === 'workspace' &&
+    permission === 'write' &&
+    input.workspaceMemoryWriteAllowed === false
+  ) {
+    throw new Error('memory_workspace_write_not_granted');
+  }
+  if (!memoryScopeGranted(access, input.command.scope, permission)) {
+    throw new Error(`memory_${input.command.scope}_${permission}_not_granted`);
+  }
   if (input.command.kind === 'remember') {
     await memoryStore.rememberScoped({
       thread: input.thread,
@@ -3026,6 +3174,9 @@ async function enqueueMessageRun(input: {
     metadata: {
       ...options?.metadata,
       actorAuthorization: authorization,
+      workspaceMemoryWriteAllowed: canWriteWorkspaceMemory(
+        options?.authorization,
+      ),
       memoryCommand: memoryCommand
         ? { kind: memoryCommand.kind, scope: memoryCommand.scope }
         : undefined,
@@ -3292,6 +3443,8 @@ async function executeAgentRun(
           initialRun.message.actor.id,
         ),
         source: `${initialRun.thread.platform}-command`,
+        workspaceMemoryWriteAllowed:
+          runCanWriteWorkspaceMemory(initialRun),
       });
       await deliveryStore.appendAgentRunEvent(runId, 'memory_command', {
         message: String(commandResult.summary),
@@ -3393,6 +3546,8 @@ async function executeAgentRun(
       executorId: initialRun.executorId,
       thread: initialRun.thread,
       message: initialRun.message,
+      workspaceMemoryWriteAllowed:
+        runCanWriteWorkspaceMemory(initialRun),
       transcript,
       providerSession,
       abortSignal: abortController.signal,
@@ -4124,6 +4279,33 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         project,
         workspace: await workspaceSnapshot(project.workspaceId),
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/workspace') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const input = coerceWorkspacePolicyInput(body);
+      if ('error' in input) {
+        sendJson(response, 400, { error: input.error });
+        return;
+      }
+      if (
+        !requireOperatorWorkspace(
+          response,
+          operatorAuthentication!,
+          input.workspaceId,
+        )
+      ) {
+        return;
+      }
+      const workspace = await threadConfigStore.upsertWorkspacePolicy({
+        ...input,
+        actor: operatorActor(operatorAuthentication!),
+      });
+      sendJson(response, 200, {
+        workspace,
+        snapshot: await workspaceSnapshot(workspace.workspace.id),
       });
       return;
     }

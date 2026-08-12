@@ -14,9 +14,13 @@ import type {
 import type {
   ConfigAuditRecord,
   FileConfigState,
+  ProjectAgentMode,
   ProjectAgentPolicy,
+  ProjectCapabilityMode,
+  ProjectMemoryMode,
   ResolvedThreadPolicy,
   UpsertProjectAgentPolicyInput,
+  UpsertWorkspaceAgentPolicyInput,
   WorkspaceAgentPolicy,
 } from './types.js';
 
@@ -94,8 +98,11 @@ function createDefaultState(input?: {
         name: projectId === 'opentag' ? 'OpenTag' : projectId,
         description: 'Default project for this workspace bot.',
         identity: { ...identity },
+        agentMode: 'inherit',
+        capabilityMode: 'inherit',
         grants: [],
         networkPolicy: defaultNetworkPolicy(),
+        memoryMode: 'workspace',
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -140,11 +147,14 @@ function cloneProjectPolicy(policy: ProjectAgentPolicy): ProjectAgentPolicy {
   return {
     ...policy,
     identity: cloneIdentity(policy.identity),
+    agentMode: policy.agentMode ?? 'custom',
+    capabilityMode: policy.capabilityMode ?? 'custom',
     grants: policy.grants.map(cloneGrant),
     networkPolicy: {
       ...policy.networkPolicy,
       allowedHosts: [...policy.networkPolicy.allowedHosts],
     },
+    memoryMode: policy.memoryMode ?? 'workspace',
   };
 }
 
@@ -152,29 +162,36 @@ function memoryGrants(input: {
   thread: SourceThread;
   workspaceId: string;
   projectId: string;
+  memoryMode: ProjectMemoryMode;
 }): ToolGrant[] {
-  return [
-    {
-      id: 'memory:global',
-      kind: 'memory',
-      scope: 'global',
-      label: 'Global memory',
-      constraints: { permissions: ['read'] },
-    },
-    {
-      id: `memory:workspace:${input.workspaceId}`,
-      kind: 'memory',
-      scope: 'workspace',
-      label: 'Workspace memory',
-      constraints: { permissions: ['read'] },
-    },
-    {
-      id: `memory:project:${input.projectId}`,
-      kind: 'memory',
-      scope: 'project',
-      label: 'Project memory',
-      constraints: { permissions: ['read', 'write'] },
-    },
+  const grants: ToolGrant[] = [
+    ...(input.thread.visibility !== 'direct' && input.memoryMode === 'workspace'
+      ? [
+          {
+            id: `memory:workspace:${input.workspaceId}`,
+            kind: 'memory',
+            scope: 'workspace' as const,
+            label: 'Workspace memory',
+            constraints: {
+              permissions:
+                input.thread.visibility === 'private'
+                  ? ['read']
+                  : ['read', 'write'],
+            },
+          },
+        ]
+      : []),
+    ...(input.thread.visibility !== 'direct'
+      ? [
+          {
+            id: `memory:project:${input.projectId}`,
+            kind: 'memory',
+            scope: 'project' as const,
+            label: 'Project memory',
+            constraints: { permissions: ['read', 'write'] },
+          },
+        ]
+      : []),
     {
       id: `memory:thread:${input.thread.id}`,
       kind: 'memory',
@@ -183,6 +200,7 @@ function memoryGrants(input: {
       constraints: { permissions: ['read', 'write'] },
     },
   ];
+  return grants;
 }
 
 function dedupeGrants(grants: ToolGrant[]): ToolGrant[] {
@@ -212,8 +230,12 @@ export class FileThreadConfigStore implements ThreadConfigStore {
       const parsed = JSON.parse(await fs.readFile(this.stateFile, 'utf8')) as Partial<FileConfigState>;
       return {
         version: 1,
-        workspaces: parsed.workspaces ?? this.fallback.workspaces.map(cloneWorkspacePolicy),
-        projects: parsed.projects ?? this.fallback.projects.map(cloneProjectPolicy),
+        workspaces: (parsed.workspaces ?? this.fallback.workspaces).map(
+          cloneWorkspacePolicy,
+        ),
+        projects: (parsed.projects ?? this.fallback.projects).map(
+          cloneProjectPolicy,
+        ),
         audit: parsed.audit ?? [],
       };
     } catch (error) {
@@ -328,7 +350,13 @@ export class FileThreadConfigStore implements ThreadConfigStore {
       ],
       metadata: {
         configured: Boolean(policy),
-        agentId: policy?.identity.id,
+        agentId:
+          policy?.agentMode === 'custom'
+            ? policy.identity.id
+            : this.workspacePolicyFor(state, resolvedWorkspace.id).identity.id,
+        agentMode: policy?.agentMode ?? 'inherit',
+        capabilityMode: policy?.capabilityMode ?? 'inherit',
+        memoryMode: policy?.memoryMode ?? 'workspace',
       },
     };
   }
@@ -339,7 +367,9 @@ export class FileThreadConfigStore implements ThreadConfigStore {
     const workspacePolicy = this.workspacePolicyFor(state, workspace.id);
     const key = this.projectKeyForThread(thread, workspace);
     const policy = this.projectPolicyFor(state, workspace.id, key);
-    return cloneIdentity(policy?.identity ?? workspacePolicy.identity);
+    return cloneIdentity(
+      policy?.agentMode === 'custom' ? policy.identity : workspacePolicy.identity,
+    );
   }
 
   async getAccessBundle(
@@ -351,22 +381,30 @@ export class FileThreadConfigStore implements ThreadConfigStore {
     const state = await this.readState();
     const workspacePolicy = this.workspacePolicyFor(state, workspace.id);
     const policy = this.projectPolicyFor(state, workspace.id, project.key);
+    const inheritsCapabilities = !policy || policy.capabilityMode === 'inherit';
+    const capabilityGrants = inheritsCapabilities
+      ? workspacePolicy.grants
+      : policy.grants;
+    const networkPolicy = inheritsCapabilities
+      ? workspacePolicy.networkPolicy
+      : policy.networkPolicy;
     return {
       id: `access:${thread.id}`,
       threadId: thread.id,
       workspaceId: workspace.id,
       projectId: project.id,
       grants: dedupeGrants([
-        ...memoryGrants({ thread, workspaceId: workspace.id, projectId: project.id }),
-        ...workspacePolicy.grants,
-        ...(policy?.grants ?? []),
+        ...memoryGrants({
+          thread,
+          workspaceId: workspace.id,
+          projectId: project.id,
+          memoryMode: policy?.memoryMode ?? 'workspace',
+        }),
+        ...capabilityGrants,
       ]),
       networkPolicy: {
-        ...(policy?.networkPolicy ?? workspacePolicy.networkPolicy),
-        allowedHosts: [
-          ...(policy?.networkPolicy.allowedHosts ??
-            workspacePolicy.networkPolicy.allowedHosts),
-        ],
+        ...networkPolicy,
+        allowedHosts: [...networkPolicy.allowedHosts],
       },
     };
   }
@@ -400,6 +438,66 @@ export class FileThreadConfigStore implements ThreadConfigStore {
       .map(cloneProjectPolicy);
   }
 
+  async upsertWorkspacePolicy(
+    input: UpsertWorkspaceAgentPolicyInput,
+  ): Promise<WorkspaceAgentPolicy> {
+    return this.mutate((state) => {
+      const existing = this.workspacePolicyFor(state, input.workspaceId);
+      const timestamp = now();
+      const networkBase = existing.networkPolicy;
+      const policy: WorkspaceAgentPolicy = {
+        workspace: {
+          ...existing.workspace,
+          id: input.workspaceId,
+          name: input.name?.trim() || existing.workspace.name,
+          defaultProjectId:
+            input.defaultProjectId?.trim() ||
+            existing.workspace.defaultProjectId,
+        },
+        identity: {
+          ...existing.identity,
+          ...input.identity,
+          id: input.identity?.id?.trim() || existing.identity.id,
+          displayName:
+            input.identity?.displayName?.trim() ||
+            existing.identity.displayName,
+          instructions:
+            input.identity?.instructions?.trim() ||
+            existing.identity.instructions,
+          defaultExecutorId:
+            input.identity?.defaultExecutorId?.trim() ||
+            existing.identity.defaultExecutorId,
+        },
+        grants: (input.grants ?? existing.grants).map(cloneGrant),
+        networkPolicy: {
+          mode: input.networkPolicy?.mode ?? networkBase.mode,
+          allowedHosts: [
+            ...(input.networkPolicy?.allowedHosts ?? networkBase.allowedHosts),
+          ],
+        },
+        createdAt: existing.createdAt,
+        updatedAt: timestamp,
+      };
+      const index = state.workspaces.findIndex(
+        (item) => item.workspace.id === input.workspaceId,
+      );
+      if (index >= 0) state.workspaces.splice(index, 1, policy);
+      else state.workspaces.push(policy);
+      state.audit.push({
+        id: randomUUID(),
+        action: 'workspace.updated',
+        actor: input.actor?.trim() || 'admin',
+        workspaceId: input.workspaceId,
+        at: timestamp,
+        snapshot: cloneWorkspacePolicy(policy),
+      });
+      if (state.audit.length > 500) {
+        state.audit.splice(0, state.audit.length - 500);
+      }
+      return cloneWorkspacePolicy(policy);
+    });
+  }
+
   async upsertProjectPolicy(
     input: UpsertProjectAgentPolicyInput,
   ): Promise<ProjectAgentPolicy> {
@@ -431,6 +529,16 @@ export class FileThreadConfigStore implements ThreadConfigStore {
             input.identity?.defaultExecutorId?.trim() ||
             identityBase.defaultExecutorId,
         },
+        agentMode:
+          input.agentMode ??
+          existing?.agentMode ??
+          (input.identity ? 'custom' : ('inherit' as ProjectAgentMode)),
+        capabilityMode:
+          input.capabilityMode ??
+          existing?.capabilityMode ??
+          (input.grants || input.networkPolicy
+            ? 'custom'
+            : ('inherit' as ProjectCapabilityMode)),
         grants: (input.grants ?? existing?.grants ?? []).map(cloneGrant),
         networkPolicy: {
           mode: input.networkPolicy?.mode ?? networkBase.mode,
@@ -438,6 +546,7 @@ export class FileThreadConfigStore implements ThreadConfigStore {
             ...(input.networkPolicy?.allowedHosts ?? networkBase.allowedHosts),
           ],
         },
+        memoryMode: input.memoryMode ?? existing?.memoryMode ?? 'workspace',
         createdAt: existing?.createdAt ?? timestamp,
         updatedAt: timestamp,
       };
@@ -472,7 +581,10 @@ export class FileThreadConfigStore implements ThreadConfigStore {
       .slice(0, Math.max(1, Math.min(limit, 200)))
       .map((item) => ({
         ...item,
-        snapshot: cloneProjectPolicy(item.snapshot),
+        snapshot:
+          'workspace' in item.snapshot
+            ? cloneWorkspacePolicy(item.snapshot)
+            : cloneProjectPolicy(item.snapshot),
       }));
   }
 }

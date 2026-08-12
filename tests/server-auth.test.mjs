@@ -174,6 +174,38 @@ test(
       'operator_csrf_required',
     );
 
+    const workspaceWrite = await fetch(`${baseUrl}/v1/workspace`, {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+        'x-opentag-csrf': session.csrfToken,
+      },
+      body: JSON.stringify({
+        workspaceId: 'dev-workspace',
+        name: 'Authenticated workspace',
+        agentName: 'Workspace Tag',
+        executorId: 'claude',
+        tools: ['github'],
+        toolConstraints: {
+          github: {
+            repositories: ['acme/shared'],
+            permissions: ['read'],
+          },
+        },
+        networkMode: 'restricted',
+        allowedHosts: ['github.com'],
+      }),
+    });
+    assert.equal(workspaceWrite.status, 200);
+    const workspaceWriteBody = await workspaceWrite.json();
+    assert.equal(workspaceWriteBody.workspace.identity.displayName, 'Workspace Tag');
+    assert.equal(workspaceWriteBody.workspace.grants[0].scope, 'workspace');
+    assert.equal(
+      workspaceWriteBody.workspace.networkPolicy.mode,
+      'restricted',
+    );
+
     const sessionWrite = await fetch(`${baseUrl}/v1/projects`, {
       method: 'POST',
       headers: {
@@ -232,6 +264,17 @@ test(
       }),
     });
     assert.equal(bearerWrite.status, 200);
+    const bearerProject = (await bearerWrite.json()).project;
+    assert.equal(bearerProject.agentMode, 'inherit');
+    assert.equal(bearerProject.capabilityMode, 'inherit');
+
+    const inheritedWorkspace = await fetch(`${baseUrl}/v1/workspace`, {
+      headers: { cookie },
+    }).then((response) => response.json());
+    const inheritedProject = inheritedWorkspace.projects.find(
+      (project) => project.projectId === 'bearer-test',
+    );
+    assert.equal(inheritedProject.toolCount, 2);
 
     const logout = await fetch(`${baseUrl}/v1/admin/session`, {
       method: 'DELETE',
@@ -308,6 +351,7 @@ test(
     assert.equal(result.accepted, true);
     assert.equal(result.queued, true);
     assert.equal(result.route.projectId, 'opentag');
+    assert.equal(result.run.metadata.workspaceMemoryWriteAllowed, false);
     const attachment = result.run.message.attachments[0];
     assert.equal(attachment.name, 'client-report.txt');
     assert.equal(attachment.metadata.managed, true);

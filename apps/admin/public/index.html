@@ -142,6 +142,45 @@
         </section>
 
         <section class="view" id="view-projects" data-view-panel="projects" hidden>
+          <form class="workspace-agent" id="workspace-form">
+            <div class="workspace-agent-heading">
+              <div>
+                <span class="eyebrow">Workspace profile</span>
+                <h2>Workspace agent</h2>
+              </div>
+              <span class="state-pill ready" id="workspace-agent-state">Active</span>
+            </div>
+            <div class="workspace-agent-fields">
+              <label class="field">
+                <span>Workspace name</span>
+                <input id="workspace-policy-name" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Agent name</span>
+                <input id="workspace-agent-name" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Executor</span>
+                <select id="workspace-agent-executor"></select>
+              </label>
+              <label class="field">
+                <span>Default project</span>
+                <select id="workspace-default-project"></select>
+              </label>
+              <label class="field workspace-agent-instructions">
+                <span>Instructions</span>
+                <textarea id="workspace-agent-instructions" rows="3" spellcheck="true"></textarea>
+              </label>
+              <div class="workspace-agent-actions">
+                <span id="workspace-save-state">No unsaved changes</span>
+                <button class="secondary-button" id="open-workspace-capabilities" type="button">
+                  <span id="workspace-capability-summary">Default tools</span>
+                </button>
+                <button class="primary-button" id="save-workspace" type="submit">Save workspace</button>
+              </div>
+            </div>
+          </form>
+
           <div class="project-workbench">
             <aside class="project-index">
               <div class="index-heading">
@@ -178,9 +217,16 @@
               <div class="form-section">
                 <div class="form-section-title">
                   <h3>Agent</h3>
-                  <span id="agent-id-label">opentag</span>
+                  <span id="agent-mode-label">Workspace profile</span>
                 </div>
                 <div class="two-column-form">
+                  <label class="field">
+                    <span>Profile</span>
+                    <select id="project-agent-mode">
+                      <option value="inherit">Use workspace agent</option>
+                      <option value="custom">Custom project agent</option>
+                    </select>
+                  </label>
                   <label class="field">
                     <span>Name</span>
                     <input id="agent-name" autocomplete="off" />
@@ -198,18 +244,39 @@
 
               <div class="form-section">
                 <div class="form-section-title">
-                  <h3>Tools</h3>
-                  <span>Project scope</span>
+                  <h3>Memory</h3>
+                  <span id="project-memory-label">Workspace shared</span>
                 </div>
+                <label class="field">
+                  <span>Boundary</span>
+                  <select id="project-memory-mode">
+                    <option value="workspace">Workspace shared</option>
+                    <option value="isolated">Project isolated</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Tools</h3>
+                  <span id="project-capability-label">Workspace defaults</span>
+                </div>
+                <label class="field policy-mode-field">
+                  <span>Policy</span>
+                  <select id="project-capability-mode">
+                    <option value="inherit">Use workspace defaults</option>
+                    <option value="custom">Custom project policy</option>
+                  </select>
+                </label>
                 <div class="tool-grid" id="tool-grid"></div>
               </div>
 
               <div class="form-section">
                 <div class="form-section-title">
                   <h3>Network</h3>
-                  <span>Default deny</span>
+                  <span id="project-network-label">Workspace defaults</span>
                 </div>
-                <div class="two-column-form">
+                <div class="two-column-form" id="project-network-fields">
                   <label class="field">
                     <span>Policy</span>
                     <select id="network-mode">
@@ -223,6 +290,7 @@
                     <input id="allowed-hosts" placeholder="github.com, open.feishu.cn" spellcheck="false" />
                   </label>
                 </div>
+                <div class="inherited-policy-summary" id="project-network-inherited" hidden></div>
               </div>
 
               <div class="form-section">
@@ -739,7 +807,7 @@
               <select id="memory-project"></select>
             </label>
             <div class="segmented" id="memory-scope" role="group" aria-label="Memory scope">
-              <button type="button" data-scope="global">Global</button>
+              <button type="button" data-scope="global">Installation</button>
               <button type="button" data-scope="workspace">Workspace</button>
               <button class="active" type="button" data-scope="project">Project</button>
               <button type="button" data-scope="thread">Thread</button>
@@ -788,6 +856,37 @@
         </section>
       </main>
     </div>
+
+    <dialog class="test-dialog capability-dialog" id="workspace-capability-dialog">
+      <form class="dialog-shell" id="workspace-capability-form">
+        <div class="dialog-header">
+          <div>
+            <span class="eyebrow">Inherited policy</span>
+            <h2>Workspace defaults</h2>
+          </div>
+          <button class="square-button" id="close-workspace-capabilities" type="button" aria-label="Close">x</button>
+        </div>
+        <div class="tool-grid" id="workspace-tool-grid"></div>
+        <div class="two-column-form capability-network-fields">
+          <label class="field">
+            <span>Network policy</span>
+            <select id="workspace-network-mode">
+              <option value="deny-by-default">Deny by default</option>
+              <option value="restricted">Restricted</option>
+              <option value="allow-all">Allow all</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Allowed hosts</span>
+            <input id="workspace-allowed-hosts" placeholder="github.com, open.feishu.cn" spellcheck="false" />
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <span>Inherited by projects using workspace defaults</span>
+          <button class="primary-button" id="save-workspace-capabilities" type="submit">Save defaults</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog class="test-dialog" id="test-dialog">
       <form method="dialog" class="dialog-shell" id="test-form">

@@ -10,6 +10,7 @@ import type {
   ToolGrant,
   ToolGrantKind,
 } from '@opentag/core';
+import { memoryScopeGranted } from '@opentag/core';
 import type {
   CliToolDescriptor,
   CliToolSession,
@@ -190,12 +191,17 @@ function memoryGrant(
   scope: MemoryScopeKind,
   permission: 'read' | 'write',
 ): ToolGrant {
+  if (scope === 'global') {
+    throw new ToolDeniedError(`memory_${scope}_${permission}_not_granted`);
+  }
+  if (!memoryScopeGranted(request.access, scope, permission)) {
+    throw new ToolDeniedError(`memory_${scope}_${permission}_not_granted`);
+  }
   const grant = grantsFor(request, 'memory').find(
     (candidate) =>
       candidate.scope === scope && permissionAllows(candidate, permission),
   );
-  if (!grant) throw new ToolDeniedError(`memory_${scope}_${permission}_not_granted`);
-  return grant;
+  return grant!;
 }
 
 function constraintStrings(grant: ToolGrant, ...keys: string[]): string[] {
@@ -353,14 +359,14 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
     {
       name: 'memory_get',
       title: 'Read scoped memory',
-      description: 'Read one OpenTag memory scope for the current global, workspace, project, or thread context.',
+      description: 'Read one allowed workspace, project, or thread memory scope.',
       grantKind: 'memory',
       risk: 'read',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          scope: { type: 'string', enum: ['global', 'workspace', 'project', 'thread'] },
+          scope: { type: 'string', enum: ['workspace', 'project', 'thread'] },
         },
         required: ['scope'],
       },
@@ -389,14 +395,14 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
     {
       name: 'memory_remember',
       title: 'Remember scoped context',
-      description: 'Append a durable fact to the current project or thread memory.',
+      description: 'Append a durable fact to an allowed workspace, project, or thread memory scope.',
       grantKind: 'memory',
       risk: 'write',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          scope: { type: 'string', enum: ['global', 'workspace', 'project', 'thread'] },
+          scope: { type: 'string', enum: ['workspace', 'project', 'thread'] },
           text: { type: 'string', minLength: 1, maxLength: 4000 },
         },
         required: ['scope', 'text'],

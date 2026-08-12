@@ -46,15 +46,15 @@ async function postJson(baseUrl, pathname, body) {
   return { response, data: await response.json() };
 }
 
-function clientEvent(eventId, actorId, text) {
+function clientEvent(eventId, actorId, text, projectId = 'opentag') {
   return {
     platform: 'lark',
     eventId,
     thread: {
-      externalId: 'oc_access:root',
-      channelId: 'oc_access',
+      externalId: `oc_access_${projectId}:root`,
+      channelId: `oc_access_${projectId}`,
       workspaceId: 'dev-workspace',
-      projectId: 'opentag',
+      projectId,
       visibility: 'public',
     },
     message: {
@@ -162,6 +162,16 @@ test(
     assert.equal(contributorResult.response.status, 200);
     const contributor = contributorResult.data.member;
 
+    const isolatedProject = await postJson(baseUrl, '/v1/projects', {
+      workspaceId: 'dev-workspace',
+      projectId: 'legal',
+      name: 'Legal',
+      agentMode: 'inherit',
+      capabilityMode: 'inherit',
+      memoryMode: 'isolated',
+    });
+    assert.equal(isolatedProject.response.status, 200);
+
     const viewerResult = await postJson(baseUrl, '/v1/access/members', {
       workspaceId: 'dev-workspace',
       displayName: 'Viewer',
@@ -189,6 +199,28 @@ test(
       },
     );
     assert.equal(assignment.response.status, 200);
+
+    const isolatedPolicy = await postJson(
+      baseUrl,
+      '/v1/access/project-policy',
+      {
+        workspaceId: 'dev-workspace',
+        projectId: 'legal',
+        mode: 'members',
+      },
+    );
+    assert.equal(isolatedPolicy.response.status, 200);
+    const isolatedAssignment = await postJson(
+      baseUrl,
+      '/v1/access/project-memberships',
+      {
+        workspaceId: 'dev-workspace',
+        projectId: 'legal',
+        memberId: contributor.id,
+        role: 'contributor',
+      },
+    );
+    assert.equal(isolatedAssignment.response.status, 200);
 
     const larkBinding = await postJson(baseUrl, '/v1/bindings', {
       platform: 'lark',
@@ -298,9 +330,41 @@ test(
     );
     assert.equal(contributorWorkspaceMemory.data.accepted, true);
     assert.equal(
+      contributorWorkspaceMemory.data.run.metadata.workspaceMemoryWriteAllowed,
+      true,
+    );
+    assert.equal(
       contributorWorkspaceMemory.data.authorization.workspaceRole,
       'member',
     );
+
+    const isolatedWorkspaceMemory = await postJson(
+      baseUrl,
+      '/v1/client/events',
+      clientEvent(
+        'access-isolated-workspace-memory',
+        'ou-contributor',
+        'remember workspace must remain isolated',
+        'legal',
+      ),
+    );
+    assert.equal(isolatedWorkspaceMemory.data.accepted, false);
+    assert.equal(
+      isolatedWorkspaceMemory.data.authorization.reason,
+      'memory_scope_not_granted',
+    );
+
+    const isolatedProjectMemory = await postJson(
+      baseUrl,
+      '/v1/client/events',
+      clientEvent(
+        'access-isolated-project-memory',
+        'ou-contributor',
+        'remember project legal-only fact',
+        'legal',
+      ),
+    );
+    assert.equal(isolatedProjectMemory.data.accepted, true);
 
     const ownerGlobalMemory = await postJson(
       baseUrl,
@@ -342,8 +406,12 @@ test(
       (response) => response.json(),
     );
     assert.equal(access.members.length, 3);
-    assert.equal(access.projectPolicies[0].mode, 'members');
-    assert.equal(access.projectMemberships.length, 1);
+    assert.equal(
+      access.projectPolicies.find((policy) => policy.projectId === 'opentag')
+        .mode,
+      'members',
+    );
+    assert.equal(access.projectMemberships.length, 2);
 
     const ignored = await fetch(`${baseUrl}/v1/deliveries?limit=20`).then(
       (response) => response.json(),

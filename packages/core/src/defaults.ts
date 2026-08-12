@@ -93,29 +93,35 @@ export class StaticThreadConfigStore implements ThreadConfigStore {
       workspaceId: context?.workspace?.id,
       projectId: context?.project?.id,
       grants: [
-        {
-          id: 'memory:global',
-          kind: 'memory',
-          scope: 'global',
-          label: 'Global memory',
-        },
-        {
-          id: `memory:workspace:${context?.workspace?.id ?? thread.workspaceId ?? 'default'}`,
-          kind: 'memory',
-          scope: 'workspace',
-          label: 'Workspace memory',
-        },
-        {
-          id: `memory:project:${context?.project?.id ?? thread.projectId ?? 'general'}`,
-          kind: 'memory',
-          scope: 'project',
-          label: 'Project memory',
-        },
+        ...(thread.visibility !== 'direct'
+          ? [
+              {
+                id: `memory:workspace:${context?.workspace?.id ?? thread.workspaceId ?? 'default'}`,
+                kind: 'memory',
+                scope: 'workspace' as const,
+                label: 'Workspace memory',
+                constraints: {
+                  permissions:
+                    thread.visibility === 'private'
+                      ? ['read']
+                      : ['read', 'write'],
+                },
+              },
+              {
+                id: `memory:project:${context?.project?.id ?? thread.projectId ?? 'general'}`,
+                kind: 'memory',
+                scope: 'project' as const,
+                label: 'Project memory',
+                constraints: { permissions: ['read', 'write'] },
+              },
+            ]
+          : []),
         {
           id: `memory:thread:${thread.id}`,
           kind: 'memory',
           scope: 'thread',
           label: 'Thread memory',
+          constraints: { permissions: ['read', 'write'] },
         },
       ],
       networkPolicy: {
