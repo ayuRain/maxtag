@@ -4,8 +4,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import {
   memoryScopeGranted,
+  OPENTAG_REQUEUE_RUN_ABORT_REASON,
   OPENTAG_STOP_RUN_ACTION,
   OpenTagRuntime,
+  isOpenTagLeaseLostAbort,
+  isOpenTagRequeueAbort,
   type AgentRunEvent,
   type Artifact,
   type MemoryScopeKind,
@@ -109,11 +112,14 @@ import {
   defaultProviderSessionNamespace,
   loadDurableConversationContext,
   monitorDurableRunCancellation,
+  renewDurableRunLeaseOrAbort,
   RoutineSchedulerService,
   WorkflowCoordinatorService,
   ManagedContentError,
   ManagedContentStore,
+  collectOpenTagMetricsSnapshot,
   pathIsWithin,
+  renderOpenTagPrometheusMetrics,
   type RoutineTickResult,
   type WorkflowCoordinatorTickResult,
 } from '@opentag/runtime-host';
@@ -140,8 +146,14 @@ import {
 
 const port = Number(process.env.OPENTAG_PORT || 3077);
 const host = process.env.OPENTAG_HOST || '127.0.0.1';
+const processStartedAt = new Date().toISOString();
 const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
 const adminDir = path.resolve('apps/admin/public');
+const metricsToken = process.env.OPENTAG_METRICS_TOKEN?.trim();
+const shutdownTimeoutMs = numberEnvironmentValue(
+  'OPENTAG_SHUTDOWN_TIMEOUT_MS',
+  25_000,
+);
 const botOpenId = process.env.OPENTAG_LARK_BOT_OPEN_ID;
 const larkTransportMode = process.env.OPENTAG_LARK_TRANSPORT || 'memory';
 const larkAppId = process.env.OPENTAG_LARK_APP_ID;
@@ -190,11 +202,21 @@ const pairingTtlSeconds = Math.max(
 const agentWorkerMode = process.env.OPENTAG_AGENT_WORKER || 'inline';
 const agentWorkerEnabled = agentWorkerMode !== 'manual';
 const agentWorkerIntervalMs = Number(process.env.OPENTAG_AGENT_WORKER_INTERVAL_MS || 2000);
+const agentWorkerStaleMs = Math.max(
+  1_000,
+  Number(process.env.OPENTAG_AGENT_WORKER_STALE_MS || 120_000),
+);
+const agentRunHeartbeatMs = Math.max(
+  250,
+  Math.min(
+    numberEnvironmentValue('OPENTAG_AGENT_RUN_HEARTBEAT_MS', 15_000),
+    Math.floor(agentWorkerStaleMs / 3),
+  ),
+);
 const runControlPollMs = Math.max(
   25,
   Number(process.env.OPENTAG_RUN_CONTROL_POLL_MS || 250),
 );
-const agentWorkerStaleMs = Number(process.env.OPENTAG_AGENT_WORKER_STALE_MS || 120_000);
 const agentWorkerId = `opentag-${process.pid}`;
 const executorMode =
   process.env.OPENTAG_EXECUTOR_MODE === 'local-cli' ? 'local-cli' : 'dry-run';
@@ -411,7 +433,15 @@ const activeRuns = new Map<string, AbortController>();
 const pairingNoticeAt = new Map<string, number>();
 const accessNoticeAt = new Map<string, number>();
 let agentWorkerTimer: NodeJS.Timeout | undefined;
+let agentWorkerInterval: NodeJS.Timeout | undefined;
+let routineSchedulerInterval: NodeJS.Timeout | undefined;
+let workflowCoordinatorInterval: NodeJS.Timeout | undefined;
 let agentWorkerPass: Promise<AgentWorkerPassResult> | undefined;
+let startupRecoveryPass: Promise<void> | undefined;
+let serverShuttingDown = false;
+let agentWorkerPassCount = 0;
+let agentWorkerLastPassAt: string | undefined;
+let agentWorkerLastPassResult: AgentWorkerPassResult | undefined;
 const threadConfigStore = new FileThreadConfigStore(path.join(dataDir, 'config'), {
   identity: {
     displayName: 'OpenTag',
@@ -706,6 +736,7 @@ function executorStatus(): Record<string, unknown> {
       steeringMode: executorMode === 'local-cli' ? 'live' : 'next_turn',
     },
     runControlPollMs,
+    runHeartbeatMs: agentRunHeartbeatMs,
   };
 }
 
@@ -3262,6 +3293,8 @@ interface AgentWorkerPassResult {
   claimed: number;
   completed: number;
   failed: number;
+  requeued: number;
+  superseded: number;
   runs: AgentRunRecord[];
 }
 
@@ -3515,7 +3548,9 @@ async function executeAgentRun(
     };
   }
   if (!options?.alreadyClaimed) {
-    const runningRun = await deliveryStore.markAgentRunRunning(runId);
+    const runningRun = await deliveryStore.markAgentRunRunning(runId, {
+      workerId: agentWorkerId,
+    });
     if (runningRun?.status === 'cancelled') {
       return {
         run: runningRun,
@@ -3690,13 +3725,24 @@ async function executeAgentRun(
   }
 
   const runtime = createRuntimeForPlatform(runPlatform.platform);
+  const progressSurfaceId = await deliveryStore.getDeliveredProgressSurfaceId(
+    runId,
+    initialRun.thread.platform,
+  );
   const abortController = new AbortController();
   activeRuns.set(runId, abortController);
+  if (serverShuttingDown) {
+    abortController.abort(
+      `${OPENTAG_REQUEUE_RUN_ABORT_REASON}:shutdown_after_claim`,
+    );
+  }
   const stopCancellationMonitor = monitorDurableRunCancellation({
     deliveryStore,
     runId,
     abortController,
+    workerId: agentWorkerId,
     pollMs: runControlPollMs,
+    heartbeatMs: agentRunHeartbeatMs,
     onError: (error) => {
       console.error(`OpenTag cancellation poll failed for ${runId}`, error);
     },
@@ -3727,6 +3773,21 @@ async function executeAgentRun(
       transcript,
       providerSession,
       abortSignal: abortController.signal,
+      progressSurfaceId,
+      assertActive: async () => {
+        if (abortController.signal.aborted) {
+          throw new Error(String(abortController.signal.reason));
+        }
+        const renewed = await renewDurableRunLeaseOrAbort({
+          deliveryStore,
+          runId,
+          workerId: agentWorkerId,
+          abortController,
+        });
+        if (!renewed) {
+          throw new Error(String(abortController.signal.reason));
+        }
+      },
       steering: createDurableSteeringProvider({
         deliveryStore,
         runId,
@@ -3778,12 +3839,27 @@ async function executeAgentRun(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (abortController.signal.aborted) {
+    if (isOpenTagLeaseLostAbort(abortController.signal)) {
+      // Another worker owns the durable lease; this process must not mutate it.
+    } else if (isOpenTagRequeueAbort(abortController.signal)) {
+      const requeued = await deliveryStore.requeueAgentRun(runId, {
+        workerId: agentWorkerId,
+        reason: String(abortController.signal.reason),
+      });
+      if (requeued?.status === 'cancel_requested') {
+        await deliveryStore.markAgentRunCancelled(
+          runId,
+          requeued.lastError || 'durable_cancel_requested',
+        );
+        await markRunInboundFailed(initialRun, message);
+      }
+    } else if (abortController.signal.aborted) {
       await deliveryStore.markAgentRunCancelled(runId, message);
+      await markRunInboundFailed(initialRun, message);
     } else {
       await deliveryStore.markAgentRunFailed(runId, message);
+      await markRunInboundFailed(initialRun, message);
     }
-    await markRunInboundFailed(initialRun, message);
     throw error;
   } finally {
     stopCancellationMonitor();
@@ -3829,18 +3905,36 @@ async function runAgentWorkerPass(
       claimed: claimed.length,
       completed: 0,
       failed: 0,
+      requeued: 0,
+      superseded: 0,
       runs: [],
     };
     for (const run of claimed) {
       try {
-        await executeAgentRun(run, { alreadyClaimed: true });
-        result.completed += 1;
+        if (serverShuttingDown) {
+          const released = await deliveryStore.requeueAgentRun(run.id, {
+            workerId: agentWorkerId,
+            reason: 'server_shutdown_before_execution',
+          });
+          if (released?.status === 'queued') result.requeued += 1;
+          else result.failed += 1;
+        } else {
+          await executeAgentRun(run, { alreadyClaimed: true });
+          result.completed += 1;
+        }
       } catch {
-        result.failed += 1;
+        const latest = await deliveryStore.getAgentRun(run.id);
+        if (latest?.status === 'queued') {
+          result.requeued += 1;
+        } else if (latest?.workerId && latest.workerId !== agentWorkerId) {
+          result.superseded += 1;
+        } else {
+          result.failed += 1;
+        }
       } finally {
         const latest = await deliveryStore.getAgentRun(run.id);
         if (latest) result.runs.push(latest);
-        if (run.metadata?.source === 'workflow') {
+        if (run.metadata?.source === 'workflow' && !serverShuttingDown) {
           try {
             await workflowCoordinator.tick();
           } catch (error) {
@@ -3857,16 +3951,26 @@ async function runAgentWorkerPass(
   } finally {
     agentWorkerPass = undefined;
   }
+  agentWorkerPassCount += 1;
+  agentWorkerLastPassAt = new Date().toISOString();
+  agentWorkerLastPassResult = structuredClone(result);
   const queued = await deliveryStore.listAgentRuns({
     status: 'queued',
     limit: 1,
   });
-  if (queued.length > 0) scheduleAgentWorkerPass(10);
+  if (queued.length > 0 && !serverShuttingDown) scheduleAgentWorkerPass(10);
   return result;
 }
 
 function scheduleAgentWorkerPass(delayMs = 0): void {
-  if (!agentWorkerEnabled || agentWorkerTimer || agentWorkerPass) return;
+  if (
+    serverShuttingDown ||
+    !agentWorkerEnabled ||
+    agentWorkerTimer ||
+    agentWorkerPass
+  ) {
+    return;
+  }
   agentWorkerTimer = setTimeout(() => {
     agentWorkerTimer = undefined;
     void runAgentWorkerPass(1).catch((error) => {
@@ -3888,6 +3992,7 @@ const server = createServer(async (request, response) => {
         worker: {
           mode: agentWorkerMode,
           enabled: agentWorkerEnabled,
+          shuttingDown: serverShuttingDown,
           activeRuns: activeRuns.size,
           passRunning: Boolean(agentWorkerPass),
         },
@@ -3934,6 +4039,84 @@ const server = createServer(async (request, response) => {
           },
         },
       });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/metrics') {
+      if (metricsToken && !bearerTokenMatches(request, metricsToken)) {
+        response.writeHead(401, {
+          'content-type': 'text/plain; charset=utf-8',
+          'cache-control': 'no-store',
+          'www-authenticate': 'Bearer realm="OpenTag metrics"',
+        });
+        response.end('metrics_auth_required\n');
+        return;
+      }
+      const snapshot = await collectOpenTagMetricsSnapshot({
+        process: {
+          service: 'opentag-server',
+          startedAt: processStartedAt,
+          activeRuns: activeRuns.size,
+          storage: {
+            driver: storageDriver,
+            wal: Boolean(sqliteStorage),
+          },
+          loops: [
+            {
+              name: 'agent_worker',
+              running: Boolean(agentWorkerPass),
+              lastRunAt: agentWorkerLastPassAt,
+              iterations: agentWorkerPassCount,
+              lastItems: agentWorkerLastPassResult
+                ? {
+                    claimed: agentWorkerLastPassResult.claimed,
+                    completed: agentWorkerLastPassResult.completed,
+                    failed: agentWorkerLastPassResult.failed,
+                    requeued: agentWorkerLastPassResult.requeued,
+                    superseded: agentWorkerLastPassResult.superseded,
+                  }
+                : undefined,
+            },
+            {
+              name: 'routine_scheduler',
+              running: routineScheduler.running,
+              lastRunAt: routineScheduler.lastTickAt,
+              iterations: routineScheduler.tickCount,
+              lastItems: routineScheduler.lastTickResult
+                ? {
+                    staged: routineScheduler.lastTickResult.staged,
+                    claimed: routineScheduler.lastTickResult.claimed,
+                    queued: routineScheduler.lastTickResult.queued,
+                    failed: routineScheduler.lastTickResult.failed,
+                    reconciled: routineScheduler.lastTickResult.reconciled,
+                  }
+                : undefined,
+            },
+            {
+              name: 'workflow_coordinator',
+              running: workflowCoordinator.running,
+              lastRunAt: workflowCoordinator.lastTickAt,
+              iterations: workflowCoordinator.tickCount,
+              lastItems: workflowCoordinator.lastTickResult
+                ? {
+                    claimed: workflowCoordinator.lastTickResult.claimed,
+                    queued: workflowCoordinator.lastTickResult.queued,
+                    failed: workflowCoordinator.lastTickResult.failed,
+                    reconciled: workflowCoordinator.lastTickResult.reconciled,
+                  }
+                : undefined,
+            },
+          ],
+        },
+        deliveryStore,
+        routineStore,
+        workflowStore,
+      });
+      response.writeHead(200, {
+        'content-type': 'text/plain; version=0.0.4; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      response.end(renderOpenTagPrometheusMetrics(snapshot));
       return;
     }
 
@@ -6287,6 +6470,65 @@ const server = createServer(async (request, response) => {
   }
 });
 
+async function closeHttpServer(): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+    server.closeIdleConnections?.();
+  });
+}
+
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  if (serverShuttingDown) return;
+  serverShuttingDown = true;
+  console.log(`OpenTag server stopping after ${signal}`);
+
+  if (agentWorkerTimer) clearTimeout(agentWorkerTimer);
+  if (agentWorkerInterval) clearInterval(agentWorkerInterval);
+  if (routineSchedulerInterval) clearInterval(routineSchedulerInterval);
+  if (workflowCoordinatorInterval) clearInterval(workflowCoordinatorInterval);
+  agentWorkerTimer = undefined;
+  agentWorkerInterval = undefined;
+  routineSchedulerInterval = undefined;
+  workflowCoordinatorInterval = undefined;
+
+  for (const controller of activeRuns.values()) {
+    controller.abort(
+      `${OPENTAG_REQUEUE_RUN_ABORT_REASON}:${signal.toLowerCase()}`,
+    );
+  }
+
+  const forceExit = setTimeout(() => {
+    console.error(
+      `OpenTag graceful shutdown exceeded ${shutdownTimeoutMs}ms`,
+    );
+    server.closeAllConnections?.();
+    process.exit(1);
+  }, shutdownTimeoutMs);
+  forceExit.unref?.();
+
+  try {
+    await Promise.all([
+      closeHttpServer(),
+      agentWorkerPass?.catch(() => undefined) ?? Promise.resolve(),
+      startupRecoveryPass?.catch(() => undefined) ?? Promise.resolve(),
+      routineScheduler.waitForIdle(),
+      workflowCoordinator.waitForIdle(),
+    ]);
+    sqliteStorage?.close();
+    clearTimeout(forceExit);
+    console.log('OpenTag server stopped');
+  } catch (error) {
+    clearTimeout(forceExit);
+    console.error('OpenTag server shutdown failed', error);
+    sqliteStorage?.close();
+    process.exitCode = 1;
+  }
+}
+
+process.once('SIGINT', () => void shutdown('SIGINT'));
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+
 server.listen(port, host, () => {
   console.log(`OpenTag server listening on http://${host}:${port}`);
   console.log(
@@ -6304,45 +6546,51 @@ server.listen(port, host, () => {
       'OpenTag operator authentication is disabled on a non-loopback host. Set OPENTAG_ADMIN_TOKEN or OPENTAG_OPERATOR_PRINCIPALS_JSON before exposing the console.',
     );
   }
-  void deliveryStore.recoverStaleAgentRuns({
-    olderThanMs: agentWorkerStaleMs,
-    reason: 'server_startup_recovered_stale_run',
-  }).then((result) => {
-    if (result.requeued > 0 || result.cancelled > 0) {
-      console.log(
-        `OpenTag recovered agent runs requeued=${result.requeued} cancelled=${result.cancelled}`,
-      );
-    }
-    scheduleAgentWorkerPass();
-  }).catch((error) => {
-    console.error('OpenTag failed to recover stale agent runs', error);
-  });
+  startupRecoveryPass = deliveryStore
+    .recoverStaleAgentRuns({
+      olderThanMs: agentWorkerStaleMs,
+      reason: 'server_startup_recovered_stale_run',
+    })
+    .then((result) => {
+      if (result.requeued > 0 || result.cancelled > 0) {
+        console.log(
+          `OpenTag recovered agent runs requeued=${result.requeued} cancelled=${result.cancelled}`,
+        );
+      }
+      if (!serverShuttingDown) scheduleAgentWorkerPass();
+    })
+    .catch((error) => {
+      console.error('OpenTag failed to recover stale agent runs', error);
+    })
+    .finally(() => {
+      startupRecoveryPass = undefined;
+    });
   if (agentWorkerEnabled) {
-    const interval = setInterval(() => {
+    agentWorkerInterval = setInterval(() => {
       scheduleAgentWorkerPass();
     }, agentWorkerIntervalMs);
-    interval.unref?.();
+    agentWorkerInterval.unref?.();
   }
   if (routineSchedulerInline) {
     void runRoutineSchedulerTick().catch((error) => {
       console.error('OpenTag routine startup tick failed', error);
     });
-    const routineInterval = setInterval(() => {
+    routineSchedulerInterval = setInterval(() => {
       void runRoutineSchedulerTick().catch((error) => {
         console.error('OpenTag routine tick failed', error);
       });
     }, routineTickIntervalMs);
-    routineInterval.unref?.();
+    routineSchedulerInterval.unref?.();
   }
   if (workflowCoordinatorInline) {
     void runWorkflowCoordinatorTick().catch((error) => {
       console.error('OpenTag workflow coordinator startup tick failed', error);
     });
-    const workflowInterval = setInterval(() => {
+    workflowCoordinatorInterval = setInterval(() => {
       void runWorkflowCoordinatorTick().catch((error) => {
         console.error('OpenTag workflow coordinator tick failed', error);
       });
     }, workflowTickIntervalMs);
-    workflowInterval.unref?.();
+    workflowCoordinatorInterval.unref?.();
   }
 });

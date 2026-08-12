@@ -326,6 +326,22 @@ export interface RecoverStaleAgentRunsOptions {
   reason?: string;
 }
 
+export interface RequeueAgentRunOptions {
+  workerId?: string;
+  reason?: string;
+  now?: Date;
+}
+
+export interface RenewAgentRunLeaseOptions {
+  workerId: string;
+  now?: Date;
+}
+
+export interface MarkAgentRunRunningOptions {
+  workerId?: string;
+  now?: Date;
+}
+
 export interface RecoverStaleAgentRunsResult {
   requeued: number;
   cancelled: number;
@@ -444,6 +460,14 @@ export interface DeliverySummary {
   steering: Record<AgentRunSteeringStatus, number>;
   sessions: Record<AgentThreadSessionStatus, number>;
   bindings: number;
+  oldestStatusUpdatedAt: {
+    outbox: Partial<Record<OutboundStatus, string>>;
+    turnDeliveries: Partial<Record<TurnDeliveryStatus, string>>;
+    inboundEvents: Partial<Record<InboundEventStatus, string>>;
+    agentRuns: Partial<Record<AgentRunStatus, string>>;
+    steering: Partial<Record<AgentRunSteeringStatus, string>>;
+    sessions: Partial<Record<AgentThreadSessionStatus, string>>;
+  };
 }
 
 export interface FileDeliveryState {

@@ -1,5 +1,8 @@
 import path from 'node:path';
 import {
+  OPENTAG_REQUEUE_RUN_ABORT_REASON,
+  isOpenTagLeaseLostAbort,
+  isOpenTagRequeueAbort,
   memoryScopeGranted,
   OpenTagRuntime,
   type AgentRunEvent,
@@ -66,6 +69,7 @@ import {
 import {
   createDurableSteeringProvider,
   monitorDurableRunCancellation,
+  renewDurableRunLeaseOrAbort,
 } from './run-control.js';
 import {
   createDurableProviderSessionContext,
@@ -78,6 +82,7 @@ export * from './run-control.js';
 export * from './conversation-context.js';
 export * from './workflow-coordinator.js';
 export * from './managed-content-store.js';
+export * from './metrics.js';
 
 export interface RuntimeHostLarkConfig {
   transportMode?: string;
@@ -152,12 +157,15 @@ export interface RuntimeHostConfig {
   storage?: RuntimeHostStorageConfig;
   toolBroker?: RuntimeHostToolBrokerConfig;
   runControlPollMs?: number;
+  runHeartbeatMs?: number;
 }
 
 export interface AgentWorkerPassResult {
   claimed: number;
   completed: number;
   failed: number;
+  requeued: number;
+  superseded: number;
   runs: AgentRunRecord[];
 }
 
@@ -305,6 +313,10 @@ export class OpenTagWorkerHost {
   private toolLarkTransport?: HttpLarkTransport;
   private readonly activeRuns = new Map<string, AbortController>();
   private workerPass: Promise<AgentWorkerPassResult> | undefined;
+  private _shuttingDown = false;
+  private _passCount = 0;
+  private _lastPassAt: string | undefined;
+  private _lastPassResult: AgentWorkerPassResult | undefined;
 
   constructor(config: RuntimeHostConfig) {
     this.config = config;
@@ -419,6 +431,40 @@ export class OpenTagWorkerHost {
     return this.activeRuns.size;
   }
 
+  get passRunning(): boolean {
+    return Boolean(this.workerPass);
+  }
+
+  get shuttingDown(): boolean {
+    return this._shuttingDown;
+  }
+
+  beginShutdown(reason = 'process_shutdown'): void {
+    if (this._shuttingDown) return;
+    this._shuttingDown = true;
+    for (const controller of this.activeRuns.values()) {
+      controller.abort(`${OPENTAG_REQUEUE_RUN_ABORT_REASON}:${reason}`);
+    }
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.workerPass;
+  }
+
+  get passCount(): number {
+    return this._passCount;
+  }
+
+  get lastPassAt(): string | undefined {
+    return this._lastPassAt;
+  }
+
+  get lastPassResult(): AgentWorkerPassResult | undefined {
+    return this._lastPassResult
+      ? structuredClone(this._lastPassResult)
+      : undefined;
+  }
+
   storageStatus(): {
     driver: 'file' | 'sqlite';
     wal: boolean;
@@ -484,6 +530,7 @@ export class OpenTagWorkerHost {
           (config.mode ?? 'dry-run') === 'local-cli' ? 'live' : 'next_turn',
       },
       runControlPollMs: this.config.runControlPollMs ?? 250,
+      runHeartbeatMs: this.config.runHeartbeatMs ?? 15_000,
     };
   }
 
@@ -525,6 +572,16 @@ export class OpenTagWorkerHost {
 
   async runAgentWorkerPass(limit = 1): Promise<AgentWorkerPassResult> {
     if (this.workerPass) return this.workerPass;
+    if (this._shuttingDown) {
+      return {
+        claimed: 0,
+        completed: 0,
+        failed: 0,
+        requeued: 0,
+        superseded: 0,
+        runs: [],
+      };
+    }
     this.workerPass = (async () => {
       const claimed = await this.deliveryStore.claimQueuedAgentRuns({
         limit,
@@ -534,22 +591,43 @@ export class OpenTagWorkerHost {
         claimed: claimed.length,
         completed: 0,
         failed: 0,
+        requeued: 0,
+        superseded: 0,
         runs: [],
       };
       for (const run of claimed) {
         try {
-          await this.executeAgentRun(run, { alreadyClaimed: true });
-          result.completed += 1;
+          if (this._shuttingDown) {
+            const released = await this.deliveryStore.requeueAgentRun(run.id, {
+              workerId: this.workerId,
+              reason: 'worker_shutdown_before_execution',
+            });
+            if (released?.status === 'queued') result.requeued += 1;
+            else result.failed += 1;
+          } else {
+            await this.executeAgentRun(run, { alreadyClaimed: true });
+            result.completed += 1;
+          }
         } catch {
-          result.failed += 1;
+          const latest = await this.deliveryStore.getAgentRun(run.id);
+          if (latest?.status === 'queued') {
+            result.requeued += 1;
+          } else if (latest?.workerId && latest.workerId !== this.workerId) {
+            result.superseded += 1;
+          } else {
+            result.failed += 1;
+          }
         } finally {
           const latest = await this.deliveryStore.getAgentRun(run.id);
           if (latest) result.runs.push(latest);
-          if (run.metadata?.source === 'workflow') {
+          if (run.metadata?.source === 'workflow' && !this._shuttingDown) {
             await this.workflowCoordinator.tick();
           }
         }
       }
+      this._passCount += 1;
+      this._lastPassAt = new Date().toISOString();
+      this._lastPassResult = structuredClone(result);
       return result;
     })();
     try {
@@ -585,7 +663,9 @@ export class OpenTagWorkerHost {
       };
     }
     if (!options?.alreadyClaimed) {
-      const runningRun = await this.deliveryStore.markAgentRunRunning(runId);
+      const runningRun = await this.deliveryStore.markAgentRunRunning(runId, {
+        workerId: this.workerId,
+      });
       if (runningRun?.status === 'cancelled') {
         return {
           run: runningRun,
@@ -736,13 +816,25 @@ export class OpenTagWorkerHost {
     }
 
     const runtime = this.createRuntimeForPlatform(runPlatform.platform);
+    const progressSurfaceId =
+      await this.deliveryStore.getDeliveredProgressSurfaceId(
+        runId,
+        initialRun.thread.platform,
+      );
     const abortController = new AbortController();
     this.activeRuns.set(runId, abortController);
+    if (this._shuttingDown) {
+      abortController.abort(
+        `${OPENTAG_REQUEUE_RUN_ABORT_REASON}:shutdown_after_claim`,
+      );
+    }
     const stopCancellationMonitor = monitorDurableRunCancellation({
       deliveryStore: this.deliveryStore,
       runId,
       abortController,
+      workerId: this.workerId,
       pollMs: this.config.runControlPollMs,
+      heartbeatMs: this.config.runHeartbeatMs,
     });
     try {
       const transcript = await loadDurableConversationContext({
@@ -773,6 +865,21 @@ export class OpenTagWorkerHost {
         transcript,
         providerSession,
         abortSignal: abortController.signal,
+        progressSurfaceId,
+        assertActive: async () => {
+          if (abortController.signal.aborted) {
+            throw new Error(String(abortController.signal.reason));
+          }
+          const renewed = await renewDurableRunLeaseOrAbort({
+            deliveryStore: this.deliveryStore,
+            runId,
+            workerId: this.workerId,
+            abortController,
+          });
+          if (!renewed) {
+            throw new Error(String(abortController.signal.reason));
+          }
+        },
         steering: createDurableSteeringProvider({
           deliveryStore: this.deliveryStore,
           runId,
@@ -809,12 +916,27 @@ export class OpenTagWorkerHost {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (abortController.signal.aborted) {
+      if (isOpenTagLeaseLostAbort(abortController.signal)) {
+        // Another worker owns the durable lease; this process must not mutate it.
+      } else if (isOpenTagRequeueAbort(abortController.signal)) {
+        const requeued = await this.deliveryStore.requeueAgentRun(runId, {
+          workerId: this.workerId,
+          reason: String(abortController.signal.reason),
+        });
+        if (requeued?.status === 'cancel_requested') {
+          await this.deliveryStore.markAgentRunCancelled(
+            runId,
+            requeued.lastError || 'durable_cancel_requested',
+          );
+          await this.markRunInboundFailed(initialRun, message);
+        }
+      } else if (abortController.signal.aborted) {
         await this.deliveryStore.markAgentRunCancelled(runId, message);
+        await this.markRunInboundFailed(initialRun, message);
       } else {
         await this.deliveryStore.markAgentRunFailed(runId, message);
+        await this.markRunInboundFailed(initialRun, message);
       }
-      await this.markRunInboundFailed(initialRun, message);
       throw error;
     } finally {
       stopCancellationMonitor();

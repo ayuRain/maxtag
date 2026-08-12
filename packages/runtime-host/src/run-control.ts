@@ -3,6 +3,7 @@ import type {
   AgentSteeringProvider,
   ExecutorSteeringMode,
 } from '@opentag/core';
+import { OPENTAG_LEASE_LOST_ABORT_REASON } from '@opentag/core';
 import type { DeliveryStore } from '@opentag/delivery';
 
 export interface DurableSteeringProviderOptions {
@@ -16,8 +17,17 @@ export interface DurableCancellationMonitorOptions {
   deliveryStore: DeliveryStore;
   runId: string;
   abortController: AbortController;
+  workerId?: string;
   pollMs?: number;
+  heartbeatMs?: number;
   onError?: (error: unknown) => void;
+}
+
+export interface DurableRunLeaseOptions {
+  deliveryStore: DeliveryStore;
+  runId: string;
+  workerId: string;
+  abortController: AbortController;
 }
 
 function wait(ms: number, signal?: AbortSignal): Promise<void> {
@@ -32,6 +42,36 @@ function wait(ms: number, signal?: AbortSignal): Promise<void> {
       resolve();
     }
   });
+}
+
+export async function renewDurableRunLeaseOrAbort(
+  options: DurableRunLeaseOptions,
+): Promise<boolean> {
+  if (options.abortController.signal.aborted) return false;
+  const renewed = await options.deliveryStore.renewAgentRunLease(
+    options.runId,
+    { workerId: options.workerId },
+  );
+  if (renewed) return true;
+
+  const latest = await options.deliveryStore.getAgentRun(options.runId);
+  if (
+    latest?.status === 'cancel_requested' ||
+    latest?.status === 'cancelled'
+  ) {
+    options.abortController.abort(
+      latest.lastError || 'durable_cancel_requested',
+    );
+  } else {
+    options.abortController.abort(
+      `${OPENTAG_LEASE_LOST_ABORT_REASON}:${
+        latest
+          ? `${latest.status}:${latest.workerId || 'unowned'}`
+          : 'missing'
+      }`,
+    );
+  }
+  return false;
 }
 
 export function createDurableSteeringProvider(
@@ -93,6 +133,8 @@ export function monitorDurableRunCancellation(
   options: DurableCancellationMonitorOptions,
 ): () => void {
   const pollMs = Math.max(25, options.pollMs ?? 250);
+  const heartbeatMs = Math.max(250, options.heartbeatMs ?? 15_000);
+  let lastHeartbeatAt = 0;
   let checking = false;
   let stopped = false;
   const check = async (): Promise<void> => {
@@ -104,6 +146,34 @@ export function monitorDurableRunCancellation(
         options.abortController.abort(
           run.lastError || 'durable_cancel_requested',
         );
+        return;
+      }
+      if (
+        options.workerId &&
+        (!run ||
+          run.status !== 'running' ||
+          run.workerId !== options.workerId)
+      ) {
+        options.abortController.abort(
+          `${OPENTAG_LEASE_LOST_ABORT_REASON}:${
+            run ? `${run.status}:${run.workerId || 'unowned'}` : 'missing'
+          }`,
+        );
+        return;
+      }
+      const currentTime = Date.now();
+      if (
+        run?.status === 'running' &&
+        options.workerId &&
+        currentTime - lastHeartbeatAt >= heartbeatMs
+      ) {
+        const renewed = await renewDurableRunLeaseOrAbort({
+          deliveryStore: options.deliveryStore,
+          runId: options.runId,
+          workerId: options.workerId,
+          abortController: options.abortController,
+        });
+        if (renewed) lastHeartbeatAt = currentTime;
       }
     } catch (error) {
       options.onError?.(error);

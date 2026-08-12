@@ -66,6 +66,16 @@ function executionCounts(): Record<RoutineExecutionStatus, number> {
   };
 }
 
+function recordOldestExecution(
+  target: Partial<Record<RoutineExecutionStatus, string>>,
+  execution: RoutineExecution,
+): void {
+  const current = target[execution.status];
+  if (!current || execution.updatedAt < current) {
+    target[execution.status] = execution.updatedAt;
+  }
+}
+
 function scheduleChanged(left: Routine, right: UpsertRoutineInput): boolean {
   return JSON.stringify(left.schedule) !== JSON.stringify(right.schedule);
 }
@@ -524,8 +534,14 @@ export class FileRoutineStore {
     );
     const routineIds = new Set(routines.map((routine) => routine.id));
     const executions = executionCounts();
+    const oldestExecutionUpdatedAt: Partial<
+      Record<RoutineExecutionStatus, string>
+    > = {};
     for (const execution of state.executions) {
-      if (routineIds.has(execution.routineId)) executions[execution.status] += 1;
+      if (routineIds.has(execution.routineId)) {
+        executions[execution.status] += 1;
+        recordOldestExecution(oldestExecutionUpdatedAt, execution);
+      }
     }
     const nextRunAt = routines
       .filter((routine) => routine.enabled && routine.nextRunAt)
@@ -537,6 +553,7 @@ export class FileRoutineStore {
         disabled: routines.filter((routine) => !routine.enabled).length,
       },
       executions,
+      oldestExecutionUpdatedAt,
       nextRunAt,
     };
   }

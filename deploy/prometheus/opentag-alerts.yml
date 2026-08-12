@@ -1,0 +1,75 @@
+groups:
+  - name: opentag-runtime
+    interval: 15s
+    rules:
+      - alert: OpenTagProcessDown
+        expr: up{job="opentag"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenTag {{ $labels.component }} is unavailable"
+          description: "Prometheus has failed to scrape {{ $labels.instance }} for one minute."
+
+      - alert: OpenTagWorkerLoopStale
+        expr: (time() - opentag_runtime_loop_last_run_timestamp_seconds{service="opentag-worker",loop="agent_worker"} > 60) and on(service, loop) (opentag_runtime_loop_running{service="opentag-worker",loop="agent_worker"} == 0)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenTag worker loop is stale"
+          description: "The durable worker has not completed a pass for more than 60 seconds."
+
+      - alert: OpenTagSchedulerLoopStale
+        expr: time() - opentag_runtime_loop_last_run_timestamp_seconds{service="opentag-scheduler",loop="workflow_coordinator"} > 30
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenTag workflow scheduler loop is stale"
+          description: "The workflow coordinator has not completed a pass for more than 30 seconds."
+
+      - alert: OpenTagQueuedRunStale
+        expr: opentag_agent_run_oldest_age_seconds{service="opentag-worker",status="queued"} > 300 and on(service) opentag_agent_runs{service="opentag-worker",status="queued"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenTag agent run has waited more than five minutes"
+          description: "At least one durable run remains queued while the worker is expected to claim it."
+
+      - alert: OpenTagRunLeaseStale
+        expr: opentag_agent_run_oldest_age_seconds{service="opentag-worker",status="running"} > 60 and on(service) opentag_agent_runs{service="opentag-worker",status="running"} > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenTag running lease is stale"
+          description: "A running agent lease has not received its expected heartbeat."
+
+      - alert: OpenTagOutboxStale
+        expr: opentag_delivery_outbox_oldest_age_seconds{service="opentag-server",status=~"pending|sending"} > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenTag outbound delivery is stuck"
+          description: "The oldest {{ $labels.status }} outbox record is more than two minutes old."
+
+      - alert: OpenTagRoutineClaimStale
+        expr: opentag_routine_execution_oldest_age_seconds{service="opentag-scheduler",status="claimed"} > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenTag routine claim is stale"
+          description: "A routine execution has remained claimed past the normal lease window."
+
+      - alert: OpenTagWorkflowClaimStale
+        expr: opentag_workflow_node_oldest_age_seconds{service="opentag-scheduler",status="claimed"} > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenTag workflow node claim is stale"
+          description: "A workflow node has remained claimed past the normal lease window."

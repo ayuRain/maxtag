@@ -1,7 +1,9 @@
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
+  collectOpenTagMetricsSnapshot,
   createOpenTagWorkerHost,
+  startOpenTagObservabilityServer,
   type AgentWorkerPassResult,
 } from '@opentag/runtime-host';
 import type { LarkOpenApiDomain } from '@opentag/platform-lark';
@@ -10,7 +12,7 @@ function numberEnv(name: string, fallback: number): number {
   const value = process.env[name];
   if (!value) return fallback;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function booleanEnv(name: string, fallback = false): boolean {
@@ -66,6 +68,8 @@ function passSummary(result: AgentWorkerPassResult): Record<string, unknown> {
     claimed: result.claimed,
     completed: result.completed,
     failed: result.failed,
+    requeued: result.requeued,
+    superseded: result.superseded,
     runs: result.runs.map((run) => ({
       id: run.id,
       status: run.status,
@@ -78,11 +82,25 @@ function passSummary(result: AgentWorkerPassResult): Record<string, unknown> {
 }
 
 async function main(): Promise<void> {
+  const startedAt = new Date().toISOString();
   const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
   const intervalMs = numberEnv('OPENTAG_WORKER_INTERVAL_MS', 2000);
   const batchSize = numberEnv('OPENTAG_WORKER_BATCH', 1);
-  const staleMs = numberEnv('OPENTAG_WORKER_STALE_MS', 120_000);
+  const staleMs = numberEnv(
+    'OPENTAG_WORKER_STALE_MS',
+    numberEnv('OPENTAG_AGENT_WORKER_STALE_MS', 120_000),
+  );
+  const heartbeatMs = Math.max(
+    250,
+    Math.min(
+      numberEnv('OPENTAG_AGENT_RUN_HEARTBEAT_MS', 15_000),
+      Math.floor(staleMs / 3),
+    ),
+  );
   const once = booleanEnv('OPENTAG_WORKER_ONCE');
+  const observabilityPort = optionalNumberEnv(
+    'OPENTAG_WORKER_OBSERVABILITY_PORT',
+  );
   const host = createOpenTagWorkerHost({
     dataDir,
     workerId: process.env.OPENTAG_WORKER_ID,
@@ -150,56 +168,132 @@ async function main(): Promise<void> {
       callTimeoutMs: optionalNumberEnv('OPENTAG_TOOL_CALL_TIMEOUT_MS'),
     },
     runControlPollMs: optionalNumberEnv('OPENTAG_RUN_CONTROL_POLL_MS'),
+    runHeartbeatMs: heartbeatMs,
   });
 
   let stopping = false;
-  const stop = (): void => {
+  const stopController = new AbortController();
+  const stop = (signal: NodeJS.Signals): void => {
+    if (stopping) return;
     stopping = true;
+    stopController.abort();
+    host.beginShutdown(signal.toLowerCase());
   };
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
+  process.once('SIGINT', () => stop('SIGINT'));
+  process.once('SIGTERM', () => stop('SIGTERM'));
 
-  log('started', {
-    dataDir,
-    workerId: host.workerId,
-    intervalMs,
-    batchSize,
-    staleMs,
-    once,
-    larkTransport: host.larkTransportStatus(),
-    telegramTransport: host.telegramTransportStatus(),
-    githubTransport: host.githubTransportStatus(),
-    executors: host.executorStatus(),
-    storage: host.storageStatus(),
-  });
+  let observability:
+    | Awaited<ReturnType<typeof startOpenTagObservabilityServer>>
+    | undefined;
+  try {
+    observability = observabilityPort
+      ? await startOpenTagObservabilityServer({
+        host: process.env.OPENTAG_OBSERVABILITY_HOST,
+        port: observabilityPort,
+        service: 'opentag-worker',
+        metricsToken: process.env.OPENTAG_METRICS_TOKEN,
+        health: () => ({
+          stopping,
+          workerId: host.workerId,
+          activeRuns: host.activeRunCount,
+          passRunning: host.passRunning,
+          passCount: host.passCount,
+          lastPassAt: host.lastPassAt,
+          storage: host.storageStatus(),
+        }),
+        metrics: () =>
+          collectOpenTagMetricsSnapshot({
+            process: {
+              service: 'opentag-worker',
+              startedAt,
+              activeRuns: host.activeRunCount,
+              storage: host.storageStatus(),
+              loops: [
+                {
+                  name: 'agent_worker',
+                  running: host.passRunning,
+                  lastRunAt: host.lastPassAt,
+                  iterations: host.passCount,
+                  lastItems: host.lastPassResult
+                    ? {
+                        claimed: host.lastPassResult.claimed,
+                        completed: host.lastPassResult.completed,
+                        failed: host.lastPassResult.failed,
+                        requeued: host.lastPassResult.requeued,
+                        superseded: host.lastPassResult.superseded,
+                      }
+                    : undefined,
+                },
+              ],
+            },
+            deliveryStore: host.deliveryStore,
+            routineStore: host.routineStore,
+            workflowStore: host.workflowStore,
+          }),
+        })
+      : undefined;
 
-  const recovered = await host.recoverStaleAgentRuns({
-    olderThanMs: staleMs,
-    reason: 'standalone_worker_startup_recovered_stale_run',
-  });
-  if (recovered.requeued > 0 || recovered.cancelled > 0) {
-    log('startup_recovery', {
-      requeued: recovered.requeued,
-      cancelled: recovered.cancelled,
-      runs: recovered.records.map((run) => run.id),
+    log('started', {
+      dataDir,
+      workerId: host.workerId,
+      intervalMs,
+      batchSize,
+      staleMs,
+      heartbeatMs,
+      once,
+      larkTransport: host.larkTransportStatus(),
+      telegramTransport: host.telegramTransportStatus(),
+      githubTransport: host.githubTransportStatus(),
+      executors: host.executorStatus(),
+      storage: host.storageStatus(),
+      observability: observability
+        ? { host: observability.host, port: observability.port }
+        : undefined,
     });
-  }
 
-  do {
-    const result = await host.runAgentWorkerPass(batchSize);
-    if (result.claimed > 0 || once) {
-      log('worker_pass', passSummary(result));
+    if (!stopping) {
+      const recovered = await host.recoverStaleAgentRuns({
+        olderThanMs: staleMs,
+        reason: 'standalone_worker_startup_recovered_stale_run',
+      });
+      if (recovered.requeued > 0 || recovered.cancelled > 0) {
+        log('startup_recovery', {
+          requeued: recovered.requeued,
+          cancelled: recovered.cancelled,
+          runs: recovered.records.map((run) => run.id),
+        });
+      }
     }
-    if (once || stopping) break;
-    await delay(intervalMs);
-  } while (!stopping);
 
-  const storage = host.storageStatus();
-  host.close();
-  log('stopped', {
-    activeRuns: host.activeRunCount,
-    storage,
-  });
+    while (!stopping) {
+      const result = await host.runAgentWorkerPass(batchSize);
+      if (result.claimed > 0 || once) {
+        log('worker_pass', passSummary(result));
+      }
+      if (once || stopping) break;
+      try {
+        await delay(intervalMs, undefined, { signal: stopController.signal });
+      } catch (error) {
+        if (!stopController.signal.aborted) throw error;
+      }
+    }
+  } finally {
+    const storage = host.storageStatus();
+    host.beginShutdown('worker_loop_stopped');
+    try {
+      await host.waitForIdle();
+    } finally {
+      try {
+        await observability?.close();
+      } finally {
+        host.close();
+        log('stopped', {
+          activeRuns: host.activeRunCount,
+          storage,
+        });
+      }
+    }
+  }
 }
 
 main().catch((error) => {

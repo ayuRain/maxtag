@@ -16,6 +16,10 @@ import {
   constrainWorkspaceMemoryWrite,
   readableMemoryScopes,
 } from './memory-policy.js';
+import {
+  isOpenTagLeaseLostAbort,
+  isOpenTagRequeueAbort,
+} from './types.js';
 
 function createDefaultChecklist(): ChecklistItem[] {
   return [
@@ -49,6 +53,8 @@ export class OpenTagRuntime {
     message: SourceMessage;
     workspaceMemoryWriteAllowed?: boolean;
     abortSignal?: AbortSignal;
+    progressSurfaceId?: string;
+    assertActive?: () => void | Promise<void>;
     steering?: AgentSteeringProvider;
     transcript?: ThreadTranscriptSnapshot;
     providerSession?: ProviderSessionContext;
@@ -64,7 +70,10 @@ export class OpenTagRuntime {
     };
 
     const progress = this.deps.platform.createProgressSurface(input.thread);
-    const { surfaceId } = await progress.create(state);
+    const surfaceId = input.progressSurfaceId
+      ? input.progressSurfaceId
+      : (await progress.create(state)).surfaceId;
+    if (input.progressSurfaceId) await progress.update(surfaceId, state);
     let executor: Executor | undefined;
     let activeItem: ChecklistItem = {
       id: 'route',
@@ -189,6 +198,8 @@ export class OpenTagRuntime {
         onEvent,
       });
 
+      await input.assertActive?.();
+
       state = {
         ...state,
         status: 'completed',
@@ -213,6 +224,7 @@ export class OpenTagRuntime {
         label: 'Publish thread reply',
         status: 'running',
       };
+      await input.assertActive?.();
       await this.deps.platform.sendMessage(
         input.thread,
         result.summary,
@@ -232,19 +244,28 @@ export class OpenTagRuntime {
       await progress.complete(surfaceId, state);
       return result;
     } catch (error) {
+      if (isOpenTagLeaseLostAbort(input.abortSignal)) throw error;
       const message = error instanceof Error ? error.message : String(error);
+      const requeued = isOpenTagRequeueAbort(input.abortSignal);
       state = {
         ...state,
-        status: input.abortSignal?.aborted ? 'cancelled' : 'failed',
-        summary: message,
+        status: requeued
+          ? 'blocked'
+          : input.abortSignal?.aborted
+            ? 'cancelled'
+            : 'failed',
+        summary: requeued
+          ? 'Worker is restarting. This run remains queued and will resume.'
+          : message,
         checklist: updateChecklist(state.checklist, {
           ...activeItem,
-          status: 'failed',
-          detail: message,
+          status: requeued ? 'pending' : 'failed',
+          detail: requeued ? 'Waiting for an available worker' : message,
         }),
         updatedAt: now(),
       };
-      await progress.complete(surfaceId, state);
+      if (requeued) await progress.update(surfaceId, state);
+      else await progress.complete(surfaceId, state);
       throw error;
     }
   }

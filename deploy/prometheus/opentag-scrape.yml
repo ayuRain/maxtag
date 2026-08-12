@@ -1,0 +1,18 @@
+scrape_configs:
+  - job_name: opentag
+    scrape_interval: 15s
+    scrape_timeout: 5s
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/opentag-metrics-token
+    static_configs:
+      - targets: ["127.0.0.1:3077"]
+        labels:
+          component: server
+      - targets: ["127.0.0.1:3078"]
+        labels:
+          component: worker
+      - targets: ["127.0.0.1:3079"]
+        labels:
+          component: scheduler

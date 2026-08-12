@@ -38,6 +38,9 @@ import type {
   RecoverStaleOutboxResult,
   RecoverStaleAgentRunsOptions,
   RecoverStaleAgentRunsResult,
+  RequeueAgentRunOptions,
+  RenewAgentRunLeaseOptions,
+  MarkAgentRunRunningOptions,
   ThreadBinding,
   ThreadBindingScope,
   TurnDeliveryRecord,
@@ -342,7 +345,24 @@ function emptySummary(): DeliverySummary {
       invalidated: 0,
     },
     bindings: 0,
+    oldestStatusUpdatedAt: {
+      outbox: {},
+      turnDeliveries: {},
+      inboundEvents: {},
+      agentRuns: {},
+      steering: {},
+      sessions: {},
+    },
   };
+}
+
+function recordOldestStatus<K extends string>(
+  target: Partial<Record<K, string>>,
+  status: K,
+  updatedAt: string,
+): void {
+  const current = target[status];
+  if (!current || updatedAt < current) target[status] = updatedAt;
 }
 
 export class FileDeliveryStore {
@@ -727,6 +747,7 @@ export class FileDeliveryStore {
         run.startedAt = run.startedAt ?? timestamp;
         run.claimedAt = timestamp;
         run.workerId = options.workerId;
+        run.lastError = undefined;
         run.updatedAt = timestamp;
         this.appendAgentRunEventInState(state, run.id, 'started', {
           message: 'Agent run claimed by worker',
@@ -1218,9 +1239,75 @@ export class FileDeliveryStore {
     });
   }
 
-  async markAgentRunRunning(id: string): Promise<AgentRunRecord | undefined> {
+  async requeueAgentRun(
+    id: string,
+    options: RequeueAgentRunOptions = {},
+  ): Promise<AgentRunRecord | undefined> {
+    return this.mutate((state) => {
+      const run = state.agentRuns.find((item) => item.id === id);
+      if (!run) return undefined;
+      if (run.status !== 'running') return copyRun(run);
+      if (options.workerId && run.workerId !== options.workerId) {
+        return copyRun(run);
+      }
+
+      const timestamp = (options.now ?? new Date()).toISOString();
+      const reason = options.reason ?? 'worker_released_run';
+      run.status = 'queued';
+      run.workerId = undefined;
+      run.claimedAt = undefined;
+      run.lastError = reason;
+      run.updatedAt = timestamp;
+      this.appendAgentRunEventInState(state, run.id, 'log', {
+        message: reason,
+        metadata: {
+          requeuedFrom: 'running',
+          releasedBy: options.workerId,
+        },
+      });
+      for (const steering of state.agentRunSteering) {
+        if (
+          steering.targetRunId === run.id &&
+          steering.status === 'claimed'
+        ) {
+          steering.status = 'pending';
+          steering.mode = undefined;
+          steering.claimedBy = undefined;
+          steering.claimedAt = undefined;
+          steering.updatedAt = timestamp;
+        }
+      }
+      return copyRun(run);
+    });
+  }
+
+  async renewAgentRunLease(
+    id: string,
+    options: RenewAgentRunLeaseOptions,
+  ): Promise<boolean> {
+    return this.mutate((state) => {
+      const run = state.agentRuns.find((item) => item.id === id);
+      if (
+        !run ||
+        run.status !== 'running' ||
+        run.workerId !== options.workerId
+      ) {
+        return false;
+      }
+      run.updatedAt = (options.now ?? new Date()).toISOString();
+      return true;
+    });
+  }
+
+  async markAgentRunRunning(
+    id: string,
+    options: MarkAgentRunRunningOptions = {},
+  ): Promise<AgentRunRecord | undefined> {
+    const timestamp = (options.now ?? new Date()).toISOString();
     return this.updateAgentRun(id, 'running', {
-      startedAt: now(),
+      startedAt: timestamp,
+      claimedAt: timestamp,
+      workerId: options.workerId,
       event: {
         type: 'started',
         message: 'Agent run started',
@@ -1484,6 +1571,27 @@ export class FileDeliveryStore {
       .slice(0, limit);
   }
 
+  async getDeliveredProgressSurfaceId(
+    runId: string,
+    platform: OutboundEnvelope['target']['platform'],
+  ): Promise<string | undefined> {
+    const state = await this.readState();
+    const createKind =
+      platform === 'lark'
+        ? 'lark.card.create'
+        : `${platform}.progress.create`;
+    return state.outbox
+      .filter(
+        (item) =>
+          item.runId === runId &&
+          item.target.platform === platform &&
+          item.kind === createKind &&
+          item.status === 'delivered' &&
+          Boolean(item.externalId),
+      )
+      .sort((left, right) => right.sequence - left.sequence)[0]?.externalId;
+  }
+
   async getOutbox(id: string): Promise<OutboundEnvelope | undefined> {
     const state = await this.readState();
     const record = state.outbox.find((item) => item.id === id);
@@ -1739,32 +1847,62 @@ export class FileDeliveryStore {
     for (const item of state.outbox) {
       if (!workspaceId || item.workspaceId === workspaceId) {
         summary.outbox[item.status] += 1;
+        recordOldestStatus(
+          summary.oldestStatusUpdatedAt.outbox,
+          item.status,
+          item.updatedAt,
+        );
       }
     }
     for (const item of state.turnDeliveries) {
       if (!workspaceId || item.workspaceId === workspaceId) {
         summary.turnDeliveries[item.status] += 1;
+        recordOldestStatus(
+          summary.oldestStatusUpdatedAt.turnDeliveries,
+          item.status,
+          item.updatedAt,
+        );
       }
     }
     for (const item of state.inboundEvents) {
       if (!workspaceId || item.workspaceId === workspaceId) {
         summary.inboundEvents[item.status] += 1;
         summary.inboundEvents.duplicates += item.duplicateCount;
+        recordOldestStatus(
+          summary.oldestStatusUpdatedAt.inboundEvents,
+          item.status,
+          item.updatedAt,
+        );
       }
     }
     for (const item of state.agentRuns) {
       if (!workspaceId || item.workspaceId === workspaceId) {
         summary.agentRuns[item.status] += 1;
+        recordOldestStatus(
+          summary.oldestStatusUpdatedAt.agentRuns,
+          item.status,
+          item.updatedAt,
+        );
       }
     }
     for (const item of state.agentRunSteering) {
       if (!workspaceId || item.workspaceId === workspaceId) {
         summary.steering[item.status] += 1;
+        recordOldestStatus(
+          summary.oldestStatusUpdatedAt.steering,
+          item.status,
+          item.updatedAt,
+        );
       }
     }
     for (const item of state.agentThreadSessions) {
       if (!workspaceId || item.workspaceId === workspaceId) {
         summary.sessions[item.status] += 1;
+        recordOldestStatus(
+          summary.oldestStatusUpdatedAt.sessions,
+          item.status,
+          item.updatedAt,
+        );
       }
     }
     summary.bindings = state.threadBindings.filter(
@@ -2109,6 +2247,8 @@ export class FileDeliveryStore {
     status: AgentRunStatus,
     input?: {
       startedAt?: string;
+      claimedAt?: string;
+      workerId?: string;
       completedAt?: string;
       failedAt?: string;
       cancelRequestedAt?: string;
@@ -2134,6 +2274,8 @@ export class FileDeliveryStore {
       const nextStatus: AgentRunStatus = cancellationWins ? 'cancelled' : status;
       run.status = nextStatus;
       run.startedAt = input?.startedAt ?? run.startedAt;
+      run.claimedAt = input?.claimedAt ?? run.claimedAt;
+      run.workerId = input?.workerId ?? run.workerId;
       run.completedAt = cancellationWins
         ? run.completedAt
         : input?.completedAt ?? run.completedAt;

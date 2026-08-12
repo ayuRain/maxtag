@@ -144,7 +144,16 @@ test('event workflows dedupe triggers and advance dependency-ready nodes', async
   assert.equal(execution.status, 'completed');
   assert.equal(execution.summary, 'Rotate the credential and rerun build 481.');
   assert.equal(execution.workflowVersion, workflow.version);
-  assert.equal((await store.summarize('acme', 'payments')).executions.completed, 1);
+  const summary = await store.summarize('acme', 'payments');
+  assert.equal(summary.executions.completed, 1);
+  assert.equal(summary.oldestExecutionUpdatedAt.completed, execution.updatedAt);
+  assert.equal(
+    summary.oldestNodeUpdatedAt.completed,
+    execution.nodes
+      .filter((node) => node.status === 'completed')
+      .map((node) => node.updatedAt)
+      .sort()[0],
+  );
 });
 
 test('a failed node skips dependants and preserves the workflow snapshot', async (context) => {

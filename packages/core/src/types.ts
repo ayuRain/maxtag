@@ -241,6 +241,28 @@ export interface ProgressState {
 }
 
 export const OPENTAG_STOP_RUN_ACTION = 'opentag.stop_run';
+export const OPENTAG_REQUEUE_RUN_ABORT_REASON = 'opentag.run_requeue';
+export const OPENTAG_LEASE_LOST_ABORT_REASON = 'opentag.run_lease_lost';
+
+export function isOpenTagRequeueAbort(signal: AbortSignal | undefined): boolean {
+  return (
+    signal?.aborted === true &&
+    typeof signal.reason === 'string' &&
+    (signal.reason === OPENTAG_REQUEUE_RUN_ABORT_REASON ||
+      signal.reason.startsWith(`${OPENTAG_REQUEUE_RUN_ABORT_REASON}:`))
+  );
+}
+
+export function isOpenTagLeaseLostAbort(
+  signal: AbortSignal | undefined,
+): boolean {
+  return (
+    signal?.aborted === true &&
+    typeof signal.reason === 'string' &&
+    (signal.reason === OPENTAG_LEASE_LOST_ABORT_REASON ||
+      signal.reason.startsWith(`${OPENTAG_LEASE_LOST_ABORT_REASON}:`))
+  );
+}
 
 export interface ProgressSurface {
   create(state: ProgressState): Promise<{ surfaceId: string }>;

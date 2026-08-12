@@ -106,6 +106,7 @@ export class WorkflowCoordinatorService {
   private tickPass: Promise<WorkflowCoordinatorTickResult> | undefined;
   private _lastTickAt: string | undefined;
   private _lastTickResult: WorkflowCoordinatorTickResult | undefined;
+  private _tickCount = 0;
 
   constructor(options: WorkflowCoordinatorOptions) {
     this.workflowStore = options.workflowStore;
@@ -131,6 +132,14 @@ export class WorkflowCoordinatorService {
     return this._lastTickResult
       ? structuredClone(this._lastTickResult)
       : undefined;
+  }
+
+  get tickCount(): number {
+    return this._tickCount;
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.tickPass;
   }
 
   async reconcileNodeRuns(
@@ -219,6 +228,7 @@ export class WorkflowCoordinatorService {
     result.reconciled += await this.reconcileNodeRuns();
     this._lastTickAt = result.at;
     this._lastTickResult = structuredClone(result);
+    this._tickCount += 1;
     return result;
   }
 

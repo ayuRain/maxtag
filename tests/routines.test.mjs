@@ -200,7 +200,12 @@ test('scheduled routine executions are deduped, reclaimable, and reconcilable', 
   const executions = await restarted.listExecutions({ routineId: created.id });
   assert.equal(executions[0].status, 'completed');
   assert.equal(executions[0].summary, 'Digest sent.');
-  assert.equal((await restarted.summarize('acme')).executions.completed, 1);
+  const summary = await restarted.summarize('acme');
+  assert.equal(summary.executions.completed, 1);
+  assert.equal(
+    summary.oldestExecutionUpdatedAt.completed,
+    executions[0].updatedAt,
+  );
 });
 
 test('disabling a routine cancels staged work while manual runs remain auditable', async () => {

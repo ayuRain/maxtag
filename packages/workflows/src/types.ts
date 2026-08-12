@@ -201,4 +201,6 @@ export interface WorkflowSummary {
   };
   executions: Record<WorkflowExecutionStatus, number>;
   nodes: Record<WorkflowNodeExecutionStatus, number>;
+  oldestExecutionUpdatedAt: Partial<Record<WorkflowExecutionStatus, string>>;
+  oldestNodeUpdatedAt: Partial<Record<WorkflowNodeExecutionStatus, string>>;
 }

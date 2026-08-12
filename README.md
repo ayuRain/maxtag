@@ -131,6 +131,15 @@ packages/ui-cards           Progress/checklist card models
   inline worker, with stale run recovery on startup and through the admin API.
 - Agent execution can also be claimed by the standalone `apps/worker` process
   against the same `OPENTAG_DATA_DIR`.
+- Server, worker, and scheduler expose Prometheus text metrics for process and
+  loop health, queue depth, oldest status age, run leases, routines, and
+  workflow nodes. Metrics use a separate Bearer token and avoid per-run or
+  per-project labels. Standalone observability listeners stay disabled unless
+  their loopback ports are configured.
+- Agent workers heartbeat an owner-fenced durable lease. SIGTERM stops new
+  claims, terminates the local executor, returns interrupted work to `queued`,
+  and lets a replacement worker reuse the same native progress card or comment.
+  A final lease check prevents an old worker from publishing after takeover.
 - Routine staging, claiming, and run reconciliation can stay inline or run in
   the standalone `apps/scheduler` process against the same SQLite database.
 - Workspace and project routines support interval or IANA-time-zone daily
@@ -195,7 +204,7 @@ packages/ui-cards           Progress/checklist card models
 5. Thread-level agent identity and access bundle.
 6. Durable outbound delivery, retry, scoped cancel, and stale recovery.
 7. GitHub draft PR loop.
-8. Supervised worker/scheduler deployment and full run resume.
+8. Supervised worker/scheduler deployment and restart recovery.
 
 ## Local Build
 
@@ -230,6 +239,31 @@ npm run worker
 
 Set `OPENTAG_SCHEDULER_ONCE=1` for a one-shot scheduler smoke test. External
 scheduling requires the shared SQLite store.
+
+## Production Operations
+
+`deploy/systemd` contains a three-process target for the HTTP server, durable
+worker, and routine/workflow scheduler. `deploy/prometheus` contains a
+Bearer-authenticated scrape fragment plus alerts for dead processes, stale
+loops, stale run leases, queued work, stuck outbound delivery, and expired
+scheduler claims. See [`deploy/README.md`](deploy/README.md) for host paths,
+service-account setup, hardening, rollout, and restart smoke steps.
+
+The HTTP server serves `/metrics` on its normal port. Independent processes
+enable loopback health and metrics listeners with:
+
+```bash
+OPENTAG_METRICS_TOKEN=replace-with-a-random-secret
+OPENTAG_OBSERVABILITY_HOST=127.0.0.1
+OPENTAG_WORKER_OBSERVABILITY_PORT=3078
+OPENTAG_SCHEDULER_OBSERVABILITY_PORT=3079
+OPENTAG_AGENT_RUN_HEARTBEAT_MS=15000
+```
+
+Health endpoints remain unauthenticated for a local supervisor. Metrics require
+`Authorization: Bearer $OPENTAG_METRICS_TOKEN`. Restart recovery replays or
+resumes a run from durable context; instruction-level execution checkpoints
+remain future work.
 
 ## Storage
 

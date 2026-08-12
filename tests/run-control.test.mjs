@@ -81,6 +81,87 @@ test('durable cancellation reaches a run owned by another process', async (conte
   assert.equal(controller.signal.reason, 'operator_requested');
 });
 
+test('durable monitor renews only its worker lease', async (context) => {
+  const { first, second } = await fixture(context);
+  const thread = sourceThread();
+  await first.deliveryStore.createAgentRun({
+    runId: 'heartbeat-run',
+    thread,
+    message: sourceMessage(thread, 'heartbeat', 'Keep this task alive.'),
+  });
+  const claimedAt = new Date(Date.now() - 60_000);
+  await first.deliveryStore.claimQueuedAgentRuns({
+    workerId: 'worker-a',
+    now: claimedAt,
+  });
+  const controller = new AbortController();
+  const stop = monitorDurableRunCancellation({
+    deliveryStore: first.deliveryStore,
+    runId: 'heartbeat-run',
+    workerId: 'worker-a',
+    abortController: controller,
+    pollMs: 25,
+    heartbeatMs: 250,
+  });
+  context.after(stop);
+
+  const deadline = Date.now() + 1_000;
+  let run;
+  do {
+    run = await second.deliveryStore.getAgentRun('heartbeat-run');
+    if (run.updatedAt > claimedAt.toISOString()) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  } while (Date.now() < deadline);
+  assert.ok(run.updatedAt > claimedAt.toISOString());
+
+  const recovery = await second.deliveryStore.recoverStaleAgentRuns({
+    olderThanMs: 5_000,
+    now: new Date(),
+  });
+  assert.equal(recovery.requeued, 0);
+  assert.equal((await second.deliveryStore.getAgentRun('heartbeat-run')).status, 'running');
+});
+
+test('durable monitor aborts an executor that loses its worker lease', async (context) => {
+  const { first, second } = await fixture(context);
+  const thread = sourceThread();
+  await first.deliveryStore.createAgentRun({
+    runId: 'lease-transfer-run',
+    thread,
+    message: sourceMessage(thread, 'transfer', 'Transfer this lease.'),
+  });
+  await first.deliveryStore.claimQueuedAgentRuns({ workerId: 'worker-a' });
+  const controller = new AbortController();
+  const stop = monitorDurableRunCancellation({
+    deliveryStore: first.deliveryStore,
+    runId: 'lease-transfer-run',
+    workerId: 'worker-a',
+    abortController: controller,
+    pollMs: 25,
+    heartbeatMs: 250,
+  });
+  context.after(stop);
+
+  await second.deliveryStore.requeueAgentRun('lease-transfer-run', {
+    workerId: 'worker-a',
+    reason: 'test_lease_transfer',
+  });
+  await second.deliveryStore.claimQueuedAgentRuns({ workerId: 'worker-b' });
+  await Promise.race([
+    new Promise((resolve) =>
+      controller.signal.addEventListener('abort', resolve, { once: true }),
+    ),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('lease_loss_poll_timeout')), 1_000),
+    ),
+  ]);
+  assert.match(String(controller.signal.reason), /^opentag\.run_lease_lost:/);
+  assert.equal(
+    (await second.deliveryStore.getAgentRun('lease-transfer-run')).workerId,
+    'worker-b',
+  );
+});
+
 test('live steering mailbox is visible across SQLite store instances', async (context) => {
   const { first, second } = await fixture(context);
   const thread = sourceThread();

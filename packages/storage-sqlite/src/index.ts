@@ -107,6 +107,38 @@ function readLegacyState<T>(
   }
 }
 
+function isSqliteLockError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: string }).code;
+  return (
+    code === 'SQLITE_BUSY' ||
+    code === 'SQLITE_LOCKED' ||
+    /database (?:is )?locked/iu.test(error.message)
+  );
+}
+
+const sqliteRetryWait = new Int32Array(new SharedArrayBuffer(4));
+
+function retrySqliteLock<T>(operation: () => T, timeoutMs: number): T {
+  const deadline = Date.now() + timeoutMs;
+  let waitMs = 10;
+  while (true) {
+    try {
+      return operation();
+    } catch (error) {
+      const remainingMs = deadline - Date.now();
+      if (!isSqliteLockError(error) || remainingMs <= 0) throw error;
+      Atomics.wait(
+        sqliteRetryWait,
+        0,
+        0,
+        Math.min(waitMs, remainingMs),
+      );
+      waitMs = Math.min(waitMs * 2, 250);
+    }
+  }
+}
+
 class SqliteStateBackend {
   readonly databasePath: string;
   readonly migration: SqliteMigrationSummary;
@@ -127,17 +159,24 @@ class SqliteStateBackend {
       ? Math.max(100, Math.floor(options.busyTimeoutMs as number))
       : 5_000;
     this.database.pragma(`busy_timeout = ${busyTimeoutMs}`);
-    this.database.pragma('journal_mode = WAL');
+    retrySqliteLock(
+      () => this.database.pragma('journal_mode = WAL'),
+      busyTimeoutMs,
+    );
     this.database.pragma('synchronous = NORMAL');
     this.database.pragma('foreign_keys = ON');
-    this.database.exec(`
-      CREATE TABLE IF NOT EXISTS opentag_state_documents (
-        key TEXT PRIMARY KEY,
-        schema_version INTEGER NOT NULL,
-        value_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      ) WITHOUT ROWID;
-    `);
+    retrySqliteLock(
+      () =>
+        this.database.exec(`
+          CREATE TABLE IF NOT EXISTS opentag_state_documents (
+            key TEXT PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            value_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          ) WITHOUT ROWID;
+        `),
+      busyTimeoutMs,
+    );
     this.readStatement = this.database.prepare(
       'SELECT schema_version, value_json FROM opentag_state_documents WHERE key = ?',
     );
@@ -149,7 +188,10 @@ class SqliteStateBackend {
         value_json = excluded.value_json,
         updated_at = excluded.updated_at
     `);
-    this.migration = this.initialize(options);
+    this.migration = retrySqliteLock(
+      () => this.initialize(options),
+      busyTimeoutMs,
+    );
   }
 
   close(): void {

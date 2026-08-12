@@ -76,6 +76,7 @@ export class RoutineSchedulerService {
   private tickPass: Promise<RoutineTickResult> | undefined;
   private _lastTickAt: string | undefined;
   private _lastTickResult: RoutineTickResult | undefined;
+  private _tickCount = 0;
 
   constructor(options: RoutineSchedulerServiceOptions) {
     this.routineStore = options.routineStore;
@@ -101,6 +102,14 @@ export class RoutineSchedulerService {
     return this._lastTickResult
       ? structuredClone(this._lastTickResult)
       : undefined;
+  }
+
+  get tickCount(): number {
+    return this._tickCount;
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.tickPass;
   }
 
   async reconcileExecutions(): Promise<number> {
@@ -182,6 +191,7 @@ export class RoutineSchedulerService {
     result.reconciled += await this.reconcileExecutions();
     this._lastTickAt = result.at;
     this._lastTickResult = structuredClone(result);
+    this._tickCount += 1;
     return result;
   }
 

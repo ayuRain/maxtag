@@ -4,7 +4,9 @@ import type { PlatformKind } from '@opentag/core';
 import type { LarkOpenApiDomain } from '@opentag/platform-lark';
 import {
   RoutineSchedulerService,
+  collectOpenTagMetricsSnapshot,
   createOpenTagWorkerHost,
+  startOpenTagObservabilityServer,
   type RoutineTickResult,
   type WorkflowCoordinatorTickResult,
 } from '@opentag/runtime-host';
@@ -20,6 +22,13 @@ function booleanEnv(name: string, fallback = false): boolean {
   const value = process.env[name];
   if (!value) return fallback;
   return value === '1' || value === 'true' || value === 'yes';
+}
+
+function optionalNumberEnv(name: string): number | undefined {
+  const value = process.env[name];
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function larkDomainValue(value: string | undefined): LarkOpenApiDomain {
@@ -66,6 +75,7 @@ function workflowTickSummary(
 }
 
 async function main(): Promise<void> {
+  const startedAt = new Date().toISOString();
   const routinesEnabled = booleanEnv('OPENTAG_ROUTINES_ENABLED', true);
   const workflowsEnabled = booleanEnv('OPENTAG_WORKFLOWS_ENABLED', true);
   if (!routinesEnabled && !workflowsEnabled) {
@@ -104,6 +114,9 @@ async function main(): Promise<void> {
     numberEnv('OPENTAG_WORKFLOW_BATCH_SIZE', 20),
   );
   const once = booleanEnv('OPENTAG_SCHEDULER_ONCE');
+  const observabilityPort = optionalNumberEnv(
+    'OPENTAG_SCHEDULER_OBSERVABILITY_PORT',
+  );
   const host = createOpenTagWorkerHost({
     dataDir,
     lark: {
@@ -155,71 +168,157 @@ async function main(): Promise<void> {
   let stopping = false;
   const stopController = new AbortController();
   const stop = (): void => {
+    if (stopping) return;
     stopping = true;
     stopController.abort();
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
 
-  log('started', {
-    dataDir,
-    schedulerId:
-      process.env.OPENTAG_SCHEDULER_ID || `opentag-scheduler-${process.pid}`,
-    routineIntervalMs,
-    workflowIntervalMs,
-    claimStaleMs,
-    batchSize,
-    routinesEnabled,
-    workflowsEnabled,
-    workflowClaimStaleMs,
-    workflowBatchSize,
-    once,
-    storage: host.storageStatus(),
-  });
+  let observability:
+    | Awaited<ReturnType<typeof startOpenTagObservabilityServer>>
+    | undefined;
+  try {
+    observability = observabilityPort
+      ? await startOpenTagObservabilityServer({
+        host: process.env.OPENTAG_OBSERVABILITY_HOST,
+        port: observabilityPort,
+        service: 'opentag-scheduler',
+        metricsToken: process.env.OPENTAG_METRICS_TOKEN,
+        health: () => ({
+          stopping,
+          routinesEnabled,
+          workflowsEnabled,
+          routineScheduler: {
+            running: scheduler.running,
+            tickCount: scheduler.tickCount,
+            lastTickAt: scheduler.lastTickAt,
+          },
+          workflowCoordinator: {
+            running: host.workflowCoordinator.running,
+            tickCount: host.workflowCoordinator.tickCount,
+            lastTickAt: host.workflowCoordinator.lastTickAt,
+          },
+          storage: host.storageStatus(),
+        }),
+        metrics: () =>
+          collectOpenTagMetricsSnapshot({
+            process: {
+              service: 'opentag-scheduler',
+              startedAt,
+              activeRuns: host.activeRunCount,
+              storage: host.storageStatus(),
+              loops: [
+                {
+                  name: 'routine_scheduler',
+                  running: scheduler.running,
+                  lastRunAt: scheduler.lastTickAt,
+                  iterations: scheduler.tickCount,
+                  lastItems: scheduler.lastTickResult
+                    ? {
+                        staged: scheduler.lastTickResult.staged,
+                        claimed: scheduler.lastTickResult.claimed,
+                        queued: scheduler.lastTickResult.queued,
+                        failed: scheduler.lastTickResult.failed,
+                        reconciled: scheduler.lastTickResult.reconciled,
+                      }
+                    : undefined,
+                },
+                {
+                  name: 'workflow_coordinator',
+                  running: host.workflowCoordinator.running,
+                  lastRunAt: host.workflowCoordinator.lastTickAt,
+                  iterations: host.workflowCoordinator.tickCount,
+                  lastItems: host.workflowCoordinator.lastTickResult
+                    ? {
+                        claimed: host.workflowCoordinator.lastTickResult.claimed,
+                        queued: host.workflowCoordinator.lastTickResult.queued,
+                        failed: host.workflowCoordinator.lastTickResult.failed,
+                        reconciled:
+                          host.workflowCoordinator.lastTickResult.reconciled,
+                      }
+                    : undefined,
+                },
+              ],
+            },
+            deliveryStore: host.deliveryStore,
+            routineStore: host.routineStore,
+            workflowStore: host.workflowStore,
+          }),
+        })
+      : undefined;
 
-  let nextRoutineTickAt = 0;
-  let nextWorkflowTickAt = 0;
-  do {
-    const now = Date.now();
-    if (routinesEnabled && (once || now >= nextRoutineTickAt)) {
-      const result = await scheduler.tick();
-      nextRoutineTickAt = Date.now() + routineIntervalMs;
-      if (
-        once ||
-        result.staged > 0 ||
-        result.claimed > 0 ||
-        result.reconciled > 0
-      ) {
-        log('scheduler_tick', tickSummary(result));
+    log('started', {
+      dataDir,
+      schedulerId:
+        process.env.OPENTAG_SCHEDULER_ID || `opentag-scheduler-${process.pid}`,
+      routineIntervalMs,
+      workflowIntervalMs,
+      claimStaleMs,
+      batchSize,
+      routinesEnabled,
+      workflowsEnabled,
+      workflowClaimStaleMs,
+      workflowBatchSize,
+      once,
+      storage: host.storageStatus(),
+      observability: observability
+        ? { host: observability.host, port: observability.port }
+        : undefined,
+    });
+
+    let nextRoutineTickAt = 0;
+    let nextWorkflowTickAt = 0;
+    while (!stopping) {
+      const now = Date.now();
+      if (routinesEnabled && (once || now >= nextRoutineTickAt)) {
+        const result = await scheduler.tick();
+        nextRoutineTickAt = Date.now() + routineIntervalMs;
+        if (
+          once ||
+          result.staged > 0 ||
+          result.claimed > 0 ||
+          result.reconciled > 0
+        ) {
+          log('scheduler_tick', tickSummary(result));
+        }
+      }
+      if (stopping) break;
+      if (workflowsEnabled && (once || now >= nextWorkflowTickAt)) {
+        const result = await host.runWorkflowCoordinatorTick();
+        nextWorkflowTickAt = Date.now() + workflowIntervalMs;
+        if (once || result.claimed > 0 || result.reconciled > 0) {
+          log('workflow_tick', workflowTickSummary(result));
+        }
+      }
+      if (once || stopping) break;
+      const nextTickAt = Math.min(
+        ...(routinesEnabled ? [nextRoutineTickAt] : []),
+        ...(workflowsEnabled ? [nextWorkflowTickAt] : []),
+      );
+      const waitMs = Math.max(50, nextTickAt - Date.now());
+      try {
+        await delay(waitMs, undefined, { signal: stopController.signal });
+      } catch (error) {
+        if (!stopController.signal.aborted) throw error;
       }
     }
-    if (workflowsEnabled && (once || now >= nextWorkflowTickAt)) {
-      const result = await host.runWorkflowCoordinatorTick();
-      nextWorkflowTickAt = Date.now() + workflowIntervalMs;
-      if (
-        once ||
-        result.claimed > 0 ||
-        result.reconciled > 0
-      ) {
-        log('workflow_tick', workflowTickSummary(result));
-      }
-    }
-    if (once || stopping) break;
-    const nextTickAt = Math.min(
-      ...(routinesEnabled ? [nextRoutineTickAt] : []),
-      ...(workflowsEnabled ? [nextWorkflowTickAt] : []),
-    );
-    const waitMs = Math.max(50, nextTickAt - Date.now());
+  } finally {
+    const storage = host.storageStatus();
     try {
-      await delay(waitMs, undefined, { signal: stopController.signal });
-    } catch (error) {
-      if (!stopController.signal.aborted) throw error;
+      await Promise.all([
+        scheduler.waitForIdle(),
+        host.workflowCoordinator.waitForIdle(),
+      ]);
+    } finally {
+      try {
+        await observability?.close();
+      } finally {
+        host.close();
+        log('stopped', { storage });
+      }
     }
-  } while (!stopping);
-
-  const storage = host.storageStatus();
-  host.close();
-  log('stopped', { storage });
+  }
 }
 
 main().catch((error) => {

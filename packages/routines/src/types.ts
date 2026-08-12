@@ -135,5 +135,6 @@ export interface RoutineSummary {
     disabled: number;
   };
   executions: Record<RoutineExecutionStatus, number>;
+  oldestExecutionUpdatedAt: Partial<Record<RoutineExecutionStatus, string>>;
   nextRunAt?: string;
 }

@@ -345,6 +345,15 @@ function nodeCounts(): Record<WorkflowNodeExecutionStatus, number> {
   };
 }
 
+function recordOldestStatus<K extends string>(
+  target: Partial<Record<K, string>>,
+  status: K,
+  updatedAt: string,
+): void {
+  const current = target[status];
+  if (!current || updatedAt < current) target[status] = updatedAt;
+}
+
 function validatePayload(payload: Record<string, unknown> | undefined): void {
   if (!payload) return;
   let encoded: string;
@@ -848,10 +857,24 @@ export class FileWorkflowStore {
     const ids = new Set(workflows.map((workflow) => workflow.id));
     const executions = executionCounts();
     const nodes = nodeCounts();
+    const oldestExecutionUpdatedAt: Partial<
+      Record<WorkflowExecutionStatus, string>
+    > = {};
+    const oldestNodeUpdatedAt: Partial<
+      Record<WorkflowNodeExecutionStatus, string>
+    > = {};
     for (const execution of state.executions) {
       if (!ids.has(execution.workflowId)) continue;
       executions[execution.status] += 1;
-      for (const node of execution.nodes) nodes[node.status] += 1;
+      recordOldestStatus(
+        oldestExecutionUpdatedAt,
+        execution.status,
+        execution.updatedAt,
+      );
+      for (const node of execution.nodes) {
+        nodes[node.status] += 1;
+        recordOldestStatus(oldestNodeUpdatedAt, node.status, node.updatedAt);
+      }
     }
     return {
       workflows: {
@@ -860,6 +883,8 @@ export class FileWorkflowStore {
       },
       executions,
       nodes,
+      oldestExecutionUpdatedAt,
+      oldestNodeUpdatedAt,
     };
   }
 

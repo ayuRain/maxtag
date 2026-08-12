@@ -23,8 +23,9 @@ Reference behavior: [Claude Tag overview](https://claude.com/docs/claude-tag/ove
 | Multi-client core | Native Lark, Telegram, and GitHub clients share routing, policy, memory, run, and delivery contracts | Implemented locally |
 | Self-service channel connection | Expiring single-use pairing invitations bind a chat or repository to a project | Implemented locally |
 | Secure Lark callback contract | Raw-body signature verification, AES-256-CBC decryption, encrypted URL challenge, v1/v2 token handling, replay window, and event-id deduplication | Implemented locally |
+| Supervised runtime | Three-process systemd target, Prometheus metrics and alerts, lease heartbeat, graceful requeue, progress-surface reuse, publish fencing, and real replacement-worker restart smoke | Implemented locally |
 | Production Lark proof | Real app scopes, live encrypted delivery, Stop callback, card patching, files, restart recovery, and operator deployment smoke | Not yet proven |
-| Hosted identity and access | Credential lifecycle, SSO/OIDC, deployment manifests, metrics, retention, and multi-replica provider sessions | Gap |
+| Hosted identity and access | Credential lifecycle, SSO/OIDC, retention, high-volume normalized storage, and multi-host provider sessions remain; single-host deployment manifests and metrics are implemented | Partial |
 | Broader integrations | Slack adapter, external MCP registry, watcher producers, and destructive-action approvals | Gap |
 
 ## Memory Contract

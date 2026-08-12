@@ -34,6 +34,13 @@
   removal, and callback idempotency.
 - Standalone worker process that can claim the shared run queue while HTTP
   ingestion runs with `OPENTAG_AGENT_WORKER=manual`.
+- Prometheus endpoints for server, worker, and scheduler with low-cardinality
+  process, loop, queue, oldest-status, lease, routine, and workflow metrics;
+  loopback listener controls, Bearer authentication, scrape config, and alerts.
+- Owner-fenced run lease heartbeat, graceful SIGTERM requeue, replacement-worker
+  progress-surface reuse, final publish fencing, concurrent SQLite cold-start
+  retry, and systemd server/worker/scheduler units with real process/restart
+  tests.
 - Generic client ingress that maps non-Lark envelopes into the same run queue,
   memory scopes, and tracked text delivery.
 - Native Telegram Bot API webhook/send/edit adapter with forum-topic routing,
@@ -94,8 +101,8 @@
 - Send text replies and interactive progress cards through a real Lark app bot
   once credentials and scopes are configured.
 - Short-circuit duplicate Lark events by `event_id` or message id.
-- Add retention, compaction, and queue-depth metrics to the SQLite-backed inbound
-  ledger and worker-backed durable outbound queue.
+- Add retention and compaction controls to the SQLite-backed inbound ledger and
+  durable outbound queue. Queue depth and oldest-status metrics are implemented.
 - Add retention/compaction policy, revision diffs, export, and optional approval
   gates to the SQLite-backed memory history.
 - Queue accepted Lark events quickly, then execute runs through the shared worker
@@ -109,15 +116,17 @@
 
 - Harden Codex and Claude local CLI execution behind the common `Executor`
   contract with provider event parsing and runtime evidence.
-- Add production supervisor/deployment manifests for independent worker and
-  scheduler processes.
+- Keep the implemented systemd supervisor/deployment manifests, metrics, alerts,
+  lease heartbeat, graceful requeue, and restart smoke covered by process tests.
 - Add true mid-turn Codex steering when its provider exposes a stable streaming
   input API. Claude already accepts live `stream-json` follow-ups, and both CLI
   adapters resume provider sessions with durable transcript recovery.
 - Add hosted interactive reports and first-class PR/link artifact producers on
   top of the implemented managed file/report/chart/patch path.
-- Add resumable execution checkpoints and lease heartbeats so a replacement
-  worker can continue interrupted runs instead of restarting them from scratch.
+- Add instruction-level resumable execution checkpoints. Lease heartbeat,
+  provider-session/transcript recovery, progress-surface reuse, and restart
+  replay are implemented; a replacement may still restart the current provider
+  turn when no provider resume point exists.
 
 ## Phase 3: Access Bundles
 
@@ -141,8 +150,8 @@
 - Workflow foundation: saved agent DAGs can run manually or from authenticated,
   idempotent typed events; intermediate nodes remain internal and sink nodes
   publish through a configured client destination.
-- Supervised scheduler deployment, queue-depth/lease metrics, and live Lark
-  delivery/restart smoke evidence.
+- Run the implemented supervised scheduler, queue/lease metrics, and alerts in a
+  live Lark deployment and capture external delivery/restart smoke evidence.
 - Native watcher producers: PR, CI, issue, alert, and document monitors.
 - Add branching/parallel workflow editing, execution cancellation, node retry,
   and per-workflow queue metrics without allowing arbitrary in-process scripts.

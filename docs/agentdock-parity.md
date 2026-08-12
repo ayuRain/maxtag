@@ -21,6 +21,7 @@ many clients.
 | Workspace governance | SQLite-backed workspace members and project roles for client ingress, plus named operator tokens with workspace scopes, owner/admin/viewer control-plane roles, signed principal sessions, and authoritative operator audit identity |
 | Durable delivery | SQLite WAL outbox, turn delivery records, atomic cross-process claims, scoped cancel, stale recovery, and bindings; legacy file mode remains available |
 | Agent run queue | SQLite WAL run status, timeline events, cancel requests, inline or standalone worker claim, restart persistence, and stale recovery |
+| Runtime operations | Prometheus endpoints for server/worker/scheduler, owner-fenced run lease heartbeat, queue and oldest-age metrics, graceful SIGTERM requeue, original progress-surface reuse, systemd units, scrape config, alert rules, and real replacement-worker restart tests |
 | Scheduled tasks | SQLite WAL-backed workspace/project routines with interval or daily schedules, IANA time zones, manual trigger, atomic cross-process claims, stale reclaim, deterministic run enqueue, inline/external/manual scheduler modes, and shared worker execution; Lark and Telegram topics support bilingual create/list/pause/resume/delete commands with requester audit |
 | Dynamic workflows | SQLite WAL-backed saved DAGs with immutable execution snapshots, manual and typed-event triggers, event-id deduplication, atomic node claims, stale reclaim, dependency failure propagation, and deterministic bridging of every node into the shared run queue; sink nodes publish to a real client destination |
 | Inbound callback ledger | Lark raw-body signature/AES/token/timestamp, Telegram webhook-secret, and GitHub HMAC-SHA256 checks, event idempotency, and duplicate short-circuit |
@@ -38,8 +39,8 @@ many clients.
 | More native clients | Add Slack, QQ, and Web adapters behind the shared platform contract |
 | Telegram production depth | Verify webhook, download, send, edit, and file behavior against a live bot; local HTTP contract and end-to-end managed storage tests pass |
 | GitHub production depth | Verify webhook, comment create/update, permissions, and delivery recovery against a live GitHub App or token; local HTTP contract and end-to-end routing tests pass |
-| High-volume storage | Normalize the current transactional SQLite state documents or add Postgres before high-volume multi-replica deployment; add retention and compaction metrics |
-| Async run execution | Add production supervisor/deployment manifests; durable cross-process cancellation polling is implemented |
+| High-volume storage | Normalize the current transactional SQLite state documents or add Postgres before high-volume multi-replica deployment; add retention and compaction controls. Queue depth and oldest-status metrics are implemented. |
+| Async run execution | Add instruction-level checkpoints and distributed executor hosts. The supervised three-process deployment, lease heartbeat, graceful requeue, original progress-surface reuse, publish fencing, and restart smoke are implemented locally. |
 | Provider-level live steering | Claude local CLI consumes active `stream-json` follow-ups; add true mid-turn steering for Codex when its provider exposes a stable streaming input API |
 | Distributed provider sessions | Back provider sessions with shared provider state or sticky worker routing before using multiple executor hosts; host-scoped namespaces and transcript recovery prevent accidental cross-host resume today |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |
@@ -48,8 +49,8 @@ many clients.
 | Operator credential lifecycle | Add in-product credential creation, revocation, rotation, finer-grained operator capabilities, and optional SSO/OIDC; environment-configured named principals and workspace enforcement are implemented |
 | Encrypted Lark callbacks | Raw-body SHA-256 signature verification, AES-256-CBC decryption, v1/v2 Verification Token support, timestamp window, encrypted challenge handling, and event-id deduplication are implemented and tested locally; verify them against a live app before production |
 | Memory governance | Add optional approval policy, retention/compaction controls, diff rendering, and export; explicit runtime scope grants, durable transactional writes, audit history, legacy import, and admin restore are implemented |
-| Routine production hardening | Add production supervisor manifests, queue-depth/lease metrics, and real Lark delivery plus restart smoke evidence for the independent scheduler |
-| Workflow production depth | Add native PR, CI, issue, alert, and document watcher producers; richer branching/parallel graph editing; cancellation and retry controls; queue metrics; and live Lark restart smoke evidence |
+| Routine production hardening | Verify real Lark delivery and a supervised scheduler restart in the target environment; systemd manifests, queue/lease metrics, alerts, and local three-process SIGTERM smoke are implemented |
+| Workflow production depth | Add native PR, CI, issue, alert, and document watcher producers; richer branching/parallel graph editing; cancellation and retry controls; and live Lark restart smoke evidence. Queue and claim-age metrics are implemented. |
 | Tooling depth | Add external MCP registry, destructive-operation approval flows, and hard container egress enforcement; non-destructive GitHub/Lark writes are explicitly grant-gated, while provider-native shell/browser tools remain bounded by executor policy rather than brokered |
 
 ## Product Constraint
