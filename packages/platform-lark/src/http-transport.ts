@@ -186,7 +186,7 @@ export class HttpLarkTransport implements LarkTransport {
   async openApiRequest<T>(
     pathname: string,
     options: {
-      method: 'GET' | 'POST';
+      method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
       query?: Record<string, string | number | boolean | undefined>;
       body?: Record<string, unknown>;
       signal?: AbortSignal;

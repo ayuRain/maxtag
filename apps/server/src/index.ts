@@ -1133,11 +1133,20 @@ async function workspaceSnapshot(
         accessMode: accessPolicy?.mode ?? 'open',
         memberCount: projectMembers.length,
         toolCount: project.grants.reduce(
-          (total, grant) =>
-            total +
-            (OPENTAG_TOOL_CATALOG.find(
-              (entry) => entry.grantKind === grant.kind,
-            )?.toolCount ?? 0),
+          (total, grant) => {
+            const entry = OPENTAG_TOOL_CATALOG.find(
+              (candidate) => candidate.grantKind === grant.kind,
+            );
+            if (!entry) return total;
+            const writeEnabled = Array.isArray(grant.constraints?.permissions)
+              ? grant.constraints.permissions.includes('write')
+              : false;
+            return (
+              total +
+              entry.toolCount -
+              (writeEnabled ? 0 : entry.writeToolCount ?? 0)
+            );
+          },
           0,
         ),
       };
@@ -1155,6 +1164,8 @@ async function workspaceSnapshot(
       label: tool.label,
       description: tool.description,
       toolCount: tool.toolCount,
+      readToolCount: tool.toolCount - (tool.writeToolCount ?? 0),
+      writeToolCount: tool.writeToolCount ?? 0,
       constraints: tool.constraints,
       providerStatus:
         tool.grantKind === 'lark-docs' || tool.grantKind === 'lark-base'
@@ -1322,9 +1333,9 @@ function coerceProjectPolicyInput(
   if (unsupportedTool) return { error: `unsupported_tool:${unsupportedTool}` };
   const rawConstraints = recordValue(body, 'toolConstraints') ?? {};
   const constraintKeys: Record<string, string[]> = {
-    github: ['repositories'],
-    'lark-docs': ['documentIds'],
-    'lark-base': ['appTokens'],
+    github: ['repositories', 'permissions'],
+    'lark-docs': ['documentIds', 'permissions'],
+    'lark-base': ['appTokens', 'permissions'],
   };
   const grants: ToolGrant[] | undefined = [];
   for (const tool of tools ?? []) {
@@ -1339,6 +1350,15 @@ function coerceProjectPolicyInput(
     const constraints: Record<string, unknown> = {};
     for (const key of allowedKeys) {
       const values = stringArrayValue(raw, key) ?? [];
+      if (key === 'permissions') {
+        if (values.some((value) => value !== 'read' && value !== 'write')) {
+          return { error: `invalid_tool_constraint:${tool}:${key}` };
+        }
+        constraints.permissions = values.includes('write')
+          ? ['read', 'write']
+          : ['read'];
+        continue;
+      }
       if (values.length > 100 || values.some((value) => value.length > 200)) {
         return { error: `invalid_tool_constraint:${tool}:${key}` };
       }

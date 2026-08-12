@@ -1083,6 +1083,25 @@ input:disabled {
   background: var(--surface);
 }
 
+.tool-write-toggle {
+  min-height: 30px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.tool-write-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .tool-option-head input,
 .toggle-field input {
   width: 15px;

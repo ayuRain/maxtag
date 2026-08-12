@@ -16,7 +16,8 @@ clients of the same thread-agent core.
 - `PlatformAdapter`: normalizes inbound events and renders outbound progress.
 - `ProgressSurface`: the best available UI for that client. Lark uses cards;
   Telegram can use edited receipts; GitHub can use comments and checklists.
-- `AccessBundle`: thread-level tool and credential grants.
+- `AccessBundle`: thread-level tool and credential grants, including explicit
+  read/write permissions and resource allowlists.
 - `OpenTagToolBroker`: a per-run capability endpoint that turns an access bundle
   into a filtered MCP tool list and durable call audit without giving service
   credentials to the executor.

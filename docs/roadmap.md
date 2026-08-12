@@ -115,8 +115,9 @@
   allowlists are implemented.
 - Add GitHub App installation token exchange on top of the implemented host-side
   token provider.
-- Add explicitly write-gated Lark Docs/Base operations; read grants are
-  implemented.
+- Extend the implemented write-gated GitHub issue/comment, Lark document append,
+  and Base record create/update operations with approval-gated destructive
+  actions.
 - Add operator-managed external MCP server registry without bypassing per-run
   filtering; secret indirection is implemented for built-in providers.
 - Add container-level egress enforcement for provider-native shell/browser

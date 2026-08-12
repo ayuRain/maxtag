@@ -66,21 +66,30 @@ function runRequest(events) {
           kind: 'github',
           scope: 'project',
           label: 'GitHub',
-          constraints: { repositories: ['acme/payments'] },
+          constraints: {
+            repositories: ['acme/payments'],
+            permissions: ['read', 'write'],
+          },
         },
         {
           id: 'lark-docs',
           kind: 'lark-docs',
           scope: 'project',
           label: 'Lark Docs',
-          constraints: { documentIds: ['dox-approved'] },
+          constraints: {
+            documentIds: ['dox-approved'],
+            permissions: ['read', 'write'],
+          },
         },
         {
           id: 'lark-base',
           kind: 'lark-base',
           scope: 'project',
           label: 'Lark Base',
-          constraints: { appTokens: ['base-approved'] },
+          constraints: {
+            appTokens: ['base-approved'],
+            permissions: ['read', 'write'],
+          },
         },
       ],
       networkPolicy: { mode: 'deny-by-default', allowedHosts: [] },
@@ -112,6 +121,15 @@ test('per-run MCP broker filters, authorizes, executes, and audits tools', async
       async request(pathname, options) {
         larkCalls.push({ pathname, options });
         if (pathname.includes('/raw_content')) return { content: 'Approved plan' };
+        if (pathname.includes('/blocks/') && pathname.endsWith('/children')) {
+          return { children: [{ block_id: 'block-new' }] };
+        }
+        if (pathname.endsWith('/records') && options.method === 'POST') {
+          return { record: { record_id: 'rec-created', fields: options.body.fields } };
+        }
+        if (pathname.includes('/records/') && options.method === 'PUT') {
+          return { record: { record_id: 'rec-updated', fields: options.body.fields } };
+        }
         return {
           items: [{ record_id: 'rec-1', fields: { Status: 'Open' } }],
           has_more: false,
@@ -122,7 +140,24 @@ test('per-run MCP broker filters, authorizes, executes, and audits tools', async
     github: {
       token: 'host-only-token',
       async fetch(url, options) {
-        githubCalls.push({ url: String(url), authorization: options.headers.authorization });
+        githubCalls.push({
+          url: String(url),
+          method: options.method,
+          body: options.body,
+          authorization: options.headers.authorization,
+        });
+        if (options.method === 'POST' && String(url).endsWith('/issues')) {
+          return new Response(
+            JSON.stringify({ number: 42, title: 'Investigate retry spike', html_url: 'https://github.test/acme/payments/issues/42' }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (options.method === 'POST' && String(url).endsWith('/issues/42/comments')) {
+          return new Response(
+            JSON.stringify({ id: 91, html_url: 'https://github.test/acme/payments/issues/42#issuecomment-91' }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
         return new Response(
           JSON.stringify({
             full_name: 'acme/payments',
@@ -155,12 +190,17 @@ test('per-run MCP broker filters, authorizes, executes, and audits tools', async
     listed.tools.map((tool) => tool.name).sort(),
     [
       'github_issues',
+      'github_issue_comment',
+      'github_issue_create',
       'github_repository',
+      'lark_base_record_create',
+      'lark_base_record_update',
       'lark_base_records',
+      'lark_doc_append_text',
       'lark_doc_read',
       'memory_get',
       'memory_remember',
-    ],
+    ].sort(),
   );
 
   const remembered = await client.callTool({
@@ -188,12 +228,40 @@ test('per-run MCP broker filters, authorizes, executes, and audits tools', async
   assert.match(textResult(repository), /Payments service/);
   assert.equal(githubCalls[0].authorization, 'Bearer host-only-token');
 
+  const issue = await client.callTool({
+    name: 'github_issue_create',
+    arguments: {
+      owner: 'acme',
+      repo: 'payments',
+      title: 'Investigate retry spike',
+      body: 'Observed after deploy.',
+      labels: ['incident'],
+    },
+  });
+  assert.match(textResult(issue), /"number": 42/);
+  assert.deepEqual(JSON.parse(githubCalls[1].body), {
+    title: 'Investigate retry spike',
+    body: 'Observed after deploy.',
+    labels: ['incident'],
+  });
+
+  const comment = await client.callTool({
+    name: 'github_issue_comment',
+    arguments: {
+      owner: 'acme',
+      repo: 'payments',
+      issueNumber: 42,
+      body: 'Rollback window is 15 minutes.',
+    },
+  });
+  assert.match(textResult(comment), /issuecomment-91/);
+
   const deniedRepository = await client.callTool({
     name: 'github_repository',
     arguments: { owner: 'other', repo: 'private' },
   });
   assert.equal(deniedRepository.isError, true);
-  assert.equal(githubCalls.length, 1);
+  assert.equal(githubCalls.length, 3);
 
   const document = await client.callTool({
     name: 'lark_doc_read',
@@ -202,15 +270,43 @@ test('per-run MCP broker filters, authorizes, executes, and audits tools', async
   assert.match(textResult(document), /Approved plan/);
   assert.equal(larkCalls[0].options.query.lang, 0);
 
+  const appended = await client.callTool({
+    name: 'lark_doc_append_text',
+    arguments: { documentId: 'dox-approved', text: 'Decision: roll back.' },
+  });
+  assert.match(textResult(appended), /block-new/);
+  assert.equal(larkCalls[1].options.method, 'POST');
+
   const records = await client.callTool({
     name: 'lark_base_records',
     arguments: { appToken: 'base-approved', tableId: 'tbl-1', pageSize: 10 },
   });
   assert.match(textResult(records), /rec-1/);
-  assert.equal(larkCalls[1].options.query.page_size, 10);
+  assert.equal(larkCalls[2].options.query.page_size, 10);
 
-  assert.equal(events.filter((event) => event.type === 'tool_call').length, 7);
-  assert.equal(events.filter((event) => event.type === 'tool_result').length, 7);
+  const createdRecord = await client.callTool({
+    name: 'lark_base_record_create',
+    arguments: {
+      appToken: 'base-approved',
+      tableId: 'tbl-1',
+      fields: { Status: 'Open', Owner: 'Ada' },
+    },
+  });
+  assert.match(textResult(createdRecord), /rec-created/);
+
+  const updatedRecord = await client.callTool({
+    name: 'lark_base_record_update',
+    arguments: {
+      appToken: 'base-approved',
+      tableId: 'tbl-1',
+      recordId: 'rec-created',
+      fields: { Status: 'Closed' },
+    },
+  });
+  assert.match(textResult(updatedRecord), /rec-updated/);
+
+  assert.equal(events.filter((event) => event.type === 'tool_call').length, 12);
+  assert.equal(events.filter((event) => event.type === 'tool_result').length, 12);
   assert.ok(
     events.some(
       (event) =>
@@ -248,4 +344,47 @@ test('broker rejects invalid arguments before provider execution', async (contex
   });
   assert.equal(result.isError, true);
   assert.match(textResult(result), /tool_arguments_invalid/);
+});
+
+test('write tools are absent unless the resource grant explicitly permits writes', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-broker-readonly-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const input = runRequest([]);
+  input.access.grants = input.access.grants.map((grant) =>
+    ['github', 'lark-docs', 'lark-base'].includes(grant.kind)
+      ? {
+          ...grant,
+          constraints: {
+            ...grant.constraints,
+            permissions: ['read'],
+          },
+        }
+      : grant,
+  );
+  const session = await createOpenTagToolBroker({
+    memory: new ScopedFileMemoryStore(root),
+    github: { token: 'host-token', async fetch() { throw new Error('must_not_execute'); } },
+    lark: { async request() { throw new Error('must_not_execute'); } },
+  }).open(input);
+  assert.ok(session);
+  context.after(() => session.close());
+  const client = new Client({ name: 'opentag-readonly-test', version: '0.1.0' });
+  await client.connect(
+    new StdioClientTransport({
+      command: session.mcp.command,
+      args: session.mcp.args,
+      env: session.mcp.env,
+      stderr: 'pipe',
+    }),
+  );
+  context.after(() => client.close());
+
+  const names = (await client.listTools()).tools.map((tool) => tool.name);
+  assert.ok(names.includes('github_repository'));
+  assert.ok(names.includes('lark_doc_read'));
+  assert.ok(names.includes('lark_base_records'));
+  assert.equal(names.some((name) => name.includes('create')), false);
+  assert.equal(names.some((name) => name.includes('update')), false);
+  assert.equal(names.some((name) => name.includes('append')), false);
+  assert.equal(names.some((name) => name.includes('comment')), false);
 });

@@ -26,7 +26,7 @@ many clients.
 | Native Telegram client | Bot API webhook normalization, forum topics, send/edit progress, reply chunking, outgoing files, and tracked delivery |
 | Files and artifacts | Isolated content-addressed input storage; generic base64 upload; Lark/Telegram native download and upload; CLI artifact validation, durable timeline provenance, Activity downloads, and hash checks |
 | Executor boundary | Project-selectable Codex and Claude dry-run/local CLI modes with bounded output, cancellation, timeout, and filtered child environments |
-| Brokered tools | Per-run loopback MCP capability with schema validation, resource allowlists, call/time/result limits, durable audit, scoped memory read/write, GitHub repository/issue reads, Lark document reads, and Base record queries; host credentials are not inherited by executors |
+| Brokered tools | Per-run loopback MCP capability with schema validation, resource allowlists, explicit read/write grants, call/time/result limits, durable audit, scoped memory read/write, GitHub repository/issue reads plus issue/comment writes, Lark document read/append, and Base query/create/update; host credentials are not inherited by executors |
 | Operator console authentication | Optional local-open mode plus configured Bearer automation and signed, expiring HttpOnly browser sessions; mutation requests carry per-session CSRF tokens |
 
 ## Gaps To Close
@@ -47,7 +47,7 @@ many clients.
 | Memory governance | Add optional approval policy, retention/compaction controls, diff rendering, and export; durable transactional writes, audit history, legacy import, and admin restore are implemented |
 | Routine production hardening | Add production supervisor manifests, queue-depth/lease metrics, and real Lark delivery plus restart smoke evidence for the independent scheduler |
 | Workflow production depth | Add native PR, CI, issue, alert, and document watcher producers; richer branching/parallel graph editing; cancellation and retry controls; queue metrics; and live Lark restart smoke evidence |
-| Tooling depth | Add write-gated GitHub/Lark operations, external MCP registry, and hard container egress enforcement; provider-native shell/browser tools remain bounded by executor policy rather than brokered |
+| Tooling depth | Add external MCP registry, destructive-operation approval flows, and hard container egress enforcement; non-destructive GitHub/Lark writes are explicitly grant-gated, while provider-native shell/browser tools remain bounded by executor policy rather than brokered |
 
 ## Product Constraint
 

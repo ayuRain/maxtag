@@ -88,9 +88,10 @@ packages/ui-cards           Progress/checklist card models
 - Local Codex and Claude runs receive a short-lived MCP endpoint containing only
   the current run's grants. The broker validates every input schema, enforces
   resource allowlists and call/time/result limits, and records durable call and
-  result events. It currently provides scoped memory, approved GitHub repository
-  and issue reads, approved Lark document reads, and approved Base record queries.
-  GitHub and Lark credentials stay in the host process.
+  result events. It provides scoped memory, approved GitHub repository and issue
+  reads plus issue/comment writes, approved Lark document read/append, and Base
+  record query/create/update. Resource writes appear only for explicit project
+  write grants. GitHub and Lark credentials stay in the host process.
 - Delivery, run, inbound-event, binding, pairing, workspace-access, memory,
   routine, and workflow state defaults to a shared SQLite WAL database. Outbox,
   run, routine, and workflow-node claims plus memory revisions are transactional
@@ -466,6 +467,9 @@ Lark document IDs, and Base app tokens. An empty resource allowlist denies the
 call even when the provider grant is enabled. Agents can read all four memory
 scopes by default, while autonomous writes are limited to project and thread
 memory; workspace/global promotion stays on the authenticated control plane.
+GitHub issue/comment, Lark document append, and Base record create/update tools
+also require the project's explicit write toggle. No delete, close, merge, or
+other destructive brokered operation is currently exposed.
 
 ```bash
 OPENTAG_GITHUB_TOKEN=github_pat_...

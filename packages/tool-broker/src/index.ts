@@ -22,7 +22,7 @@ export interface LarkOpenApiClient {
   request<T>(
     pathname: string,
     options: {
-      method: 'GET' | 'POST';
+      method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
       query?: Record<string, string | number | boolean | undefined>;
       body?: JsonObject;
       signal?: AbortSignal;
@@ -49,6 +49,7 @@ export interface OpenTagToolCatalogEntry {
   label: string;
   description: string;
   toolCount: number;
+  writeToolCount?: number;
   constraints?: Array<{
     key: string;
     label: string;
@@ -60,8 +61,9 @@ export const OPENTAG_TOOL_CATALOG: OpenTagToolCatalogEntry[] = [
   {
     grantKind: 'github',
     label: 'GitHub',
-    description: 'Inspect repositories and issues without exposing GitHub credentials.',
-    toolCount: 2,
+    description: 'Inspect repositories and issues, then create issues or comments when write access is enabled.',
+    toolCount: 4,
+    writeToolCount: 2,
     constraints: [
       {
         key: 'repositories',
@@ -73,8 +75,9 @@ export const OPENTAG_TOOL_CATALOG: OpenTagToolCatalogEntry[] = [
   {
     grantKind: 'lark-docs',
     label: 'Lark Docs',
-    description: 'Read approved Lark documents with the workspace bot identity.',
-    toolCount: 1,
+    description: 'Read approved Lark documents and optionally append text blocks with the workspace bot identity.',
+    toolCount: 2,
+    writeToolCount: 1,
     constraints: [
       {
         key: 'documentIds',
@@ -86,8 +89,9 @@ export const OPENTAG_TOOL_CATALOG: OpenTagToolCatalogEntry[] = [
   {
     grantKind: 'lark-base',
     label: 'Lark Base',
-    description: 'Query records from approved Base apps and tables.',
-    toolCount: 1,
+    description: 'Query approved Base apps and optionally create or update records.',
+    toolCount: 3,
+    writeToolCount: 2,
     constraints: [
       {
         key: 'appTokens',
@@ -216,17 +220,20 @@ function resourceGrant(
   kind: ToolGrantKind,
   value: string,
   keys: string[],
+  permission: 'read' | 'write' = 'read',
 ): ToolGrant {
   const normalized = value.toLowerCase();
-  const grant = grantsFor(request, kind).find((candidate) =>
-    constraintStrings(candidate, ...keys).some((allowed) => {
-      const pattern = allowed.toLowerCase();
-      if (pattern === '*') return true;
-      if (pattern.endsWith('/*')) {
-        return normalized.startsWith(pattern.slice(0, -1));
-      }
-      return pattern === normalized;
-    }),
+  const grant = grantsFor(request, kind).find(
+    (candidate) =>
+      permissionAllows(candidate, permission) &&
+      constraintStrings(candidate, ...keys).some((allowed) => {
+        const pattern = allowed.toLowerCase();
+        if (pattern === '*') return true;
+        if (pattern.endsWith('/*')) {
+          return normalized.startsWith(pattern.slice(0, -1));
+        }
+        return pattern === normalized;
+      }),
   );
   if (!grant) throw new ToolDeniedError(`${kind}_resource_not_allowed`);
   return grant;
@@ -302,12 +309,16 @@ function repositoryInput(input: JsonObject): { owner: string; repo: string; key:
 async function githubRequest(
   options: OpenTagToolBrokerOptions,
   pathname: string,
-  query: Record<string, string | number | undefined>,
-  signal: AbortSignal,
+  request: {
+    method?: 'GET' | 'POST';
+    query?: Record<string, string | number | undefined>;
+    body?: JsonObject;
+    signal: AbortSignal;
+  },
 ): Promise<unknown> {
   const baseUrl = (options.github?.baseUrl || 'https://api.github.com').replace(/\/+$/u, '');
   const url = new URL(`${baseUrl}${pathname}`);
-  for (const [key, value] of Object.entries(query)) {
+  for (const [key, value] of Object.entries(request.query ?? {})) {
     if (value !== undefined) url.searchParams.set(key, String(value));
   }
   const headers: Record<string, string> = {
@@ -315,11 +326,13 @@ async function githubRequest(
     'user-agent': 'opentag-tool-broker/0.1',
     'x-github-api-version': '2022-11-28',
   };
+  if (request.body) headers['content-type'] = 'application/json; charset=utf-8';
   if (options.github?.token) headers.authorization = `Bearer ${options.github.token}`;
   const response = await (options.github?.fetch || fetch)(url, {
-    method: 'GET',
+    method: request.method ?? 'GET',
     headers,
-    signal,
+    body: request.body ? JSON.stringify(request.body) : undefined,
+    signal: request.signal,
   });
   const body = await response.text();
   let parsed: unknown;
@@ -438,8 +451,7 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           await githubRequest(
             options,
             `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`,
-            {},
-            signal,
+            { signal },
           ),
         );
         return {
@@ -485,10 +497,12 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           options,
           `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/issues`,
           {
-            state: stringValue(input, 'state') || 'open',
-            per_page: boundedInteger(input, 'limit', 20, 50),
+            query: {
+              state: stringValue(input, 'state') || 'open',
+              per_page: boundedInteger(input, 'limit', 20, 50),
+            },
+            signal,
           },
-          signal,
         );
         const items = Array.isArray(raw) ? raw : [];
         return {
@@ -506,6 +520,130 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
               updatedAt: item.updated_at,
             };
           }),
+        };
+      },
+    },
+    {
+      name: 'github_issue_create',
+      title: 'Create GitHub issue',
+      description: 'Create an issue in an approved repository when project write access is enabled.',
+      grantKind: 'github',
+      risk: 'write',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          owner: { type: 'string', minLength: 1, maxLength: 100 },
+          repo: { type: 'string', minLength: 1, maxLength: 100 },
+          title: { type: 'string', minLength: 1, maxLength: 256 },
+          body: { type: 'string', maxLength: 60_000 },
+          labels: {
+            type: 'array',
+            maxItems: 20,
+            items: { type: 'string', minLength: 1, maxLength: 100 },
+          },
+        },
+        required: ['owner', 'repo', 'title'],
+      },
+      available: () => Boolean(options.github?.token),
+      authorize(request, input) {
+        return resourceGrant(
+          request,
+          'github',
+          repositoryInput(input).key,
+          ['repositories'],
+          'write',
+        );
+      },
+      summarize(input) {
+        return {
+          owner: stringValue(input, 'owner'),
+          repo: stringValue(input, 'repo'),
+          title: stringValue(input, 'title'),
+          bodyLength: stringValue(input, 'body').length,
+          labelCount: Array.isArray(input.labels) ? input.labels.length : 0,
+        };
+      },
+      async execute({ signal }, input) {
+        const repository = repositoryInput(input);
+        const raw = objectValue(
+          await githubRequest(
+            options,
+            `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/issues`,
+            {
+              method: 'POST',
+              body: {
+                title: stringValue(input, 'title'),
+                body: stringValue(input, 'body') || undefined,
+                labels: Array.isArray(input.labels) ? input.labels : undefined,
+              },
+              signal,
+            },
+          ),
+        );
+        return {
+          repository: repository.key,
+          number: raw.number,
+          title: raw.title,
+          htmlUrl: raw.html_url,
+          created: true,
+        };
+      },
+    },
+    {
+      name: 'github_issue_comment',
+      title: 'Comment on GitHub issue',
+      description: 'Add a comment to an issue or pull request in an approved repository when write access is enabled.',
+      grantKind: 'github',
+      risk: 'write',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          owner: { type: 'string', minLength: 1, maxLength: 100 },
+          repo: { type: 'string', minLength: 1, maxLength: 100 },
+          issueNumber: { type: 'integer', minimum: 1 },
+          body: { type: 'string', minLength: 1, maxLength: 60_000 },
+        },
+        required: ['owner', 'repo', 'issueNumber', 'body'],
+      },
+      available: () => Boolean(options.github?.token),
+      authorize(request, input) {
+        return resourceGrant(
+          request,
+          'github',
+          repositoryInput(input).key,
+          ['repositories'],
+          'write',
+        );
+      },
+      summarize(input) {
+        return {
+          owner: stringValue(input, 'owner'),
+          repo: stringValue(input, 'repo'),
+          issueNumber: input.issueNumber,
+          bodyLength: stringValue(input, 'body').length,
+        };
+      },
+      async execute({ signal }, input) {
+        const repository = repositoryInput(input);
+        const raw = objectValue(
+          await githubRequest(
+            options,
+            `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/issues/${String(input.issueNumber)}/comments`,
+            {
+              method: 'POST',
+              body: { body: stringValue(input, 'body') },
+              signal,
+            },
+          ),
+        );
+        return {
+          repository: repository.key,
+          issueNumber: input.issueNumber,
+          commentId: raw.id,
+          htmlUrl: raw.html_url,
+          created: true,
         };
       },
     },
@@ -550,6 +688,79 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           documentId,
           content: content.slice(0, 50_000),
           truncated: content.length > 50_000,
+        };
+      },
+    },
+    {
+      name: 'lark_doc_append_text',
+      title: 'Append text to Lark document',
+      description: 'Append a plain-text block to an approved Lark document when project write access is enabled.',
+      grantKind: 'lark-docs',
+      risk: 'write',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          documentId: { type: 'string', minLength: 1, maxLength: 100 },
+          text: { type: 'string', minLength: 1, maxLength: 10_000 },
+        },
+        required: ['documentId', 'text'],
+      },
+      available: () => Boolean(options.lark),
+      authorize(request, input) {
+        return resourceGrant(
+          request,
+          'lark-docs',
+          stringValue(input, 'documentId'),
+          ['documentIds', 'documents'],
+          'write',
+        );
+      },
+      summarize(input) {
+        return {
+          documentId: stringValue(input, 'documentId'),
+          textLength: stringValue(input, 'text').length,
+        };
+      },
+      async execute({ signal }, input) {
+        if (!options.lark) throw new Error('lark_provider_unavailable');
+        const documentId = stringValue(input, 'documentId');
+        const response = objectValue(
+          await options.lark.request(
+            `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/children`,
+            {
+              method: 'POST',
+              body: {
+                index: -1,
+                children: [
+                  {
+                    block_type: 2,
+                    text: {
+                      elements: [
+                        {
+                          text_run: {
+                            content: stringValue(input, 'text'),
+                            text_element_style: {},
+                          },
+                        },
+                      ],
+                      style: {},
+                    },
+                  },
+                ],
+              },
+              signal,
+            },
+          ),
+        );
+        return {
+          documentId,
+          blockIds: Array.isArray(response.children)
+            ? response.children
+                .map((item) => objectValue(item).block_id)
+                .filter(Boolean)
+            : [],
+          appended: true,
         };
       },
     },
@@ -627,6 +838,133 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           hasMore: response.has_more === true,
           pageToken: response.page_token,
           total: response.total,
+        };
+      },
+    },
+    {
+      name: 'lark_base_record_create',
+      title: 'Create Lark Base record',
+      description: 'Create one record in an approved Base app when project write access is enabled.',
+      grantKind: 'lark-base',
+      risk: 'write',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          appToken: { type: 'string', minLength: 1, maxLength: 100 },
+          tableId: { type: 'string', minLength: 1, maxLength: 100 },
+          fields: {
+            type: 'object',
+            minProperties: 1,
+            maxProperties: 100,
+          },
+        },
+        required: ['appToken', 'tableId', 'fields'],
+      },
+      available: () => Boolean(options.lark),
+      authorize(request, input) {
+        return resourceGrant(
+          request,
+          'lark-base',
+          stringValue(input, 'appToken'),
+          ['appTokens', 'bases'],
+          'write',
+        );
+      },
+      summarize(input) {
+        return {
+          appToken: stringValue(input, 'appToken'),
+          tableId: stringValue(input, 'tableId'),
+          fieldCount: Object.keys(objectValue(input.fields)).length,
+        };
+      },
+      async execute({ signal }, input) {
+        if (!options.lark) throw new Error('lark_provider_unavailable');
+        const appToken = stringValue(input, 'appToken');
+        const tableId = stringValue(input, 'tableId');
+        const response = objectValue(
+          await options.lark.request(
+            `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records`,
+            {
+              method: 'POST',
+              query: { user_id_type: 'open_id' },
+              body: { fields: objectValue(input.fields) },
+              signal,
+            },
+          ),
+        );
+        const record = objectValue(response.record);
+        return {
+          appToken,
+          tableId,
+          recordId: record.record_id,
+          fields: record.fields,
+          created: true,
+        };
+      },
+    },
+    {
+      name: 'lark_base_record_update',
+      title: 'Update Lark Base record',
+      description: 'Update fields on one record in an approved Base app when project write access is enabled.',
+      grantKind: 'lark-base',
+      risk: 'write',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          appToken: { type: 'string', minLength: 1, maxLength: 100 },
+          tableId: { type: 'string', minLength: 1, maxLength: 100 },
+          recordId: { type: 'string', minLength: 1, maxLength: 100 },
+          fields: {
+            type: 'object',
+            minProperties: 1,
+            maxProperties: 100,
+          },
+        },
+        required: ['appToken', 'tableId', 'recordId', 'fields'],
+      },
+      available: () => Boolean(options.lark),
+      authorize(request, input) {
+        return resourceGrant(
+          request,
+          'lark-base',
+          stringValue(input, 'appToken'),
+          ['appTokens', 'bases'],
+          'write',
+        );
+      },
+      summarize(input) {
+        return {
+          appToken: stringValue(input, 'appToken'),
+          tableId: stringValue(input, 'tableId'),
+          recordId: stringValue(input, 'recordId'),
+          fieldCount: Object.keys(objectValue(input.fields)).length,
+        };
+      },
+      async execute({ signal }, input) {
+        if (!options.lark) throw new Error('lark_provider_unavailable');
+        const appToken = stringValue(input, 'appToken');
+        const tableId = stringValue(input, 'tableId');
+        const recordId = stringValue(input, 'recordId');
+        const response = objectValue(
+          await options.lark.request(
+            `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records/${encodeURIComponent(recordId)}`,
+            {
+              method: 'PUT',
+              query: { user_id_type: 'open_id' },
+              body: { fields: objectValue(input.fields) },
+              signal,
+            },
+          ),
+        );
+        const record = objectValue(response.record);
+        return {
+          appToken,
+          tableId,
+          recordId: record.record_id || recordId,
+          fields: record.fields,
+          updated: true,
         };
       },
     },
@@ -719,7 +1057,11 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
     const definitions = this.definitions.filter(
       (definition) =>
         definition.available(this.options) &&
-        request.access.grants.some((grant) => grant.kind === definition.grantKind),
+        request.access.grants.some(
+          (grant) =>
+            grant.kind === definition.grantKind &&
+            permissionAllows(grant, definition.risk),
+        ),
     );
     if (!definitions.length) return undefined;
 

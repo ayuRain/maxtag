@@ -716,7 +716,7 @@ function renderOverviewProjects() {
       element(
         'span',
         '',
-        `${statusLabel(project.identity?.defaultExecutorId)} / ${project.toolCount || 0} tools`,
+        `${statusLabel(project.identity?.defaultExecutorId)} / ${project.toolCount || 0} authorized`,
       ),
       element(
         'span',
@@ -959,12 +959,27 @@ function renderToolGrid(project) {
     checkbox.value = tool.id;
     checkbox.checked = Boolean(grant);
     const copy = element('span', 'tool-option-copy');
+    const toolCountLabel = (writeEnabled) => {
+      const authorized = writeEnabled
+        ? tool.toolCount || 0
+        : tool.readToolCount ?? tool.toolCount ?? 0;
+      const available =
+        tool.providerStatus === 'ready'
+          ? authorized
+          : tool.providerStatus === 'public-only'
+            ? Math.min(authorized, tool.readToolCount ?? authorized)
+            : 0;
+      if (!tool.writeToolCount) {
+        return `${available} available / ${statusLabel(tool.providerStatus)}`;
+      }
+      return `${available} available / ${authorized} authorized / ${statusLabel(tool.providerStatus)}`;
+    };
     copy.append(
       element('strong', '', tool.label),
       element(
         'small',
         '',
-        `${tool.toolCount || 0} tools / ${statusLabel(tool.providerStatus)}`,
+        toolCountLabel(grant?.constraints?.permissions?.includes('write')),
       ),
     );
     head.append(checkbox, copy);
@@ -1003,8 +1018,29 @@ function renderToolGrid(project) {
       }
       card.append(constraints);
     }
+    if (tool.writeToolCount) {
+      const permission = element('label', 'tool-write-toggle');
+      const write = document.createElement('input');
+      write.type = 'checkbox';
+      write.dataset.toolKind = tool.id;
+      write.dataset.permission = 'write';
+      write.checked = Boolean(grant?.constraints?.permissions?.includes('write'));
+      write.disabled = !checkbox.checked;
+      permission.append(
+        write,
+        element('span', '', `Write access (+${tool.writeToolCount} tools)`),
+      );
+      write.addEventListener('change', () => {
+        const count = copy.querySelector('small');
+        count.textContent = toolCountLabel(write.checked);
+        markProjectDirty();
+      });
+      card.append(permission);
+    }
     checkbox.addEventListener('change', () => {
-      for (const input of card.querySelectorAll('.tool-constraint input')) {
+      for (const input of card.querySelectorAll(
+        '.tool-constraint input, .tool-write-toggle input',
+      )) {
         input.disabled = !checkbox.checked;
       }
       markProjectDirty();
@@ -1015,11 +1051,17 @@ function renderToolGrid(project) {
 
 function projectToolConstraints() {
   const constraints = {};
-  for (const checkbox of $$('#tool-grid input[type="checkbox"]:checked')) {
+  for (const checkbox of $$(
+    '#tool-grid .tool-option-head input[type="checkbox"]:checked',
+  )) {
     const values = {};
     for (const input of $$(
       `#tool-grid input[data-tool-kind="${CSS.escape(checkbox.value)}"]`,
     )) {
+      if (input.dataset.permission === 'write') {
+        values.permissions = input.checked ? ['read', 'write'] : ['read'];
+        continue;
+      }
       values[input.dataset.constraintKey] = input.value
         .split(',')
         .map((value) => value.trim())
@@ -1164,9 +1206,9 @@ async function saveProject(event) {
         agentName: $('#agent-name').value.trim() || 'OpenTag',
         instructions: $('#agent-instructions').value,
         executorId: $('#agent-executor').value,
-        tools: $$('#tool-grid input[type="checkbox"]:checked').map(
-          (input) => input.value,
-        ),
+        tools: $$(
+          '#tool-grid .tool-option-head input[type="checkbox"]:checked',
+        ).map((input) => input.value),
         toolConstraints: projectToolConstraints(),
         networkMode: $('#network-mode').value,
         allowedHosts: $('#allowed-hosts')

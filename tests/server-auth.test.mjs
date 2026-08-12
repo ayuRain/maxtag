@@ -187,7 +187,10 @@ test(
         name: 'Authenticated project',
         tools: ['github', 'lark-docs', 'lark-base'],
         toolConstraints: {
-          github: { repositories: ['acme/payments'] },
+          github: {
+            repositories: ['acme/payments'],
+            permissions: ['read', 'write'],
+          },
           'lark-docs': { documentIds: ['dox-approved'] },
           'lark-base': { appTokens: ['base-approved'] },
         },
@@ -202,14 +205,18 @@ test(
     const configuredProject = configuredSnapshot.projects.find(
       (project) => project.projectId === 'auth-test',
     );
-    assert.equal(configuredProject.toolCount, 4);
+    assert.equal(configuredProject.toolCount, 6);
     assert.deepEqual(
       configuredProject.grants.find((grant) => grant.kind === 'github').constraints,
-      { repositories: ['acme/payments'] },
+      { repositories: ['acme/payments'], permissions: ['read', 'write'] },
     );
     assert.ok(
       configuredSnapshot.availableTools.some(
-        (tool) => tool.id === 'lark-docs' && tool.toolCount === 1,
+        (tool) =>
+          tool.id === 'lark-docs' &&
+          tool.toolCount === 2 &&
+          tool.readToolCount === 1 &&
+          tool.writeToolCount === 1,
       ),
     );
 
