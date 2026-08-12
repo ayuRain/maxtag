@@ -146,8 +146,13 @@ const larkAppSecret = process.env.OPENTAG_LARK_APP_SECRET;
 const larkDomain = larkDomainValue(process.env.OPENTAG_LARK_DOMAIN);
 const larkBaseUrl = process.env.OPENTAG_LARK_BASE_URL;
 const larkVerificationToken = process.env.OPENTAG_LARK_VERIFICATION_TOKEN;
+const larkEncryptKey = process.env.OPENTAG_LARK_ENCRYPT_KEY;
 const larkCallbackMaxSkewSeconds = Number(
   process.env.OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS || 300,
+);
+const larkCallbackMaxBytes = numberEnvironmentValue(
+  'OPENTAG_LARK_CALLBACK_MAX_BYTES',
+  1024 * 1024,
 );
 const larkRequireBinding = ['1', 'true', 'yes'].includes(
   String(process.env.OPENTAG_LARK_REQUIRE_BINDING || 'false').toLowerCase(),
@@ -715,6 +720,9 @@ function larkTransportStatus(): Record<string, unknown> {
     domain: larkDomain,
     baseUrl: larkBaseUrl || undefined,
     verificationTokenConfigured: Boolean(larkVerificationToken),
+    encryptionKeyConfigured: Boolean(larkEncryptKey),
+    callbackMaxSkewSeconds: larkCallbackMaxSkewSeconds,
+    callbackMaxBytes: larkCallbackMaxBytes,
     requireBinding: larkRequireBinding,
   };
 }
@@ -5928,9 +5936,10 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/lark/events') {
-      const rawBody = await readTextBody(request);
+      const rawBody = await readTextBody(request, larkCallbackMaxBytes);
       const parsed = parseAndValidateLarkCallback(rawBody, request.headers, {
         verificationToken: larkVerificationToken,
+        encryptKey: larkEncryptKey,
         maxTimestampSkewSeconds: larkCallbackMaxSkewSeconds,
       });
       const body = parsed.body;

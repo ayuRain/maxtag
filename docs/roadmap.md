@@ -73,8 +73,9 @@
   optional SSO/OIDC on top of the environment-configured named principals.
 - Add binding audit/export and optional actor-restricted invitations around the
   transactional pairing and binding operation.
-- Verify Lark callbacks with token/timestamp checks; add event decrypt before
-  production encrypted callbacks.
+- Keep the implemented raw-body signature verification, AES-256-CBC event
+  decryption, v1/v2 token checks, replay window, and event-id deduplication
+  covered by protocol-vector and HTTP endpoint tests.
 - Extend rich-post extraction beyond the implemented text, file, image, audio,
   video, mention, and topic/thread normalization.
 - Create or bind `SourceThread` records from Lark group/topic events, with

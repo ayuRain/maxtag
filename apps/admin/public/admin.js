@@ -788,9 +788,15 @@ function clientRuntimeLabel(client) {
   const transport = clientTransport(client);
   if (!transport) return client.status === 'planned' ? 'Not wired' : 'Generic receipt';
   if (client.id === 'lark') {
-    return transport.mode === 'http'
+    const delivery = transport.mode === 'http'
       ? 'HTTP / credentials set'
       : `Memory / ${transport.hasCredentials ? 'credentials set' : 'no credentials'}`;
+    const callback = transport.encryptionKeyConfigured
+      ? 'signed + encrypted callback'
+      : transport.verificationTokenConfigured
+        ? 'token callback'
+        : 'callback auth off';
+    return `${delivery} / ${callback}`;
   }
   if (client.id === 'github') {
     const transportState = transport.hasToken ? 'token set' : 'no token';

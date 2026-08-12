@@ -21,6 +21,17 @@ export interface LarkDownloadedResource {
 
 export interface LarkIncomingEvent {
   event_id?: string;
+  type?: string;
+  token?: string;
+  challenge?: string;
+  header?: {
+    event_id?: string;
+    event_type?: string;
+    create_time?: string;
+    token?: string;
+    app_id?: string;
+    tenant_key?: string;
+  };
   event?: {
     message?: {
       message_id?: string;

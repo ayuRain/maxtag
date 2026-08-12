@@ -144,9 +144,9 @@ packages/ui-cards           Progress/checklist card models
 - Real Lark delivery can be enabled with `OPENTAG_LARK_TRANSPORT=http`,
   `OPENTAG_LARK_APP_ID`, and `OPENTAG_LARK_APP_SECRET`; use
   `OPENTAG_LARK_DOMAIN=lark` for international Lark.
-- Lark callbacks are recorded in an inbound event ledger with verification-token
-  checks, replay-window checks, duplicate short-circuiting, and processed/ignored
-  states.
+- Lark callbacks support signed AES-256-CBC encrypted delivery, v1/v2
+  verification-token checks, replay-window checks, duplicate short-circuiting,
+  and processed/ignored states in the inbound event ledger.
 - Lark group `chat_id` maps into the project route, so one workspace bot can
   serve multiple group/project memories instead of collapsing into one global
   thread.
@@ -326,10 +326,10 @@ curl -H "Authorization: Bearer $OPENTAG_ADMIN_TOKEN" \
 
 `/health`, static console assets, and native Lark/Telegram callbacks remain
 outside the operator session boundary; the native callbacks retain their own
-verification token or webhook secret. Generic adapters use a separate
-`OPENTAG_CLIENT_INGRESS_TOKEN` Bearer credential. When operator authentication
-is enabled without that credential, `/v1/client/events` is disabled instead of
-accepting anonymous events.
+Lark signature/token or Telegram webhook-secret checks. Generic adapters use a
+separate `OPENTAG_CLIENT_INGRESS_TOKEN` Bearer credential. When operator
+authentication is enabled without that credential, `/v1/client/events` is
+disabled instead of accepting anonymous events.
 
 ## Workspace Access
 
@@ -598,10 +598,24 @@ OPENTAG_LARK_TRANSPORT=http
 OPENTAG_LARK_DOMAIN=feishu
 OPENTAG_LARK_APP_ID=cli_xxx
 OPENTAG_LARK_APP_SECRET=xxx
+OPENTAG_LARK_VERIFICATION_TOKEN=xxx
+OPENTAG_LARK_ENCRYPT_KEY=xxx
 ```
 
 Use `OPENTAG_LARK_DOMAIN=lark` for `open.larksuite.com`, or
 `OPENTAG_LARK_BASE_URL=https://...` for a custom OpenAPI host.
+Register `https://your-host/v1/lark/events` as the event callback. When an
+Encrypt Key is configured, OpenTag verifies `X-Lark-Signature` against the
+untouched request body before decrypting it. Encrypted URL-verification
+challenges without signature headers are accepted only after AES decryption and
+a matching configured Verification Token. Normal events always require a valid
+signature when `OPENTAG_LARK_ENCRYPT_KEY` is set.
+Callback bodies are capped at 1 MiB by default; tune
+`OPENTAG_LARK_CALLBACK_MAX_BYTES` only when a documented Lark payload requires
+it.
+
+The callback implementation follows Feishu's documented
+[signature and event-decryption protocol](https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/encrypt-key-encryption-configuration-case?lang=en-US).
 HTTP mode downloads resources from incoming file/image/audio/video messages
 before enqueueing work. Managed image artifacts use Lark image messages when
 the format and 10 MB image limit permit it; other artifacts use the 30 MB file

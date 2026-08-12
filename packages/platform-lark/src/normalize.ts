@@ -117,7 +117,7 @@ export function normalizeLarkEvent(
     id: `lark:${threadExternalId}`,
     platform: 'lark',
     externalId: threadExternalId,
-    workspaceId: body.event?.sender?.tenant_key,
+    workspaceId: body.header?.tenant_key || body.event?.sender?.tenant_key,
     projectId: message.chat_id,
     channelId: message.chat_id,
     rootMessageId: rootId,
@@ -126,7 +126,7 @@ export function normalizeLarkEvent(
     title: `Lark ${message.chat_id}`,
     metadata: {
       chatType: message.chat_type,
-      eventId: body.event_id,
+      eventId: body.header?.event_id || body.event_id,
     },
   };
 
@@ -153,7 +153,7 @@ export function normalizeLarkEvent(
       ),
       metadata: {
         messageType: message.message_type,
-        eventId: body.event_id,
+        eventId: body.header?.event_id || body.event_id,
       },
     },
   };

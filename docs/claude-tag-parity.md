@@ -22,7 +22,8 @@ Reference behavior: [Claude Tag overview](https://claude.com/docs/claude-tag/ove
 | Proactive work | Scheduled routines and event-triggered workflow DAGs enter the same policy and run pipeline | Implemented locally |
 | Multi-client core | Native Lark, Telegram, and GitHub clients share routing, policy, memory, run, and delivery contracts | Implemented locally |
 | Self-service channel connection | Expiring single-use pairing invitations bind a chat or repository to a project | Implemented locally |
-| Production Lark proof | Real app scopes, encrypted callbacks, card patching, files, restart recovery, and operator deployment smoke | Not yet proven |
+| Secure Lark callback contract | Raw-body signature verification, AES-256-CBC decryption, encrypted URL challenge, v1/v2 token handling, replay window, and event-id deduplication | Implemented locally |
+| Production Lark proof | Real app scopes, live encrypted delivery, card patching, files, restart recovery, and operator deployment smoke | Not yet proven |
 | Hosted identity and access | Credential lifecycle, SSO/OIDC, deployment manifests, metrics, retention, and multi-replica provider sessions | Gap |
 | Broader integrations | Slack adapter, external MCP registry, watcher producers, and destructive-action approvals | Gap |
 
