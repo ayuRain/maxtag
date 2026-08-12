@@ -47,7 +47,8 @@ packages/executor-cli       Bounded, cancellable local CLI process runtime
 packages/executor-codex     Codex dry-run and local CLI executor
 packages/executor-claude    Claude dry-run and local CLI executor
 packages/runtime-host       Shared runtime host for independent workers
-packages/tools-github       GitHub tool contract placeholder
+packages/tool-broker        Per-run MCP capabilities, provider isolation, and tool audit
+packages/tools-github       GitHub artifact and grant contracts
 packages/memory             Global/workspace/project/thread memory stores
 packages/routines           Scheduled work, execution claims, and audit history
 packages/workflows          Durable DAG definitions, event triggers, node claims, and execution history
@@ -84,6 +85,12 @@ packages/ui-cards           Progress/checklist card models
 - Codex and Claude executors are selected per project. They support safe-by-default
   dry-runs or explicit local CLI execution, and the standalone worker resolves
   the same policy and runtime mode as the HTTP server.
+- Local Codex and Claude runs receive a short-lived MCP endpoint containing only
+  the current run's grants. The broker validates every input schema, enforces
+  resource allowlists and call/time/result limits, and records durable call and
+  result events. It currently provides scoped memory, approved GitHub repository
+  and issue reads, approved Lark document reads, and approved Base record queries.
+  GitHub and Lark credentials stay in the host process.
 - Delivery, run, inbound-event, binding, pairing, workspace-access, memory,
   routine, and workflow state defaults to a shared SQLite WAL database. Outbox,
   run, routine, and workflow-node claims plus memory revisions are transactional
@@ -445,12 +452,26 @@ OPENTAG_THREAD_CONTEXT_MAX_CHARS=40000
 ```
 
 OpenTag uses `<workspace root>/<project id>` when that directory exists, falling
-back to the configured root. Projects without `shell` or `github` grants run
-Codex read-only; Claude receives only repository read tools. The process runner
+back to the configured root. Only a `shell` grant enables workspace writes;
+GitHub access is brokered and does not implicitly expose Bash, SSH, `gh`, or a
+GitHub token. The process runner
 kills the full child process group on cancellation or timeout, bounds retained
 stdout/stderr, and filters service secrets such as Lark credentials from the CLI
 environment. Additional variables must be named explicitly through
 `OPENTAG_EXECUTOR_INHERIT_ENV`.
+
+The executor ignores inherited MCP configuration and injects one per-run
+`opentag` stdio proxy. Project policies must list allowed GitHub repositories,
+Lark document IDs, and Base app tokens. An empty resource allowlist denies the
+call even when the provider grant is enabled. Agents can read all four memory
+scopes by default, while autonomous writes are limited to project and thread
+memory; workspace/global promotion stays on the authenticated control plane.
+
+```bash
+OPENTAG_GITHUB_TOKEN=github_pat_...
+OPENTAG_TOOL_MAX_CALLS_PER_RUN=100
+OPENTAG_TOOL_CALL_TIMEOUT_MS=30000
+```
 
 When a CLI creates a user-facing file, the executor asks it to declare the
 project-relative path in its final response. OpenTag strips that declaration,

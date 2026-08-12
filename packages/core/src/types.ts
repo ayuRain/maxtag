@@ -265,10 +265,31 @@ export interface Artifact {
   metadata?: Record<string, unknown>;
 }
 
+export type ToolCallRisk = 'read' | 'write';
+export type ToolCallStatus = 'succeeded' | 'failed' | 'denied';
+
+export interface ToolCallAudit {
+  id: string;
+  name: string;
+  title: string;
+  grantKind: ToolGrantKind;
+  risk: ToolCallRisk;
+  arguments?: Record<string, unknown>;
+}
+
+export interface ToolResultAudit extends ToolCallAudit {
+  status: ToolCallStatus;
+  durationMs: number;
+  resultPreview?: string;
+  error?: string;
+}
+
 export type AgentRunEvent =
   | { type: 'progress'; item: ChecklistItem; message?: string }
   | { type: 'text_delta'; text: string }
   | { type: 'artifact'; artifact: Artifact }
+  | { type: 'tool_call'; call: ToolCallAudit }
+  | { type: 'tool_result'; call: ToolResultAudit }
   | { type: 'log'; level: 'debug' | 'info' | 'warn' | 'error'; message: string };
 
 export interface AgentRunRequest {

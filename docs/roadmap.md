@@ -59,7 +59,9 @@
   browser sessions, named multi-token principals, workspace-scoped collection
   and object authorization, owner/admin/viewer roles, authoritative audit actor,
   mutation CSRF protection, and a separate generic-client ingress credential.
-- Memory and GitHub tool contracts.
+- Per-run MCP tool broker with schema validation, scoped memory tools, approved
+  GitHub reads, approved Lark Docs/Base reads, host-side credentials, and durable
+  call/result audit.
 
 ## Phase 1: Lark Tag MVP
 
@@ -109,11 +111,16 @@
 
 ## Phase 3: Access Bundles
 
-- Channel/thread-level tool grants.
-- GitHub App installation grants.
-- Lark Docs/Base grants.
-- Secret indirection: executors receive capabilities, not raw global secrets.
-- Default-deny network and tool policy.
+- Extend project grants to optional channel/thread overrides; project resource
+  allowlists are implemented.
+- Add GitHub App installation token exchange on top of the implemented host-side
+  token provider.
+- Add explicitly write-gated Lark Docs/Base operations; read grants are
+  implemented.
+- Add operator-managed external MCP server registry without bypassing per-run
+  filtering; secret indirection is implemented for built-in providers.
+- Add container-level egress enforcement for provider-native shell/browser
+  tools; brokered tools already default deny unknown resources and operations.
 
 ## Phase 4: Proactivity
 

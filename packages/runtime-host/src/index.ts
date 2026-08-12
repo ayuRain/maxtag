@@ -48,6 +48,10 @@ import {
 import { FileWorkflowStore } from '@opentag/workflows';
 import { SqliteOpenTagStore } from '@opentag/storage-sqlite';
 import {
+  createOpenTagToolBroker,
+  type OpenTagToolBroker,
+} from '@opentag/tool-broker';
+import {
   WorkflowCoordinatorService,
   type WorkflowCoordinatorTickResult,
 } from './workflow-coordinator.js';
@@ -116,6 +120,12 @@ export interface RuntimeHostStorageConfig {
   busyTimeoutMs?: number;
 }
 
+export interface RuntimeHostToolBrokerConfig {
+  githubToken?: string;
+  maxCallsPerRun?: number;
+  callTimeoutMs?: number;
+}
+
 export interface RuntimeHostConfig {
   dataDir: string;
   workerId?: string;
@@ -125,6 +135,7 @@ export interface RuntimeHostConfig {
   routines?: RuntimeHostRoutineConfig;
   workflows?: RuntimeHostWorkflowConfig;
   storage?: RuntimeHostStorageConfig;
+  toolBroker?: RuntimeHostToolBrokerConfig;
   runControlPollMs?: number;
 }
 
@@ -226,6 +237,18 @@ function agentRunEventSummary(event: AgentRunEvent): {
       message: event.text,
     };
   }
+  if (event.type === 'tool_call') {
+    return {
+      message: `Calling ${event.call.title}`,
+      metadata: { call: event.call },
+    };
+  }
+  if (event.type === 'tool_result') {
+    return {
+      message: `${event.call.title} ${event.call.status}`,
+      metadata: { call: event.call },
+    };
+  }
   return {
     message: event.message,
     metadata: {
@@ -244,6 +267,8 @@ export class OpenTagWorkerHost {
   readonly threadConfigStore: FileThreadConfigStore;
   private readonly routineCommandService: RoutineCommandService;
   private readonly sqliteStorage?: SqliteOpenTagStore;
+  private readonly toolBroker: OpenTagToolBroker;
+  private toolLarkTransport?: HttpLarkTransport;
   private readonly activeRuns = new Map<string, AbortController>();
   private workerPass: Promise<AgentWorkerPassResult> | undefined;
 
@@ -290,6 +315,21 @@ export class OpenTagWorkerHost {
     this.memoryStore =
       this.sqliteStorage?.memoryStore ??
       new ScopedFileMemoryStore(path.join(config.dataDir, 'memory'));
+    this.toolBroker = createOpenTagToolBroker({
+      memory: this.memoryStore,
+      github: { token: config.toolBroker?.githubToken },
+      lark:
+        config.lark?.appId &&
+        config.lark?.appSecret &&
+        this.larkTransportStatus().mode === 'http'
+          ? {
+              request: (pathname, options) =>
+                this.larkOpenApiTransport().openApiRequest(pathname, options),
+            }
+          : undefined,
+      maxCallsPerRun: config.toolBroker?.maxCallsPerRun,
+      callTimeoutMs: config.toolBroker?.callTimeoutMs,
+    });
     this.routineStore =
       this.sqliteStorage?.routineStore ??
       new FileRoutineStore(path.join(config.dataDir, 'routines'));
@@ -815,6 +855,7 @@ export class OpenTagWorkerHost {
         config.artifactRoot || path.join(this.config.dataDir, 'artifacts'),
       maxArtifactBytes: config.maxArtifactBytes,
       maxArtifacts: config.maxArtifacts,
+      toolSessions: this.toolBroker,
     } as const;
     const codex = createCodexExecutor({
       ...common,
@@ -910,6 +951,19 @@ export class OpenTagWorkerHost {
       transport: dryRun,
       dryRun,
     };
+  }
+
+  private larkOpenApiTransport(): HttpLarkTransport {
+    if (!this.config.lark?.appId || !this.config.lark?.appSecret) {
+      throw new Error('lark_tool_provider_credentials_unavailable');
+    }
+    this.toolLarkTransport ??= new HttpLarkTransport({
+      appId: this.config.lark.appId,
+      appSecret: this.config.lark.appSecret,
+      domain: this.larkTransportStatus().domain,
+      baseUrl: this.config.lark.baseUrl,
+    });
+    return this.toolLarkTransport;
   }
 
   private createTelegramTransportForRun(): {

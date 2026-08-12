@@ -63,6 +63,17 @@ test('project policy persists and resolves scoped identity and access', async ()
       resolved.access.grants.filter((grant) => grant.kind === 'memory').length,
       4,
     );
+    assert.deepEqual(
+      resolved.access.grants.find((grant) => grant.id === 'memory:global')
+        .constraints.permissions,
+      ['read'],
+    );
+    assert.deepEqual(
+      resolved.access.grants.find(
+        (grant) => grant.id === 'memory:project:acme:payments',
+      ).constraints.permissions,
+      ['read', 'write'],
+    );
 
     const audit = await reloaded.listAudit();
     assert.equal(audit.length, 1);

@@ -14,6 +14,7 @@
     { "path": "packages/runtime-host" },
     { "path": "packages/routines" },
     { "path": "packages/storage-sqlite" },
+    { "path": "packages/tool-broker" },
     { "path": "packages/tools-github" },
     { "path": "packages/workflows" },
     { "path": "apps/server" },

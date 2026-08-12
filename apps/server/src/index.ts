@@ -102,6 +102,10 @@ import {
 } from '@opentag/runtime-host';
 import { SqliteOpenTagStore } from '@opentag/storage-sqlite';
 import {
+  OPENTAG_TOOL_CATALOG,
+  createOpenTagToolBroker,
+} from '@opentag/tool-broker';
+import {
   FileWorkflowStore,
   type UpsertWorkflowInput,
   type WorkflowDestination,
@@ -334,6 +338,26 @@ const deliveryStore =
 const memoryStore =
   sqliteStorage?.memoryStore ??
   new ScopedFileMemoryStore(path.join(dataDir, 'memory'));
+const toolBroker = createOpenTagToolBroker({
+  memory: memoryStore,
+  github: {
+    token:
+      process.env.OPENTAG_GITHUB_TOKEN ||
+      process.env.GH_TOKEN ||
+      process.env.GITHUB_TOKEN,
+  },
+  lark:
+    larkAppId && larkAppSecret && larkTransportStatus().mode === 'http'
+      ? {
+          request: (pathname, options) =>
+            larkResourceTransport().openApiRequest(pathname, options),
+        }
+      : undefined,
+  maxCallsPerRun: optionalNumberEnvironmentValue(
+    'OPENTAG_TOOL_MAX_CALLS_PER_RUN',
+  ),
+  callTimeoutMs: optionalNumberEnvironmentValue('OPENTAG_TOOL_CALL_TIMEOUT_MS'),
+});
 const routineStore =
   sqliteStorage?.routineStore ??
   new FileRoutineStore(path.join(dataDir, 'routines'));
@@ -527,6 +551,12 @@ const capabilityManifest = {
       agentdock: 'inbound workspace files and outgoing file/image tools',
       opentag: 'isolated managed inputs, native Lark/Telegram transfer, durable artifact events, and authenticated downloads',
       status: 'ready',
+    },
+    {
+      capability: 'Scoped tools',
+      agentdock: 'runner MCP plugins and user-configured MCP servers',
+      opentag: 'per-run MCP broker with resource allowlists, host credentials, validation, limits, and durable call audit',
+      status: 'partial',
     },
     {
       capability: 'Inbound idempotency',
@@ -880,6 +910,7 @@ async function sendFileResponse(
   const content = await readFile(filePath);
   response.writeHead(200, {
     'content-type': contentType,
+    'cache-control': 'no-store',
     'content-security-policy': [
       "default-src 'self'",
       "base-uri 'none'",
@@ -1101,6 +1132,14 @@ async function workspaceSnapshot(
         lastRunAt: projectRuns[0]?.updatedAt,
         accessMode: accessPolicy?.mode ?? 'open',
         memberCount: projectMembers.length,
+        toolCount: project.grants.reduce(
+          (total, grant) =>
+            total +
+            (OPENTAG_TOOL_CATALOG.find(
+              (entry) => entry.grantKind === grant.kind,
+            )?.toolCount ?? 0),
+          0,
+        ),
       };
     }),
     accessSummary: {
@@ -1111,9 +1150,24 @@ async function workspaceSnapshot(
         (policy) => policy.mode !== 'open',
       ).length,
     },
-    availableTools: Object.entries(PROJECT_TOOL_LABELS).map(([id, label]) => ({
-      id,
-      label,
+    availableTools: OPENTAG_TOOL_CATALOG.map((tool) => ({
+      id: tool.grantKind,
+      label: tool.label,
+      description: tool.description,
+      toolCount: tool.toolCount,
+      constraints: tool.constraints,
+      providerStatus:
+        tool.grantKind === 'lark-docs' || tool.grantKind === 'lark-base'
+          ? larkAppId && larkAppSecret && larkTransportStatus().mode === 'http'
+            ? 'ready'
+            : 'credentials-required'
+          : tool.grantKind === 'github'
+            ? process.env.OPENTAG_GITHUB_TOKEN ||
+              process.env.GH_TOKEN ||
+              process.env.GITHUB_TOKEN
+              ? 'ready'
+              : 'public-only'
+            : 'ready',
     })),
     executors: [
       { id: 'codex', label: 'Codex', mode: executorMode },
@@ -1135,6 +1189,7 @@ function createRuntimeForPlatform(platform: PlatformAdapter): OpenTagRuntime {
     artifactRoot: executorArtifactRoot,
     maxArtifactBytes: executorMaxArtifactBytes,
     maxArtifacts: executorMaxArtifacts,
+    toolSessions: toolBroker,
   } as const;
   const codex = createCodexExecutor({
     ...common,
@@ -1246,13 +1301,9 @@ function stringArrayValue(
     .filter(Boolean);
 }
 
-const PROJECT_TOOL_LABELS: Record<string, string> = {
-  github: 'GitHub',
-  'lark-docs': 'Lark Docs',
-  'lark-base': 'Lark Base',
-  browser: 'Browser',
-  shell: 'Shell',
-};
+const PROJECT_TOOL_LABELS: Record<string, string> = Object.fromEntries(
+  OPENTAG_TOOL_CATALOG.map((tool) => [tool.grantKind, tool.label]),
+);
 
 function coerceProjectPolicyInput(
   body: Record<string, unknown>,
@@ -1269,12 +1320,38 @@ function coerceProjectPolicyInput(
   const tools = stringArrayValue(body, 'tools');
   const unsupportedTool = tools?.find((tool) => !PROJECT_TOOL_LABELS[tool]);
   if (unsupportedTool) return { error: `unsupported_tool:${unsupportedTool}` };
-  const grants: ToolGrant[] | undefined = tools?.map((tool) => ({
-    id: `project:${workspaceId}:${projectId}:${tool}`,
-    kind: tool as ToolGrantKind,
-    scope: 'project',
-    label: PROJECT_TOOL_LABELS[tool],
-  }));
+  const rawConstraints = recordValue(body, 'toolConstraints') ?? {};
+  const constraintKeys: Record<string, string[]> = {
+    github: ['repositories'],
+    'lark-docs': ['documentIds'],
+    'lark-base': ['appTokens'],
+  };
+  const grants: ToolGrant[] | undefined = [];
+  for (const tool of tools ?? []) {
+    const raw = recordValue(rawConstraints, tool) ?? {};
+    const allowedKeys = constraintKeys[tool] ?? [];
+    const unsupportedConstraint = Object.keys(raw).find(
+      (key) => !allowedKeys.includes(key),
+    );
+    if (unsupportedConstraint) {
+      return { error: `unsupported_tool_constraint:${tool}:${unsupportedConstraint}` };
+    }
+    const constraints: Record<string, unknown> = {};
+    for (const key of allowedKeys) {
+      const values = stringArrayValue(raw, key) ?? [];
+      if (values.length > 100 || values.some((value) => value.length > 200)) {
+        return { error: `invalid_tool_constraint:${tool}:${key}` };
+      }
+      constraints[key] = [...new Set(values)];
+    }
+    grants.push({
+      id: `project:${workspaceId}:${projectId}:${tool}`,
+      kind: tool as ToolGrantKind,
+      scope: 'project',
+      label: PROJECT_TOOL_LABELS[tool],
+      constraints: Object.keys(constraints).length ? constraints : undefined,
+    });
+  }
 
   const networkMode = stringValue(body, 'networkMode');
   if (
@@ -2491,6 +2568,18 @@ function agentRunEventSummary(event: AgentRunEvent): {
   if (event.type === 'text_delta') {
     return {
       message: event.text,
+    };
+  }
+  if (event.type === 'tool_call') {
+    return {
+      message: `Calling ${event.call.title}`,
+      metadata: { call: event.call },
+    };
+  }
+  if (event.type === 'tool_result') {
+    return {
+      message: `${event.call.title} ${event.call.status}`,
+      metadata: { call: event.call },
     };
   }
   return {

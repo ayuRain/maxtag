@@ -185,9 +185,33 @@ test(
         workspaceId: 'dev-workspace',
         projectId: 'auth-test',
         name: 'Authenticated project',
+        tools: ['github', 'lark-docs', 'lark-base'],
+        toolConstraints: {
+          github: { repositories: ['acme/payments'] },
+          'lark-docs': { documentIds: ['dox-approved'] },
+          'lark-base': { appTokens: ['base-approved'] },
+        },
       }),
     });
     assert.equal(sessionWrite.status, 200);
+
+    const configuredWorkspace = await fetch(`${baseUrl}/v1/workspace`, {
+      headers: { cookie },
+    });
+    const configuredSnapshot = await configuredWorkspace.json();
+    const configuredProject = configuredSnapshot.projects.find(
+      (project) => project.projectId === 'auth-test',
+    );
+    assert.equal(configuredProject.toolCount, 4);
+    assert.deepEqual(
+      configuredProject.grants.find((grant) => grant.kind === 'github').constraints,
+      { repositories: ['acme/payments'] },
+    );
+    assert.ok(
+      configuredSnapshot.availableTools.some(
+        (tool) => tool.id === 'lark-docs' && tool.toolCount === 1,
+      ),
+    );
 
     const bearerWrite = await fetch(`${baseUrl}/v1/projects`, {
       method: 'POST',

@@ -17,6 +17,7 @@
     { "path": "../platform-telegram" },
     { "path": "../routines" },
     { "path": "../storage-sqlite" },
+    { "path": "../tool-broker" },
     { "path": "../workflows" }
   ]
 }

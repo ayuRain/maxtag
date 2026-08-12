@@ -17,6 +17,9 @@ clients of the same thread-agent core.
 - `ProgressSurface`: the best available UI for that client. Lark uses cards;
   Telegram can use edited receipts; GitHub can use comments and checklists.
 - `AccessBundle`: thread-level tool and credential grants.
+- `OpenTagToolBroker`: a per-run capability endpoint that turns an access bundle
+  into a filtered MCP tool list and durable call audit without giving service
+  credentials to the executor.
 - `ScopedMemorySnapshot`: global, workspace, project, and thread memory loaded in
   deterministic order.
 - `MemoryDocument` and `MemoryRevision`: the current scoped snapshot plus an
@@ -46,7 +49,8 @@ clients of the same thread-agent core.
 - Manual and typed-event workflows resolve the same project policy, executor,
   scoped memory, run queue, and client destination as an inbound conversation.
 - Slack: planned.
-- GitHub: planned as both a tool provider and a source client.
+- GitHub: repository and issue reads are a brokered tool provider; GitHub
+  comments remain planned as a source client.
 
 The goal is not to clone AgentDock feature-for-feature. AgentDock is the mature
 workbench; OpenTag is the shared-thread product layer that can reuse selected

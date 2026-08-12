@@ -20,6 +20,30 @@ export interface CliExecutorOptions {
   artifactRoot?: string;
   maxArtifactBytes?: number;
   maxArtifacts?: number;
+  toolSessions?: CliToolSessionFactory;
+}
+
+export interface CliMcpServerConfig {
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+export interface CliToolDescriptor {
+  name: string;
+  title: string;
+  risk: 'read' | 'write';
+}
+
+export interface CliToolSession {
+  mcp: CliMcpServerConfig;
+  tools: CliToolDescriptor[];
+  close(): Promise<void>;
+}
+
+export interface CliToolSessionFactory {
+  open(request: AgentRunRequest): Promise<CliToolSession | undefined>;
 }
 
 export interface CollectedCliArtifacts {
@@ -588,9 +612,7 @@ export function createCliEnvironment(input: {
     input.provider === 'codex'
       ? ['OPENAI_', 'CODEX_']
       : ['ANTHROPIC_', 'CLAUDE_'];
-  if (input.request.access.grants.some((grant) => grant.kind === 'github')) {
-    names.add('GH_TOKEN');
-    names.add('GITHUB_TOKEN');
+  if (input.request.access.grants.some((grant) => grant.kind === 'shell')) {
     names.add('SSH_AUTH_SOCK');
     names.add('GIT_SSH_COMMAND');
   }

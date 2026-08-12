@@ -50,6 +50,8 @@ export type AgentRunEventType =
   | 'progress'
   | 'text_delta'
   | 'artifact'
+  | 'tool_call'
+  | 'tool_result'
   | 'log'
   | 'completed'
   | 'failed'

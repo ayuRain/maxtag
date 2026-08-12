@@ -759,6 +759,7 @@ h3 {
 .state-pill.ready,
 .state-pill.active,
 .state-pill.completed,
+.state-pill.succeeded,
 .state-pill.delivered,
 .state-pill.processed,
 .state-pill.always,
@@ -781,6 +782,7 @@ h3 {
 }
 
 .state-pill.failed,
+.state-pill.denied,
 .state-pill.suspended,
 .state-pill.rejected {
   background: var(--red-soft);
@@ -1014,32 +1016,74 @@ input:disabled {
 
 .tool-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
 .tool-option {
   min-width: 0;
-  min-height: 46px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 0 10px;
-  display: flex;
-  align-items: center;
+  padding: 11px;
+  display: grid;
+  align-content: start;
   gap: 8px;
   color: var(--muted);
-  font-size: 11px;
+  background: var(--surface);
+}
+
+.tool-option:has(.tool-option-head input:checked) {
+  border-color: rgba(49, 95, 199, 0.55);
+  background: var(--accent-soft);
+}
+
+.tool-option-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
   cursor: pointer;
 }
 
-.tool-option:has(input:checked) {
-  border-color: rgba(49, 95, 199, 0.55);
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 700;
+.tool-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
 }
 
-.tool-option input,
+.tool-option-copy strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.tool-option-copy small,
+.tool-option-description,
+.tool-constraint span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.tool-option-description {
+  min-height: 28px;
+}
+
+.tool-constraints {
+  display: grid;
+  gap: 7px;
+}
+
+.tool-constraint {
+  display: grid;
+  gap: 4px;
+}
+
+.tool-constraint input {
+  width: 100%;
+  height: 32px;
+  background: var(--surface);
+}
+
+.tool-option-head input,
 .toggle-field input {
   width: 15px;
   height: 15px;
@@ -1659,7 +1703,8 @@ input:disabled {
   height: 32px;
 }
 
-.run-followups {
+.run-followups,
+.run-tools {
   display: grid;
   gap: 0;
   margin: 14px 0;
@@ -1673,7 +1718,8 @@ input:disabled {
   border-top: 1px solid var(--line);
 }
 
-.run-files h3 {
+.run-files h3,
+.run-tools h3 {
   margin: 12px 0 6px;
   font-size: 10px;
 }
@@ -1702,6 +1748,34 @@ input:disabled {
 .run-file-row small {
   color: var(--muted);
   font-size: 9px;
+}
+
+.run-tool-row {
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.run-tool-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.run-tool-row strong {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.run-tool-row small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .run-file-download {
@@ -2094,7 +2168,7 @@ pre {
   }
 
   .tool-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .binding-editor {
@@ -2299,13 +2373,14 @@ pre {
   }
 
   .nav {
-    overflow-x: auto;
-    scrollbar-width: none;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    overflow: visible;
   }
 
   .nav-item {
-    min-width: 82px;
-    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
     justify-content: center;
     padding: 0 7px;
     font-size: 11px;

@@ -22,6 +22,7 @@
     "@opentag/routines": "0.1.0",
     "@opentag/runtime-host": "0.1.0",
     "@opentag/storage-sqlite": "0.1.0",
+    "@opentag/tool-broker": "0.1.0",
     "@opentag/workflows": "0.1.0"
   }
 }

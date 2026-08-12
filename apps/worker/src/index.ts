@@ -133,6 +133,14 @@ async function main(): Promise<void> {
       databasePath: process.env.OPENTAG_SQLITE_PATH,
       busyTimeoutMs: optionalNumberEnv('OPENTAG_SQLITE_BUSY_TIMEOUT_MS'),
     },
+    toolBroker: {
+      githubToken:
+        process.env.OPENTAG_GITHUB_TOKEN ||
+        process.env.GH_TOKEN ||
+        process.env.GITHUB_TOKEN,
+      maxCallsPerRun: optionalNumberEnv('OPENTAG_TOOL_MAX_CALLS_PER_RUN'),
+      callTimeoutMs: optionalNumberEnv('OPENTAG_TOOL_CALL_TIMEOUT_MS'),
+    },
     runControlPollMs: optionalNumberEnv('OPENTAG_RUN_CONTROL_POLL_MS'),
   });
 

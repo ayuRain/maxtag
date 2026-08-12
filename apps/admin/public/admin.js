@@ -716,7 +716,7 @@ function renderOverviewProjects() {
       element(
         'span',
         '',
-        `${statusLabel(project.identity?.defaultExecutorId)} / ${project.grants?.length || 0} tools`,
+        `${statusLabel(project.identity?.defaultExecutorId)} / ${project.toolCount || 0} tools`,
       ),
       element(
         'span',
@@ -946,18 +946,88 @@ function renderOverviewRuns() {
 
 function renderToolGrid(project) {
   const root = $('#tool-grid');
-  const selected = new Set((project?.grants || []).map((grant) => grant.kind));
+  const grants = new Map(
+    (project?.grants || []).map((grant) => [grant.kind, grant]),
+  );
   root.replaceChildren();
   for (const tool of state.workspace?.availableTools || []) {
-    const label = element('label', 'tool-option');
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.value = tool.id;
-    input.checked = selected.has(tool.id);
-    input.addEventListener('change', markProjectDirty);
-    label.append(input, element('span', '', tool.label));
-    root.append(label);
+    const grant = grants.get(tool.id);
+    const card = element('div', 'tool-option');
+    const head = element('label', 'tool-option-head');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = tool.id;
+    checkbox.checked = Boolean(grant);
+    const copy = element('span', 'tool-option-copy');
+    copy.append(
+      element('strong', '', tool.label),
+      element(
+        'small',
+        '',
+        `${tool.toolCount || 0} tools / ${statusLabel(tool.providerStatus)}`,
+      ),
+    );
+    head.append(checkbox, copy);
+    card.append(head);
+
+    const description = element('p', 'tool-option-description', tool.description || '');
+    card.append(description);
+    if (tool.constraints?.length) {
+      const constraints = element('div', 'tool-constraints');
+      for (const constraint of tool.constraints) {
+        const field = element('label', 'tool-constraint');
+        field.append(element('span', '', constraint.label));
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = constraint.placeholder || '';
+        input.spellcheck = false;
+        input.dataset.toolKind = tool.id;
+        input.dataset.constraintKey = constraint.key;
+        const current = grant?.constraints?.[constraint.key];
+        input.value = Array.isArray(current)
+          ? current
+              .map((value) =>
+                typeof value === 'string'
+                  ? value
+                  : value?.owner && value?.repo
+                    ? `${value.owner}/${value.repo}`
+                    : '',
+              )
+              .filter(Boolean)
+              .join(', ')
+          : '';
+        input.disabled = !checkbox.checked;
+        input.addEventListener('input', markProjectDirty);
+        field.append(input);
+        constraints.append(field);
+      }
+      card.append(constraints);
+    }
+    checkbox.addEventListener('change', () => {
+      for (const input of card.querySelectorAll('.tool-constraint input')) {
+        input.disabled = !checkbox.checked;
+      }
+      markProjectDirty();
+    });
+    root.append(card);
   }
+}
+
+function projectToolConstraints() {
+  const constraints = {};
+  for (const checkbox of $$('#tool-grid input[type="checkbox"]:checked')) {
+    const values = {};
+    for (const input of $$(
+      `#tool-grid input[data-tool-kind="${CSS.escape(checkbox.value)}"]`,
+    )) {
+      values[input.dataset.constraintKey] = input.value
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean);
+    }
+    constraints[checkbox.value] = values;
+  }
+  return constraints;
 }
 
 function fillExecutorOptions(selected) {
@@ -1094,7 +1164,10 @@ async function saveProject(event) {
         agentName: $('#agent-name').value.trim() || 'OpenTag',
         instructions: $('#agent-instructions').value,
         executorId: $('#agent-executor').value,
-        tools: $$('#tool-grid input:checked').map((input) => input.value),
+        tools: $$('#tool-grid input[type="checkbox"]:checked').map(
+          (input) => input.value,
+        ),
+        toolConstraints: projectToolConstraints(),
         networkMode: $('#network-mode').value,
         allowedHosts: $('#allowed-hosts')
           .value.split(',')
@@ -2385,8 +2458,42 @@ function renderRunDetail(run, events, steering = [], sessions = [], artifacts = 
     detail.append(followUps);
   }
 
+  const toolResults = events.filter((event) => event.type === 'tool_result');
+  if (toolResults.length) {
+    const tools = element('div', 'run-tools');
+    tools.append(element('h3', '', 'Tools'));
+    for (const event of toolResults) {
+      const call = event.metadata?.call || {};
+      const row = element('div', 'run-tool-row');
+      const copy = element('div');
+      const argumentSummary = Object.entries(call.arguments || {})
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .join(' / ');
+      copy.append(
+        element('strong', '', call.title || call.name || event.message || 'Tool call'),
+        element(
+          'small',
+          '',
+          [
+            statusLabel(call.grantKind),
+            statusLabel(call.risk),
+            Number.isFinite(call.durationMs) ? `${call.durationMs} ms` : '',
+            argumentSummary,
+          ]
+            .filter(Boolean)
+            .join(' / '),
+        ),
+      );
+      row.append(copy, statePill(call.status || 'failed'));
+      tools.append(row);
+    }
+    detail.append(tools);
+  }
+
   const timeline = element('div', 'timeline');
-  for (const event of events) {
+  for (const event of events.filter(
+    (item) => item.type !== 'tool_call' && item.type !== 'tool_result',
+  )) {
     const row = element('div', 'timeline-row');
     const eventCopy = element('div');
     eventCopy.append(

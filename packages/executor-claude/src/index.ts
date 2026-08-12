@@ -15,6 +15,7 @@ import {
   runCliCommand,
   type CliExecutorOptions,
   type CliStdinWriter,
+  type CliToolSession,
 } from '@opentag/executor-cli';
 
 export interface ClaudeExecutorOptions extends CliExecutorOptions {
@@ -33,7 +34,7 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
-function claudeTools(request: AgentRunRequest): {
+function claudeTools(request: AgentRunRequest, toolSession?: CliToolSession): {
   available: string[];
   allowed: string[];
 } {
@@ -45,10 +46,6 @@ function claudeTools(request: AgentRunRequest): {
       available.add(tool);
       allowed.add(tool);
     }
-  } else if (kinds.has('github')) {
-    available.add('Bash');
-    allowed.add('Bash(git *)');
-    allowed.add('Bash(gh *)');
   }
   if (
     kinds.has('browser') &&
@@ -59,7 +56,22 @@ function claudeTools(request: AgentRunRequest): {
       allowed.add(tool);
     }
   }
+  if (toolSession) allowed.add(`mcp__${toolSession.mcp.name}__*`);
   return { available: [...available], allowed: [...allowed] };
+}
+
+export function claudeMcpConfig(session?: CliToolSession): string {
+  return JSON.stringify({
+    mcpServers: session
+      ? {
+          [session.mcp.name]: {
+            command: session.mcp.command,
+            args: session.mcp.args,
+            env: session.mcp.env,
+          },
+        }
+      : {},
+  });
 }
 
 function assistantText(event: JsonRecord): string | undefined {
@@ -132,7 +144,8 @@ export class ClaudeExecutor implements Executor {
       this.options.workspaceRoot,
       request,
     );
-    const tools = claudeTools(request);
+    const toolSession = await this.options.toolSessions?.open(request);
+    const tools = claudeTools(request, toolSession);
     const providerSession =
       this.options.sessionMode !== 'transcript' &&
       request.providerSession?.providerId === this.id
@@ -154,6 +167,9 @@ export class ClaudeExecutor implements Executor {
       tools.available.join(','),
       '--allowedTools',
       tools.allowed.join(','),
+      '--mcp-config',
+      claudeMcpConfig(toolSession),
+      '--strict-mcp-config',
       '--append-system-prompt',
       [
         buildAgentSystemPrompt(request),
@@ -175,7 +191,7 @@ export class ClaudeExecutor implements Executor {
         id: 'claude-cli',
         label: 'Run Claude CLI',
         status: 'running',
-        detail: `${resumeSessionId ? 'resume session' : 'new turn'} / ${tools.allowed.length} allowed tool rule(s) / ${cwd}`,
+        detail: `${resumeSessionId ? 'resume session' : 'new turn'} / ${toolSession?.tools.length ?? 0} brokered tools / ${cwd}`,
       },
     });
 
@@ -423,6 +439,7 @@ export class ClaudeExecutor implements Executor {
       steeringAbort.abort();
       stdinWriter?.end();
       request.abortSignal?.removeEventListener('abort', abortSteering);
+      await toolSession?.close();
     }
     if (resumeSessionId && providerSession && !recordedProviderSession) {
       await providerSession.record(resumeSessionId);

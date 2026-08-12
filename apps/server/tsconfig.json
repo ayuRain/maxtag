@@ -17,6 +17,7 @@
     { "path": "../../packages/routines" },
     { "path": "../../packages/runtime-host" },
     { "path": "../../packages/storage-sqlite" },
+    { "path": "../../packages/tool-broker" },
     { "path": "../../packages/workflows" }
   ],
   "include": ["src/**/*.ts"]

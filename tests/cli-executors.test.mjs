@@ -4,8 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createCodexExecutor } from '@opentag/executor-codex';
-import { createClaudeExecutor } from '@opentag/executor-claude';
+import {
+  codexMcpConfigArgs,
+  createCodexExecutor,
+} from '@opentag/executor-codex';
+import {
+  claudeMcpConfig,
+  createClaudeExecutor,
+} from '@opentag/executor-claude';
 import {
   CliExecutionError,
   createCliEnvironment,
@@ -96,6 +102,35 @@ function providerSession(providerId, sessionId) {
       },
       async invalidate(reason) {
         invalidations.push(reason);
+      },
+    },
+  };
+}
+
+function fakeToolSessions() {
+  const state = { opened: 0, closed: 0 };
+  const session = {
+    mcp: {
+      name: 'opentag',
+      command: process.execPath,
+      args: ['/tmp/opentag-mcp-proxy.mjs'],
+      env: {
+        OPENTAG_TOOL_BROKER_URL: 'http://127.0.0.1:43210',
+        OPENTAG_TOOL_BROKER_TOKEN: 'per-run-capability',
+      },
+    },
+    tools: [{ name: 'memory_get', title: 'Read scoped memory', risk: 'read' }],
+    async close() {
+      state.closed += 1;
+    },
+  };
+  return {
+    state,
+    session,
+    factory: {
+      async open() {
+        state.opened += 1;
+        return session;
       },
     },
   };
@@ -231,6 +266,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10 }
   const originalSecret = process.env.OPENTAG_LARK_APP_SECRET;
   process.env.OPENTAG_LARK_APP_SECRET = 'must-not-leak';
   try {
+    const broker = fakeToolSessions();
     const session = providerSession('codex');
     const input = request({ providerSession: session.value });
     const executor = createCodexExecutor({
@@ -239,6 +275,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10 }
       commandPrefixArgs: [fakeCli],
       workspaceRoot: files.root,
       timeoutMs: 2_000,
+      toolSessions: broker.factory,
     });
     const result = await executor.run(input.value);
     const detail = JSON.parse(result.summary);
@@ -248,7 +285,14 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10 }
     assert.equal(detail.hasPrompt, true);
     assert.ok(detail.args.includes('--sandbox'));
     assert.ok(detail.args.includes('read-only'));
+    assert.ok(detail.args.includes('--ignore-user-config'));
+    assert.ok(
+      detail.args.some((value) =>
+        value.startsWith('mcp_servers.opentag.command='),
+      ),
+    );
     assert.equal(detail.args.includes('--ephemeral'), false);
+    assert.deepEqual(broker.state, { opened: 1, closed: 1 });
     assert.deepEqual(session.records, ['thread-1']);
     assert.ok(
       input.events.some(
@@ -448,6 +492,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'Claude
       defaultExecutorId: 'claude',
     },
   });
+  const broker = fakeToolSessions();
   const executor = createClaudeExecutor({
     mode: 'local-cli',
     command: process.execPath,
@@ -455,10 +500,12 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'Claude
     workspaceRoot: files.root,
     timeoutMs: 2_000,
     maxBudgetUsd: 0.05,
+    toolSessions: broker.factory,
   });
   const result = await executor.run(input.value);
 
   assert.equal(result.summary, 'Claude handled the project.');
+  assert.deepEqual(broker.state, { opened: 1, closed: 1 });
   assert.equal(
     input.events
       .filter((event) => event.type === 'text_delta')
@@ -586,16 +633,26 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'Initia
   );
   const events = [];
   const acknowledgements = [];
+  let resolveCompletion;
+  const completionSeen = new Promise((resolve) => {
+    resolveCompletion = resolve;
+  });
   let delivered = false;
   const input = request({
     async onEvent(event) {
       events.push(event);
       if (
+        event.type === 'log' &&
+        event.message.includes('Claude turn completed')
+      ) {
+        resolveCompletion();
+      }
+      if (
         event.type === 'progress' &&
         event.item.id === 'claude-steering-steer-race' &&
         event.item.status === 'running'
       ) {
-        await delay(50);
+        await completionSeen;
       }
     },
     steering: {
@@ -672,6 +729,67 @@ test('CLI environment only includes provider auth and explicit inherited keys', 
       ['OPENAI_API_KEY', original.openai],
       ['OPENTAG_LARK_APP_SECRET', original.lark],
       ['OPENTAG_TEST_CUSTOM', original.custom],
+    ]) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test('GitHub credentials stay in the host and MCP configs are run-scoped', () => {
+  const base = request().value;
+  const input = request({
+    access: {
+      ...base.access,
+      grants: [
+        {
+          id: 'github',
+          kind: 'github',
+          scope: 'project',
+          label: 'GitHub',
+          constraints: { repositories: ['acme/payments'] },
+        },
+      ],
+    },
+  });
+  const original = {
+    gh: process.env.GH_TOKEN,
+    github: process.env.GITHUB_TOKEN,
+    ssh: process.env.SSH_AUTH_SOCK,
+  };
+  process.env.GH_TOKEN = 'host-gh-token';
+  process.env.GITHUB_TOKEN = 'host-github-token';
+  process.env.SSH_AUTH_SOCK = '/tmp/host-agent.sock';
+  try {
+    const env = createCliEnvironment({ provider: 'codex', request: input.value });
+    assert.equal(env.GH_TOKEN, undefined);
+    assert.equal(env.GITHUB_TOKEN, undefined);
+    assert.equal(env.SSH_AUTH_SOCK, undefined);
+
+    const broker = fakeToolSessions();
+    const codexArgs = codexMcpConfigArgs(broker.session);
+    assert.ok(
+      codexArgs.some((value) =>
+        value.includes('OPENTAG_TOOL_BROKER_TOKEN="per-run-capability"'),
+      ),
+    );
+    assert.deepEqual(JSON.parse(claudeMcpConfig(broker.session)), {
+      mcpServers: {
+        opentag: {
+          command: process.execPath,
+          args: ['/tmp/opentag-mcp-proxy.mjs'],
+          env: {
+            OPENTAG_TOOL_BROKER_URL: 'http://127.0.0.1:43210',
+            OPENTAG_TOOL_BROKER_TOKEN: 'per-run-capability',
+          },
+        },
+      },
+    });
+  } finally {
+    for (const [name, value] of [
+      ['GH_TOKEN', original.gh],
+      ['GITHUB_TOKEN', original.github],
+      ['SSH_AUTH_SOCK', original.ssh],
     ]) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;

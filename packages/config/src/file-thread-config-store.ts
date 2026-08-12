@@ -154,24 +154,33 @@ function memoryGrants(input: {
   projectId: string;
 }): ToolGrant[] {
   return [
-    { id: 'memory:global', kind: 'memory', scope: 'global', label: 'Global memory' },
+    {
+      id: 'memory:global',
+      kind: 'memory',
+      scope: 'global',
+      label: 'Global memory',
+      constraints: { permissions: ['read'] },
+    },
     {
       id: `memory:workspace:${input.workspaceId}`,
       kind: 'memory',
       scope: 'workspace',
       label: 'Workspace memory',
+      constraints: { permissions: ['read'] },
     },
     {
       id: `memory:project:${input.projectId}`,
       kind: 'memory',
       scope: 'project',
       label: 'Project memory',
+      constraints: { permissions: ['read', 'write'] },
     },
     {
       id: `memory:thread:${input.thread.id}`,
       kind: 'memory',
       scope: 'thread',
       label: 'Thread memory',
+      constraints: { permissions: ['read', 'write'] },
     },
   ];
 }

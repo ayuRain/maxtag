@@ -183,6 +183,24 @@ export class HttpLarkTransport implements LarkTransport {
     this.now = options.now ?? (() => new Date());
   }
 
+  async openApiRequest<T>(
+    pathname: string,
+    options: {
+      method: 'GET' | 'POST';
+      query?: Record<string, string | number | boolean | undefined>;
+      body?: Record<string, unknown>;
+      signal?: AbortSignal;
+    },
+  ): Promise<T> {
+    if (!pathname.startsWith('/open-apis/') || pathname.includes('://')) {
+      throw new LarkApiError({ message: 'Invalid Lark OpenAPI pathname.' });
+    }
+    return this.rawRequest<T>(pathname, {
+      ...options,
+      authenticated: true,
+    });
+  }
+
   async sendText(input: {
     chatId: string;
     text: string;
@@ -486,7 +504,9 @@ export class HttpLarkTransport implements LarkTransport {
     options: {
       method: string;
       authenticated: boolean;
+      query?: Record<string, string | number | boolean | undefined>;
       body?: Record<string, unknown>;
+      signal?: AbortSignal;
     },
   ): Promise<T> {
     const headers: Record<string, string> = {
@@ -496,10 +516,15 @@ export class HttpLarkTransport implements LarkTransport {
       headers.authorization = `Bearer ${await this.tenantAccessToken()}`;
     }
 
-    const response = await this.fetchImpl(`${this.baseUrl}${pathname}`, {
+    const url = new URL(`${this.baseUrl}${pathname}`);
+    for (const [key, value] of Object.entries(options.query ?? {})) {
+      if (value !== undefined) url.searchParams.set(key, String(value));
+    }
+    const response = await this.fetchImpl(url.toString(), {
       method: options.method,
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: options.signal,
     });
     return this.parseJsonResponse<T>(response);
   }

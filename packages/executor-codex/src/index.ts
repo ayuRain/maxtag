@@ -8,6 +8,7 @@ import {
   resolveProjectWorkingDirectory,
   runCliCommand,
   type CliExecutorOptions,
+  type CliToolSession,
 } from '@opentag/executor-cli';
 
 export interface CodexExecutorOptions extends CliExecutorOptions {}
@@ -51,9 +52,25 @@ function agentMessage(item: JsonRecord): string | undefined {
 }
 
 function hasWriteGrant(request: AgentRunRequest): boolean {
-  return request.access.grants.some(
-    (grant) => grant.kind === 'shell' || grant.kind === 'github',
-  );
+  return request.access.grants.some((grant) => grant.kind === 'shell');
+}
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+export function codexMcpConfigArgs(session: CliToolSession): string[] {
+  const prefix = `mcp_servers.${session.mcp.name}`;
+  const args = [
+    '-c',
+    `${prefix}.command=${tomlString(session.mcp.command)}`,
+    '-c',
+    `${prefix}.args=${JSON.stringify(session.mcp.args)}`,
+  ];
+  for (const [name, value] of Object.entries(session.mcp.env)) {
+    args.push('-c', `${prefix}.env.${name}=${tomlString(value)}`);
+  }
+  return args;
 }
 
 export class CodexExecutor implements Executor {
@@ -84,6 +101,7 @@ export class CodexExecutor implements Executor {
       this.options.workspaceRoot,
       request,
     );
+    const toolSession = await this.options.toolSessions?.open(request);
     const sandbox = hasWriteGrant(request) ? 'workspace-write' : 'read-only';
     const providerSession =
       this.options.sessionMode !== 'transcript' &&
@@ -94,6 +112,7 @@ export class CodexExecutor implements Executor {
     const args = [
       ...(this.options.commandPrefixArgs ?? []),
       'exec',
+      '--ignore-user-config',
       '--json',
       '--color',
       'never',
@@ -112,6 +131,7 @@ export class CodexExecutor implements Executor {
         }`,
       );
     }
+    if (toolSession) args.push(...codexMcpConfigArgs(toolSession));
     if (this.options.model) args.push('--model', this.options.model);
     if (resumeSessionId) args.push('resume', resumeSessionId, '-');
     else args.push('-');
@@ -122,7 +142,7 @@ export class CodexExecutor implements Executor {
         id: 'codex-cli',
         label: 'Run Codex CLI',
         status: 'running',
-        detail: `${resumeSessionId ? 'resume session' : 'new turn'} / ${sandbox} / ${cwd}`,
+        detail: `${resumeSessionId ? 'resume session' : 'new turn'} / ${sandbox} / ${toolSession?.tools.length ?? 0} brokered tools / ${cwd}`,
       },
     });
 
@@ -272,6 +292,8 @@ export class CodexExecutor implements Executor {
       }
       if (providerError) throw new Error(providerError, { cause: error });
       throw error;
+    } finally {
+      await toolSession?.close();
     }
 
     if (resumeSessionId && providerSession && !recordedProviderSession) {
