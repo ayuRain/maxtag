@@ -1307,6 +1307,7 @@ export class FileDeliveryStore {
       projectId?: string;
     },
     reason = 'cancelled_from_thread',
+    options?: { runId?: string },
   ): Promise<CancelThreadAgentRunsResult> {
     return this.mutate((state) => {
       const timestamp = now();
@@ -1318,6 +1319,13 @@ export class FileDeliveryStore {
       };
       for (const steering of state.agentRunSteering) {
         if (!sameThread(steering, scope)) continue;
+        if (
+          options?.runId &&
+          steering.targetRunId !== options.runId &&
+          steering.continuationRunId !== options.runId
+        ) {
+          continue;
+        }
         if (steering.status !== 'pending' && steering.status !== 'claimed') {
           continue;
         }
@@ -1353,6 +1361,7 @@ export class FileDeliveryStore {
       const affectedRuns: AgentRunRecord[] = [];
       for (const run of state.agentRuns) {
         if (!sameThread(run, scope) || !isActiveRunStatus(run.status)) continue;
+        if (options?.runId && run.id !== options.runId) continue;
         if (run.status === 'queued') {
           run.status = 'cancelled';
           run.cancelRequestedAt = timestamp;
@@ -1382,6 +1391,9 @@ export class FileDeliveryStore {
         .filter(
           (steering) =>
             sameThread(steering, scope) &&
+            (!options?.runId ||
+              steering.targetRunId === options.runId ||
+              steering.continuationRunId === options.runId) &&
             steering.status === 'cancelled' &&
             steering.cancelledAt === timestamp,
         )
@@ -1476,6 +1488,30 @@ export class FileDeliveryStore {
     const state = await this.readState();
     const record = state.outbox.find((item) => item.id === id);
     return record ? { ...record, target: { ...record.target } } : undefined;
+  }
+
+  async getDeliveredOutboundByExternalId(input: {
+    platform: OutboundEnvelope['target']['platform'];
+    externalId: string;
+    kind?: string;
+  }): Promise<OutboundEnvelope | undefined> {
+    const state = await this.readState();
+    const record = state.outbox
+      .filter(
+        (item) =>
+          item.status === 'delivered' &&
+          item.target.platform === input.platform &&
+          item.externalId === input.externalId &&
+          (!input.kind || item.kind === input.kind),
+      )
+      .sort((a, b) => b.sequence - a.sequence)[0];
+    return record
+      ? {
+          ...record,
+          target: { ...record.target },
+          payload: { ...record.payload },
+        }
+      : undefined;
   }
 
   async listTurnDeliveries(options?: {

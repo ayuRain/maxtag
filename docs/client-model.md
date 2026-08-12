@@ -31,7 +31,8 @@ clients of the same thread-agent core.
 
 ## Current Status
 
-- Lark: native callback adapter with progress cards and HTTP OpenAPI delivery.
+- Lark: native callback adapter with progress cards, receipt-bound authorized
+  Stop actions, and HTTP OpenAPI delivery.
 - Telegram: native Bot API webhook adapter with forum-topic routing, editable
   progress messages, chunked replies, outgoing documents, and tracked delivery.
 - GitHub: native `issue_comment` webhook adapter with repository-level project

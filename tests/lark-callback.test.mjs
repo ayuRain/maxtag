@@ -8,6 +8,7 @@ import {
   decryptLarkCallbackPayload,
   larkCallbackEventType,
   larkCallbackExternalId,
+  normalizeLarkCardAction,
   normalizeLarkEvent,
   parseAndValidateLarkCallback,
 } from '@opentag/platform-lark';
@@ -196,5 +197,64 @@ test('Lark callback parser rejects non-object JSON and encrypted payloads withou
     parseAndValidateLarkCallback(JSON.stringify({ encrypt: 42 }), {})
       .validation.reason,
     'invalid_encrypted_payload',
+  );
+});
+
+test('Lark v2 card actions normalize actor, receipt, chat, and run scope', () => {
+  const action = normalizeLarkCardAction({
+    schema: '2.0',
+    header: {
+      event_id: 'card-action-event-1',
+      event_type: 'card.action.trigger',
+      tenant_key: 'tenant-card',
+    },
+    event: {
+      operator: {
+        open_id: 'ou-card-operator',
+        tenant_key: 'tenant-card',
+      },
+      action: {
+        tag: 'button',
+        value: {
+          action: 'opentag.stop_run',
+          run_id: 'run-card-1',
+        },
+      },
+      context: {
+        open_message_id: 'om-progress-card-1',
+        open_chat_id: 'oc-project-1',
+      },
+      host: 'im_message',
+    },
+  });
+
+  assert.deepEqual(action, {
+    action: 'opentag.stop_run',
+    runId: 'run-card-1',
+    actorId: 'ou-card-operator',
+    cardMessageId: 'om-progress-card-1',
+    chatId: 'oc-project-1',
+    tenantKey: 'tenant-card',
+    componentTag: 'button',
+  });
+});
+
+test('Lark card action normalization rejects callbacks without durable routing fields', () => {
+  assert.equal(
+    normalizeLarkCardAction({
+      header: { event_type: 'card.action.trigger' },
+      event: {
+        operator: { open_id: 'ou-card-operator' },
+        action: { value: { action: 'opentag.stop_run' } },
+        context: { open_chat_id: 'oc-project-1' },
+      },
+    }),
+    undefined,
+  );
+  assert.equal(
+    normalizeLarkCardAction({
+      header: { event_type: 'im.message.receive_v1' },
+    }),
+    undefined,
   );
 });

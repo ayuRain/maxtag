@@ -52,6 +52,42 @@ export interface LarkIncomingEvent {
       sender_type?: string;
       tenant_key?: string;
     };
+    operator?: {
+      open_id?: string;
+      user_id?: string;
+      union_id?: string;
+      tenant_key?: string;
+    };
+    action?: {
+      tag?: string;
+      value?: unknown;
+      option?: string;
+      name?: string;
+    };
+    context?: {
+      open_message_id?: string;
+      open_chat_id?: string;
+    };
+    token?: string;
+    host?: string;
+  };
+}
+
+export interface LarkCardAction {
+  action: string;
+  runId?: string;
+  actorId: string;
+  cardMessageId: string;
+  chatId: string;
+  tenantKey?: string;
+  componentTag?: string;
+}
+
+export interface LarkCardActionResponse {
+  [key: string]: unknown;
+  toast: {
+    type: 'success' | 'info' | 'warning' | 'error';
+    content: string;
   };
 }
 

@@ -182,3 +182,54 @@ test('Lark adapter sends managed artifacts through tracked file delivery', async
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('tracked Lark cards persist an exact external receipt for action callbacks', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-receipt-'));
+  try {
+    const store = new FileDeliveryStore(root);
+    const memory = new MemoryLarkTransport();
+    const tracked = new TrackedLarkTransport(memory, store);
+    const thread = {
+      id: 'lark:chat-card:root-card',
+      platform: 'lark',
+      externalId: 'chat-card:root-card',
+      workspaceId: 'acme',
+      projectId: 'payments',
+      channelId: 'chat-card',
+      rootMessageId: 'root-card',
+      visibility: 'public',
+    };
+
+    const created = await tracked.createCard({
+      chatId: 'chat-card',
+      card: { elements: [] },
+      metadata: {
+        runId: 'run-card-receipt',
+        thread,
+        stage: 'progress-card',
+      },
+    });
+    const receipt = await store.getDeliveredOutboundByExternalId({
+      platform: 'lark',
+      externalId: created.cardId,
+      kind: 'lark.card.create',
+    });
+
+    assert.ok(receipt);
+    assert.equal(receipt.runId, 'run-card-receipt');
+    assert.equal(receipt.threadId, thread.id);
+    assert.equal(receipt.workspaceId, 'acme');
+    assert.equal(receipt.projectId, 'payments');
+    assert.equal(receipt.target.chatId, 'chat-card');
+    assert.equal(receipt.externalId, created.cardId);
+    assert.equal(
+      await store.getDeliveredOutboundByExternalId({
+        platform: 'telegram',
+        externalId: created.cardId,
+      }),
+      undefined,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

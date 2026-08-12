@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import {
   memoryScopeGranted,
+  OPENTAG_STOP_RUN_ACTION,
   OpenTagRuntime,
   type AgentRunEvent,
   type Artifact,
@@ -75,9 +76,11 @@ import {
   MemoryLarkTransport,
   larkCallbackEventType,
   larkCallbackExternalId,
+  normalizeLarkCardAction,
   normalizeLarkEvent,
   parseAndValidateLarkCallback,
   type LarkIncomingEvent,
+  type LarkCardActionResponse,
   type LarkOpenApiDomain,
   type LarkTransport,
 } from '@opentag/platform-lark';
@@ -2653,6 +2656,171 @@ async function handleRunControlCommand(
     cancelled,
     notice,
   };
+}
+
+function larkCardActionResponse(
+  type: LarkCardActionResponse['toast']['type'],
+  content: string,
+): LarkCardActionResponse {
+  return { toast: { type, content } };
+}
+
+async function handleLarkCardAction(
+  body: LarkIncomingEvent & Record<string, unknown>,
+  inboundEventId: string,
+): Promise<LarkCardActionResponse> {
+  const action = normalizeLarkCardAction(body);
+  if (!action || action.action !== OPENTAG_STOP_RUN_ACTION || !action.runId) {
+    await deliveryStore.markInboundEventIgnored(
+      inboundEventId,
+      'unsupported_lark_card_action',
+      {
+        metadata: {
+          action: action?.action,
+          actorId: action?.actorId,
+          cardMessageId: action?.cardMessageId,
+          requestedRunId: action?.runId,
+        },
+      },
+    );
+    return larkCardActionResponse('warning', 'This action is no longer available.');
+  }
+
+  const receipt = await deliveryStore.getDeliveredOutboundByExternalId({
+    platform: 'lark',
+    externalId: action.cardMessageId,
+    kind: 'lark.card.create',
+  });
+  const run = receipt?.runId
+    ? await deliveryStore.getAgentRun(receipt.runId)
+    : undefined;
+  const runChatId = run?.thread?.channelId;
+  const validReceipt = Boolean(
+    receipt &&
+      run?.thread &&
+      run.platform === 'lark' &&
+      action.runId === receipt.runId &&
+      action.runId === run.id &&
+      receipt.threadId === run.threadId &&
+      receipt.workspaceId === run.workspaceId &&
+      receipt.projectId === run.projectId &&
+      receipt.target.chatId === action.chatId &&
+      runChatId === action.chatId,
+  );
+  if (!validReceipt || !run?.thread) {
+    await deliveryStore.markInboundEventIgnored(
+      inboundEventId,
+      'invalid_lark_card_receipt',
+      {
+        workspaceId: receipt?.workspaceId,
+        projectId: receipt?.projectId,
+        threadId: receipt?.threadId,
+        metadata: {
+          action: action.action,
+          actorId: action.actorId,
+          cardMessageId: action.cardMessageId,
+          requestedRunId: action.runId,
+          receiptId: receipt?.id,
+        },
+      },
+    );
+    return larkCardActionResponse('warning', 'This action is no longer available.');
+  }
+
+  const decision = await authorizeRoutedMessage({
+    thread: run.thread,
+    message: {
+      id: `lark-card:${inboundEventId}`,
+      threadId: run.thread.id,
+      platform: 'lark',
+      text: '/stop',
+      actor: {
+        id: action.actorId,
+        platformUserId: action.actorId,
+      },
+      createdAt: new Date().toISOString(),
+      mentionsAgent: true,
+      metadata: {
+        ingress: 'lark-card-action',
+        cardMessageId: action.cardMessageId,
+        runId: run.id,
+      },
+    },
+  });
+  if (!decision.allowed) {
+    await deliveryStore.markInboundEventIgnored(
+      inboundEventId,
+      'actor_not_authorized',
+      {
+        workspaceId: run.workspaceId,
+        projectId: run.projectId,
+        threadId: run.threadId,
+        messageId: action.cardMessageId,
+        metadata: {
+          control: 'stop',
+          ingress: 'lark-card-action',
+          actorId: action.actorId,
+          runId: run.id,
+          cardMessageId: action.cardMessageId,
+          authorization: actorAuthorizationPayload(decision),
+        },
+      },
+    );
+    return larkCardActionResponse(
+      'error',
+      'You do not have permission to stop this task.',
+    );
+  }
+
+  if (
+    run.status === 'completed' ||
+    run.status === 'failed' ||
+    run.status === 'cancelled' ||
+    run.status === 'cancel_requested'
+  ) {
+    await deliveryStore.markInboundEventProcessed(inboundEventId, {
+      workspaceId: run.workspaceId,
+      projectId: run.projectId,
+      threadId: run.threadId,
+      messageId: action.cardMessageId,
+      metadata: {
+        control: 'stop',
+        ingress: 'lark-card-action',
+        actorId: action.actorId,
+        runId: run.id,
+        cardMessageId: action.cardMessageId,
+        alreadyFinished: true,
+      },
+    });
+    return larkCardActionResponse('info', 'This task has already finished.');
+  }
+
+  const reason = `lark-card:${action.actorId}:${action.cardMessageId}:stop`;
+  const cancelled = await deliveryStore.cancelActiveAgentRunsForThread(
+    run.thread,
+    reason,
+    { runId: run.id },
+  );
+  await deliveryStore.cancelOutbox({ runId: run.id, reason });
+  activeRuns.get(run.id)?.abort(reason);
+  await deliveryStore.markInboundEventProcessed(inboundEventId, {
+    workspaceId: run.workspaceId,
+    projectId: run.projectId,
+    threadId: run.threadId,
+    messageId: action.cardMessageId,
+    metadata: {
+      control: 'stop',
+      ingress: 'lark-card-action',
+      actorId: action.actorId,
+      runId: run.id,
+      cardMessageId: action.cardMessageId,
+      receiptId: receipt!.id,
+      runIds: cancelled.runs.map((item) => item.id),
+      steeringIds: cancelled.steering.map((item) => item.id),
+      authorization: actorAuthorizationPayload(decision),
+    },
+  });
+  return larkCardActionResponse('success', 'Cancellation requested.');
 }
 
 async function handlePairingCommand(
@@ -5985,6 +6153,14 @@ const server = createServer(async (request, response) => {
       if (typeof body.challenge === 'string') {
         await deliveryStore.markInboundEventProcessed(inbound.record.id);
         sendJson(response, 200, { challenge: body.challenge });
+        return;
+      }
+      if (eventType === 'card.action.trigger') {
+        sendJson(
+          response,
+          200,
+          await handleLarkCardAction(body, inbound.record.id),
+        );
         return;
       }
       const normalized = normalizeLarkEvent(body as LarkIncomingEvent, { botOpenId });

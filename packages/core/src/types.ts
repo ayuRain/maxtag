@@ -240,6 +240,8 @@ export interface ProgressState {
   updatedAt: string;
 }
 
+export const OPENTAG_STOP_RUN_ACTION = 'opentag.stop_run';
+
 export interface ProgressSurface {
   create(state: ProgressState): Promise<{ surfaceId: string }>;
   update(surfaceId: string, state: ProgressState): Promise<void>;

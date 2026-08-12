@@ -1,4 +1,8 @@
-import type { ChecklistItem, ProgressState } from '@opentag/core';
+import {
+  OPENTAG_STOP_RUN_ACTION,
+  type ChecklistItem,
+  type ProgressState,
+} from '@opentag/core';
 
 const STATUS_SYMBOL: Record<ChecklistItem['status'], string> = {
   pending: '○',
@@ -35,6 +39,10 @@ export interface LarkCardDocument {
     template: string;
   };
   elements: Array<Record<string, unknown>>;
+}
+
+function isTerminalStatus(status: ProgressState['status']): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
 function larkTemplateForStatus(status: ProgressState['status']): string {
@@ -99,6 +107,37 @@ export function buildLarkProgressCard(state: ProgressState): LarkCardDocument {
           content: checklistText || 'No checklist items yet.',
         },
       },
+      ...(!isTerminalStatus(state.status)
+        ? [
+            {
+              tag: 'action',
+              actions: [
+                {
+                  tag: 'button',
+                  text: {
+                    tag: 'plain_text',
+                    content: 'Stop',
+                  },
+                  type: 'danger',
+                  value: {
+                    action: OPENTAG_STOP_RUN_ACTION,
+                    run_id: state.runId,
+                  },
+                  confirm: {
+                    title: {
+                      tag: 'plain_text',
+                      content: 'Stop this task?',
+                    },
+                    text: {
+                      tag: 'plain_text',
+                      content: 'OpenTag will stop the current run and queued follow-ups.',
+                    },
+                  },
+                },
+              ],
+            },
+          ]
+        : []),
       {
         tag: 'note',
         elements: [
@@ -111,4 +150,3 @@ export function buildLarkProgressCard(state: ProgressState): LarkCardDocument {
     ],
   };
 }
-

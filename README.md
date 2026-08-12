@@ -62,9 +62,10 @@ packages/ui-cards           Progress/checklist card models
 
 ## Current Capability
 
-- Lark event ingestion, file/image/audio/video resource download, progress card
-  rendering, text replies, and native file/image upload are wired behind
-  selectable memory/http transports.
+- Lark event ingestion, file/image/audio/video resource download, live progress
+  cards, text replies, and native file/image upload are wired behind selectable
+  memory/http transports. Active cards expose a run-scoped Stop action; terminal
+  cards remove it.
 - Telegram has native Bot API webhook ingestion, secret validation, update
   idempotency, chat/forum-topic normalization, editable progress messages,
   long-message chunking, topic replies, managed inbound downloads, outgoing
@@ -123,6 +124,9 @@ packages/ui-cards           Progress/checklist card models
 - `/stop`, `/cancel`, `stop`, and `停止任务` in an authorized thread cancel only
   that thread's active run and queued follow-ups. A durable poll carries control
   requests to an independently running worker process.
+- Lark card actions are tied back to the delivered progress-card receipt before
+  cancellation. OpenTag verifies the message ID, chat, workspace, project, and
+  run, then applies the same project actor authorization used by text commands.
 - Agent execution can be enqueued into a durable run queue and claimed by an
   inline worker, with stale run recovery on startup and through the admin API.
 - Agent execution can also be claimed by the standalone `apps/worker` process
@@ -146,7 +150,8 @@ packages/ui-cards           Progress/checklist card models
   `OPENTAG_LARK_DOMAIN=lark` for international Lark.
 - Lark callbacks support signed AES-256-CBC encrypted delivery, v1/v2
   verification-token checks, replay-window checks, duplicate short-circuiting,
-  and processed/ignored states in the inbound event ledger.
+  `card.action.trigger` handling, and processed/ignored states in the inbound
+  event ledger.
 - Lark group `chat_id` maps into the project route, so one workspace bot can
   serve multiple group/project memories instead of collapsing into one global
   thread.
@@ -614,8 +619,17 @@ Callback bodies are capped at 1 MiB by default; tune
 `OPENTAG_LARK_CALLBACK_MAX_BYTES` only when a documented Lark payload requires
 it.
 
+Subscribe the app to message events and configure card interaction callbacks to
+send `card.action.trigger` to the same endpoint. The progress-card Stop button
+is accepted only when its `open_message_id`, `open_chat_id`, and `run_id` match a
+delivered card receipt and the clicking Lark identity can invoke that project.
+OpenTag returns the card-action toast immediately; the worker observes the
+durable cancellation request and patches the card to its terminal state.
+
 The callback implementation follows Feishu's documented
 [signature and event-decryption protocol](https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/encrypt-key-encryption-configuration-case?lang=en-US).
+Card controls follow the documented
+[card callback contract](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/handle-card-callbacks?lang=zh-CN).
 HTTP mode downloads resources from incoming file/image/audio/video messages
 before enqueueing work. Managed image artifacts use Lark image messages when
 the format and 10 MB image limit permit it; other artifacts use the 30 MB file

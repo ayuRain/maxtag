@@ -29,6 +29,9 @@
 - Durable same-thread steering mailbox with atomic create-or-steer arbitration,
   executor live-input contract, ordered next-turn fallback, shared-thread stop
   commands, and cross-process cancellation polling.
+- Receipt-bound Lark progress-card Stop actions with v2 callback normalization,
+  project actor authorization, run-scoped cancellation, terminal control
+  removal, and callback idempotency.
 - Standalone worker process that can claim the shared run queue while HTTP
   ingestion runs with `OPENTAG_AGENT_WORKER=manual`.
 - Generic client ingress that maps non-Lark envelopes into the same run queue,
@@ -86,7 +89,8 @@
 - Support `remember`/`forget` commands for granted workspace, project, and
   thread memory without invoking the full executor; keep installation memory on
   the operator control plane.
-- Render live progress cards with checklist items, stop action, and final state.
+- Keep the implemented live progress cards, receipt-bound Stop action, and final
+  state covered by card rendering and real subprocess cancellation tests.
 - Send text replies and interactive progress cards through a real Lark app bot
   once credentials and scopes are configured.
 - Short-circuit duplicate Lark events by `event_id` or message id.

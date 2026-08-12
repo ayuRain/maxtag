@@ -4,7 +4,7 @@ import {
   timingSafeEqual,
 } from 'node:crypto';
 import type { IncomingHttpHeaders } from 'node:http';
-import type { LarkIncomingEvent } from './types.js';
+import type { LarkCardAction, LarkIncomingEvent } from './types.js';
 
 export interface LarkCallbackValidationOptions {
   verificationToken?: string;
@@ -289,4 +289,32 @@ export function larkCallbackEventType(
     if (typeof eventType === 'string') return eventType;
   }
   return body.event?.message?.message_type ?? 'unknown';
+}
+
+export function normalizeLarkCardAction(
+  body: LarkIncomingEvent & Record<string, unknown>,
+): LarkCardAction | undefined {
+  if (larkCallbackEventType(body) !== 'card.action.trigger') return undefined;
+  const event = body.event;
+  const value = event?.action?.value;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const action = typeof record.action === 'string' ? record.action.trim() : '';
+  const actorId =
+    event?.operator?.open_id?.trim() || event?.operator?.user_id?.trim() || '';
+  const cardMessageId = event?.context?.open_message_id?.trim() || '';
+  const chatId = event?.context?.open_chat_id?.trim() || '';
+  if (!action || !actorId || !cardMessageId || !chatId) return undefined;
+  const runId = typeof record.run_id === 'string' ? record.run_id.trim() : '';
+  return {
+    action,
+    runId: runId || undefined,
+    actorId,
+    cardMessageId,
+    chatId,
+    tenantKey: event?.operator?.tenant_key || body.header?.tenant_key,
+    componentTag: event?.action?.tag,
+  };
 }

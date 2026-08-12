@@ -9,14 +9,14 @@ many clients.
 | Capability | OpenTag status |
 | --- | --- |
 | Client-neutral event model | `SourceThread`, `SourceMessage`, and `PlatformAdapter` |
-| Lark first client | Lark normalization, progress cards, HTTP OpenAPI transport, managed resource download, and native file/image replies |
+| Lark first client | Lark normalization, progress cards with receipt-bound Stop actions, HTTP OpenAPI transport, managed resource download, and native file/image replies |
 | Multiple clients | Native Lark, Telegram, and GitHub issue/PR comment ingress/delivery plus generic `/v1/client/events` for adapters in development |
 | Workspace agent profile | One workspace identity, instructions, executor, tool grants, and network policy are inherited by every project; identity and capability overrides are explicit and independently selectable |
 | Scoped memory | SQLite-backed installation, workspace, project, and thread documents; runtime loads only granted scopes; public shared projects use workspace/project/thread, isolated projects use project/thread, private threads get read-only workspace context, and direct messages use thread only |
 | Session/channel binding | Configurable channel/project bindings with mention-only or always-on activation |
 | Self-service pairing | Lark, Telegram, and GitHub `/pair` commands use expiring, single-use, platform-bound codes; salted hashes persist across restarts, successful pairing creates a configured project route, and operators can revoke invitations or unbind chats |
 | Topic continuation | Mention establishes a Lark topic, Telegram topic, or GitHub issue binding; later messages continue without another mention, reuse a provider session when available, and fall back to a bounded durable transcript |
-| Shared task control | Durable cross-process follow-up mailbox, same-thread single-flight claims, live Claude stream input, resumed Codex next turns, authorized thread `/stop`, and operator steering/cancel controls |
+| Shared task control | Durable cross-process follow-up mailbox, same-thread single-flight claims, live Claude stream input, resumed Codex next turns, authorized thread `/stop`, receipt-bound Lark card Stop, and operator steering/cancel controls |
 | Project agent policy | File-backed project identity/capability inheritance modes, memory boundary, Codex/Claude choice, custom tool/network policy, and audit history |
 | Workspace governance | SQLite-backed workspace members and project roles for client ingress, plus named operator tokens with workspace scopes, owner/admin/viewer control-plane roles, signed principal sessions, and authoritative operator audit identity |
 | Durable delivery | SQLite WAL outbox, turn delivery records, atomic cross-process claims, scoped cancel, stale recovery, and bindings; legacy file mode remains available |
@@ -43,7 +43,7 @@ many clients.
 | Provider-level live steering | Claude local CLI consumes active `stream-json` follow-ups; add true mid-turn steering for Codex when its provider exposes a stable streaming input API |
 | Distributed provider sessions | Back provider sessions with shared provider state or sticky worker routing before using multiple executor hosts; host-scoped namespaces and transcript recovery prevent accidental cross-host resume today |
 | Turn delivery tracking | Add deployed reconciliation/smoke checks for stale card or reply delivery |
-| Real Lark smoke | Verify app scopes, bot-in-chat permissions, resource download, text/file/image replies, and card patching against a live app |
+| Real Lark smoke | Verify app scopes, bot-in-chat permissions, resource download, text/file/image replies, Stop callbacks, and card patching against a live app |
 | Pairing and binding governance | Add binding audit/import/export and optional actor-restricted pairing invitations; project role enforcement already applies after a chat is routed, and pairing consumption plus binding creation are one SQLite transaction |
 | Operator credential lifecycle | Add in-product credential creation, revocation, rotation, finer-grained operator capabilities, and optional SSO/OIDC; environment-configured named principals and workspace enforcement are implemented |
 | Encrypted Lark callbacks | Raw-body SHA-256 signature verification, AES-256-CBC decryption, v1/v2 Verification Token support, timestamp window, encrypted challenge handling, and event-id deduplication are implemented and tested locally; verify them against a live app before production |
