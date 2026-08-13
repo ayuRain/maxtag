@@ -325,7 +325,6 @@ export class DelegatedAgentTaskService {
       () => controller.abort(`delegated_agent_timeout:${definition.timeoutMs}ms`),
       definition.timeoutMs,
     );
-    timeout.unref?.();
     let cancellationPoll: NodeJS.Timeout | undefined;
     const stopCancellationPoll = (): void => {
       if (cancellationPoll) clearInterval(cancellationPoll);
@@ -339,7 +338,6 @@ export class DelegatedAgentTaskService {
         }
       }).catch(() => undefined);
     }, 250);
-    cancellationPoll.unref?.();
     try {
       const request: AgentRunRequest = {
         runId: `${task.parentRunId}:async-delegate:${task.id}`,
