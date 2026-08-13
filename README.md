@@ -158,6 +158,7 @@ the provider runtime, durable state, and Lark delivery.
 | Human Take over | A live run was receipt-bound, actor-authorized, cancelled, terminally updated, handed off in the same topic, and organization-audited | Live proven; reproduce with `npm run smoke:lark-takeover` |
 | Stop | Exact-card cancellation and idempotent repeated callback reached terminal `cancelled` | Live proven; reproduce with `npm run smoke:lark-stop` |
 | Knowledge Source search/read | Exact route-bound phrase retrieval, source/line citation, delivery, and disable fencing | Live proven; raw event ledgers stay outside the public repository |
+| In-thread capability status | `/status` and bilingual capability questions return the exact current route, identity, actor access, memory boundary, enabled Skills/Agents/Sources/tools, standing work, and next-run budget state without invoking a model | Implemented locally; real Lark command pending |
 | Runtime SIGTERM recovery | Lease heartbeat, requeue, replacement claim, progress-card reuse, and publish fencing | Local process proven; production supervisor proof pending |
 | Proactive routines | Scheduler visibility, routing, failure policy, and preflight | Implemented locally; real scheduled Lark send pending |
 | Disconnect recovery | Per-channel checkpoints and idempotent silent backfill | Implemented locally; blocked by Lark history scopes in the pilot app |
@@ -237,6 +238,10 @@ For the detailed evidence matrix and sequencing, see
   delivery, and memory/http transports.
 - The core model is client-neutral: Lark, Telegram, Slack, and GitHub comments
   are clients of the same runtime contract.
+- Authorized members can ask `/status`, `/maxtag status`, `what can you access?`,
+  or `你能访问什么？` in a topic. The zero-model reply is route-scoped, omits
+  disabled and sibling-project resources, remains available after a monthly
+  budget is exhausted, and does not consume a model run.
 - Other clients can enter through `/v1/client/events`, which normalizes a
   client envelope into the same run queue, scoped memory, and delivery ledger.
   Deployments can protect this adapter-only ingress with its own Bearer token.

@@ -112,6 +112,7 @@ export type AgentRunEventType =
   | 'session_started'
   | 'session_resumed'
   | 'session_invalidated'
+  | 'thread_status'
   | 'memory_command'
   | 'routine_command';
 
@@ -270,6 +271,7 @@ export interface CreateAgentRunInput {
 
 export interface CreateAgentRunOrSteerInput extends CreateAgentRunInput {
   allowLiveSteering?: boolean;
+  forceNewRun?: boolean;
 }
 
 export interface AgentRunSteeringRecord {

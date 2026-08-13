@@ -185,6 +185,8 @@ import {
   MemoryAnalysisService,
   MemoryRetrievalService,
   MemoryWrapupService,
+  parseThreadStatusCommand,
+  ThreadStatusService,
   collectOpenTagMetricsSnapshot,
   createDefaultExecutorRegistry,
   pathIsWithin,
@@ -1009,6 +1011,14 @@ const threadConfigStore = new FileThreadConfigStore(path.join(dataDir, 'config')
     name: 'Development Workspace',
     defaultProjectId: 'opentag',
   },
+});
+const threadStatusService = new ThreadStatusService({
+  threadConfigStore,
+  skillStore,
+  delegatedAgentStore,
+  knowledgeSourceStore,
+  routineCommandService,
+  deliveryStore,
 });
 const memoryAnalysisService = new MemoryAnalysisService({
   deliveryStore,
@@ -3244,6 +3254,8 @@ function auditSummaryForRunEvent(
       return 'Usage budget denied the run';
     case 'usage_threshold_alert':
       return 'Usage threshold alert emitted';
+    case 'thread_status':
+      return 'Thread capability status inspected';
     case 'tool_call':
       return `${toolLabel} requested`;
     case 'tool_approval':
@@ -3430,6 +3442,7 @@ async function organizationAuditSnapshot(input: {
     'cancelled',
     'usage_budget_denied',
     'usage_threshold_alert',
+    'thread_status',
     'tool_call',
     'tool_approval',
     'tool_result',
@@ -7498,6 +7511,9 @@ interface QueuedMessageRun {
   routineCommand?: {
     kind: ParsedRoutineCommand['kind'];
   };
+  threadStatusCommand?: {
+    kind: 'status';
+  };
   transport: {
     platform: PlatformKind;
     mode: string;
@@ -7595,12 +7611,13 @@ async function enqueueMessageRun(input: {
     defaultScope: memoryCommandDefaultScope(routed.thread),
   });
   const routineCommand = routineCommandService.parse(routed.message.text);
+  const threadStatusCommand = parseThreadStatusCommand(routed.message.text);
   const resolvedPolicy = await threadConfigStore.resolveThreadPolicy(routed.thread);
   const authorization = options?.authorization
     ? actorAuthorizationPayload(options.authorization)
     : { allowed: true, reason: 'operator_or_internal' };
   const budgetCheck =
-    !memoryCommand && !routineCommand
+    !memoryCommand && !routineCommand && !threadStatusCommand
       ? await deliveryStore.checkUsageBudget({
           thread: routed.thread,
           policy: resolvedPolicy.access.budgetPolicy,
@@ -7649,13 +7666,16 @@ async function enqueueMessageRun(input: {
     message: routed.message,
     inboundEventId: options?.inboundEventId,
     bindingId: routeBinding.id,
-    executorId: routineCommand
+    executorId: threadStatusCommand
+      ? 'thread-status'
+      : routineCommand
       ? 'routine-command'
       : memoryCommand
         ? 'memory-command'
         : resolvedPolicy.identity.defaultExecutorId,
     transportMode,
-    allowLiveSteering: !memoryCommand && !routineCommand,
+    allowLiveSteering: !memoryCommand && !routineCommand && !threadStatusCommand,
+    forceNewRun: Boolean(threadStatusCommand),
     metadata: {
       ...options?.metadata,
       actorAuthorization: authorization,
@@ -7667,6 +7687,9 @@ async function enqueueMessageRun(input: {
         : undefined,
       routineCommand: routineCommand
         ? { kind: routineCommand.kind }
+        : undefined,
+      threadStatusCommand: threadStatusCommand
+        ? { kind: threadStatusCommand.kind }
         : undefined,
       agentId: resolvedPolicy.identity.id,
       agentDisplayName: resolvedPolicy.identity.displayName,
@@ -7686,6 +7709,9 @@ async function enqueueMessageRun(input: {
       : undefined,
     routineCommand: routineCommand
       ? { kind: routineCommand.kind }
+      : undefined,
+    threadStatusCommand: threadStatusCommand
+      ? { kind: threadStatusCommand.kind }
       : undefined,
     transport: {
       platform: routed.thread.platform,
@@ -8032,6 +8058,86 @@ async function executeAgentRun(
     await deliveryStore.markAgentRunFailed(runId, message);
     await markRunInboundFailed(initialRun, message);
     throw error;
+  }
+  const threadStatusCommand = parseThreadStatusCommand(
+    initialRun.message.text,
+  );
+  if (threadStatusCommand) {
+    try {
+      const commandResult = await threadStatusService.execute(
+        threadStatusCommand,
+        initialRun.thread,
+        initialRun.metadata?.actorAuthorization,
+      );
+      await deliveryStore.appendAgentRunEvent(runId, 'thread_status', {
+        message: commandResult.summary,
+        metadata: {
+          action: commandResult.action,
+          workspaceId: commandResult.workspaceId,
+          projectId: commandResult.projectId,
+          skills: commandResult.skillIds.length,
+          agents: commandResult.agentIds.length,
+          sources: commandResult.knowledgeSourceIds.length,
+          routines: commandResult.routineIds.length,
+          nextModelRunAllowed: commandResult.budget.allowed,
+        },
+      });
+      await runPlatform.platform.sendMessage(
+        initialRun.thread,
+        commandResult.summary,
+        [],
+        { runId, replyToMessageId: sourceReplyMessageId(initialRun.message) },
+      );
+      await markRunInboundProcessed(initialRun);
+      await deliveryStore.markAgentRunCompleted(runId, commandResult.summary);
+      return {
+        result: { summary: commandResult.summary, artifacts: [] },
+        run: await deliveryStore.getAgentRun(runId),
+        route: runRoute(initialRun),
+        threadStatus: commandResult,
+        delivery: await deliverySnapshot(20, initialRun.workspaceId),
+        transport: {
+          platform: runPlatform.platform.kind,
+          mode: runPlatform.transportMode,
+        },
+        larkTransport: runPlatform.larkTransport,
+        larkDryRun: runPlatform.larkDryRun
+          ? {
+              texts: runPlatform.larkDryRun.texts,
+              cards: runPlatform.larkDryRun.cards,
+              files: runPlatform.larkDryRun.files,
+            }
+          : undefined,
+        telegramTransport: runPlatform.telegramTransport,
+        telegramDryRun: runPlatform.telegramDryRun
+          ? {
+              texts: runPlatform.telegramDryRun.texts,
+              edits: runPlatform.telegramDryRun.edits,
+              documents: runPlatform.telegramDryRun.documents,
+            }
+          : undefined,
+        slackTransport: runPlatform.slackTransport,
+        slackDryRun: runPlatform.slackDryRun
+          ? {
+              texts: runPlatform.slackDryRun.texts,
+              edits: runPlatform.slackDryRun.edits,
+              files: runPlatform.slackDryRun.files,
+            }
+          : undefined,
+        githubTransport: runPlatform.githubTransport,
+        githubDryRun: runPlatform.githubDryRun
+          ? {
+              comments: runPlatform.githubDryRun.comments,
+              updates: runPlatform.githubDryRun.updates,
+            }
+          : undefined,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await deliveryStore.markAgentRunFailed(runId, message);
+      await markRunInboundFailed(initialRun, message);
+      throw error;
+    }
   }
   const routineCommand = routineCommandService.parse(initialRun.message.text);
   if (routineCommand) {

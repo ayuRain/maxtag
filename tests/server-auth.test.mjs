@@ -1228,6 +1228,57 @@ test(
       budgetDeniedBody.message,
       /Monthly workspace run budget exceeded/,
     );
+
+    const statusEnvelope = structuredClone(envelope);
+    statusEnvelope.eventId = 'budget-status-client-event';
+    statusEnvelope.message.id = 'budget-status-client-message';
+    statusEnvelope.message.text = '/maxtag status';
+    statusEnvelope.message.attachments = [];
+    const statusAccepted = await fetch(`${baseUrl}/v1/client/events`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ingressToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(statusEnvelope),
+    });
+    assert.equal(statusAccepted.status, 202);
+    const statusAcceptedBody = await statusAccepted.json();
+    assert.equal(statusAcceptedBody.accepted, true);
+    assert.equal(statusAcceptedBody.queued, true);
+    assert.equal(statusAcceptedBody.run.executorId, 'thread-status');
+
+    const workerPass = await fetch(`${baseUrl}/v1/runs/worker-pass`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ limit: 10 }),
+    });
+    assert.equal(workerPass.status, 200);
+    const workerPassBody = await workerPass.json();
+    assert.equal(workerPassBody.result.completed, 1);
+    assert.equal(workerPassBody.result.failed, 1);
+    const statusRun = workerPassBody.result.runs.find(
+      (run) => run.id === statusAcceptedBody.run.id,
+    );
+    assert.equal(statusRun.status, 'completed');
+    assert.match(statusRun.summary, /Next model run: blocked/);
+    assert.match(statusRun.summary, /This status check uses no model run/);
+
+    const auditResponse = await fetch(
+      `${baseUrl}/v1/audit?workspaceId=dev-workspace&action=thread_status`,
+      { headers: { authorization: `Bearer ${adminToken}` } },
+    );
+    assert.equal(auditResponse.status, 200);
+    const auditBody = await auditResponse.json();
+    const statusAudit = auditBody.entries.find(
+      (entry) => entry.runId === statusAcceptedBody.run.id,
+    );
+    assert.equal(statusAudit.action, 'thread_status');
+    assert.equal(statusAudit.summary, 'Thread capability status inspected');
+    assert.doesNotMatch(JSON.stringify(statusAudit), /client-report|run budget/);
   },
 );
 

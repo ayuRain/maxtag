@@ -1475,12 +1475,14 @@ export class FileDeliveryStore {
         }
       }
 
-      const active = this.activeRunForThread(state, {
-        platform: input.thread.platform,
-        threadId: input.thread.id,
-        workspaceId: input.thread.workspaceId,
-        projectId: input.thread.projectId,
-      });
+      const active = input.forceNewRun
+        ? undefined
+        : this.activeRunForThread(state, {
+            platform: input.thread.platform,
+            threadId: input.thread.id,
+            workspaceId: input.thread.workspaceId,
+            projectId: input.thread.projectId,
+          });
       if (active && input.message) {
         const steering = this.enqueueSteeringInState(state, active, {
           targetRunId: active.id,
@@ -1547,7 +1549,7 @@ export class FileDeliveryStore {
             (candidate.status === 'running' ||
               candidate.status === 'cancel_requested'),
         );
-        if (threadAlreadyRunning) continue;
+        if (threadAlreadyRunning && run.executorId !== 'thread-status') continue;
         if (!run.thread || !run.message) {
           run.status = 'failed';
           run.failedAt = timestamp;

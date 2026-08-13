@@ -117,12 +117,17 @@ import { LarkDocumentWatcherService } from './lark-document-watcher.js';
 import { KnowledgeEnrichmentService } from './knowledge-enrichment.js';
 import { KnowledgeSourceRefreshService } from './knowledge-source-refresh.js';
 import { DelegatedAgentTaskService } from './delegated-agent-tasks.js';
+import {
+  parseThreadStatusCommand,
+  ThreadStatusService,
+} from './thread-status.js';
 
 export * from './routine-scheduler.js';
 export * from './run-control.js';
 export * from './conversation-context.js';
 export * from './knowledge-content-extraction.js';
 export * from './knowledge-source-refresh.js';
+export * from './thread-status.js';
 export * from './lark-thread-context.js';
 export * from './tool-approval-continuation.js';
 export * from './workflow-coordinator.js';
@@ -633,6 +638,7 @@ export class OpenTagWorkerHost {
   readonly knowledgeSourceStore: FileKnowledgeSourceStore;
   readonly knowledgeSourceRefreshStore: FileKnowledgeSourceRefreshStore;
   private readonly routineCommandService: RoutineCommandService;
+  private readonly threadStatusService: ThreadStatusService;
   private readonly sqliteStorage?: SqliteOpenTagStore;
   private readonly toolBroker: OpenTagToolBroker;
   private readonly executorRegistry: ExecutorRegistry;
@@ -971,6 +977,14 @@ export class OpenTagWorkerHost {
         },
       },
     );
+    this.threadStatusService = new ThreadStatusService({
+      threadConfigStore: this.threadConfigStore,
+      skillStore: this.skillStore,
+      delegatedAgentStore: this.delegatedAgentStore,
+      knowledgeSourceStore: this.knowledgeSourceStore,
+      routineCommandService: this.routineCommandService,
+      deliveryStore: this.deliveryStore,
+    });
     this.memoryAnalysisService = new MemoryAnalysisService({
       deliveryStore: this.deliveryStore,
       memoryStore: this.memoryStore,
@@ -1595,7 +1609,6 @@ export class OpenTagWorkerHost {
         delivery: await this.deliverySnapshot(20),
       };
     }
-    const budgetPolicy = await this.enforceRunBudget(initialRun);
     if (!options?.alreadyClaimed) {
       const runningRun = await this.deliveryStore.markAgentRunRunning(runId, {
         workerId: this.workerId,
@@ -1617,6 +1630,69 @@ export class OpenTagWorkerHost {
       await this.deliveryStore.markAgentRunFailed(runId, message);
       await this.markRunInboundFailed(initialRun, message);
       throw error;
+    }
+
+    const threadStatusCommand = parseThreadStatusCommand(
+      initialRun.message.text,
+    );
+    if (threadStatusCommand) {
+      try {
+        const commandResult = await this.threadStatusService.execute(
+          threadStatusCommand,
+          initialRun.thread,
+          initialRun.metadata?.actorAuthorization,
+        );
+        await this.deliveryStore.appendAgentRunEvent(runId, 'thread_status', {
+          message: commandResult.summary,
+          metadata: {
+            action: commandResult.action,
+            workspaceId: commandResult.workspaceId,
+            projectId: commandResult.projectId,
+            skills: commandResult.skillIds.length,
+            agents: commandResult.agentIds.length,
+            sources: commandResult.knowledgeSourceIds.length,
+            routines: commandResult.routineIds.length,
+            nextModelRunAllowed: commandResult.budget.allowed,
+          },
+        });
+        await runPlatform.platform.sendMessage(
+          initialRun.thread,
+          commandResult.summary,
+          [],
+          { runId, replyToMessageId: sourceReplyMessageId(initialRun.message) },
+        );
+        await this.markRunInboundProcessed(initialRun);
+        await this.deliveryStore.markAgentRunCompleted(
+          runId,
+          commandResult.summary,
+        );
+        return {
+          result: { summary: commandResult.summary, artifacts: [] },
+          run: await this.deliveryStore.getAgentRun(runId),
+          route: this.runRoute(initialRun),
+          threadStatus: commandResult,
+          delivery: await this.deliverySnapshot(20),
+          transport: {
+            platform: runPlatform.platform.kind,
+            mode: runPlatform.transportMode,
+          },
+          larkTransport: runPlatform.larkTransport,
+          larkDryRun: this.larkDryRunPayload(runPlatform.larkDryRun),
+          telegramTransport: runPlatform.telegramTransport,
+          telegramDryRun: this.telegramDryRunPayload(
+            runPlatform.telegramDryRun,
+          ),
+          slackTransport: runPlatform.slackTransport,
+          slackDryRun: this.slackDryRunPayload(runPlatform.slackDryRun),
+          githubTransport: runPlatform.githubTransport,
+          githubDryRun: this.githubDryRunPayload(runPlatform.githubDryRun),
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.deliveryStore.markAgentRunFailed(runId, message);
+        await this.markRunInboundFailed(initialRun, message);
+        throw error;
+      }
     }
 
     const routineCommand = this.routineCommandService.parse(
@@ -1774,6 +1850,7 @@ export class OpenTagWorkerHost {
       }
     }
 
+    const budgetPolicy = await this.enforceRunBudget(initialRun);
     const runtime = this.createRuntimeForPlatform(runPlatform.platform);
     const publishResult =
       initialRun.metadata?.source !== 'routine' ||

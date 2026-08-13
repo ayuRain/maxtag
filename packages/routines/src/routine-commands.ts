@@ -285,7 +285,7 @@ export class RoutineCommandService {
       return { action: command.kind, summary: helpText() };
     }
     if (command.kind === 'list') {
-      const routines = await this.routinesForThread(thread);
+      const routines = await this.listForThread(thread);
       if (!routines.length) {
         return {
           action: command.kind,
@@ -378,7 +378,7 @@ export class RoutineCommandService {
     };
   }
 
-  private async routinesForThread(thread: SourceThread): Promise<Routine[]> {
+  async listForThread(thread: SourceThread): Promise<Routine[]> {
     const routines = await this.store.listRoutines({
       workspaceId: thread.workspaceId || 'dev-workspace',
       projectId: thread.projectId,
@@ -399,7 +399,7 @@ export class RoutineCommandService {
     thread: SourceThread,
     selector: string,
   ): Promise<{ routine: Routine } | { summary: string }> {
-    const routines = await this.routinesForThread(thread);
+    const routines = await this.listForThread(thread);
     const normalized = selector.trim().toLowerCase();
     const idMatches = routines.filter(
       (routine) =>
