@@ -23,7 +23,7 @@ export class StaticThreadConfigStore implements ThreadConfigStore {
     const identity = input?.identity;
     this.identity = {
       id: identity?.id ?? 'default',
-      displayName: identity?.displayName ?? 'OpenTag',
+      displayName: identity?.displayName ?? 'MaxTag',
       description: identity?.description ?? 'Open agent for shared work threads.',
       instructions:
         identity?.instructions ??

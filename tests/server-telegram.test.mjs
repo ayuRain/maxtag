@@ -44,7 +44,7 @@ async function waitForJson(url, predicate, child, logs, timeoutMs = 8_000) {
 
 function update(
   updateId,
-  text = '/opentag@OpenTagBot inspect this topic',
+  text = '/maxtag@MaxTagBot inspect this topic',
   messageThreadId = 77,
 ) {
   return {
@@ -53,12 +53,33 @@ function update(
       message_id: updateId - 8_000,
       message_thread_id: messageThreadId,
       date: Math.floor(Date.now() / 1000),
-      chat: { id: -100123, type: 'supergroup', title: 'OpenTag Lab' },
+      chat: { id: -100123, type: 'supergroup', title: 'MaxTag Lab' },
       from: { id: 42, is_bot: false, first_name: 'Ada' },
       text,
       entities: text.startsWith('/opentag')
         ? [{ type: 'bot_command', offset: 0, length: 19 }]
         : [],
+    },
+  };
+}
+
+function larkPairingEvent(eventId, messageId, chatId, actorId, text) {
+  return {
+    event_id: eventId,
+    token: 'telegram-suite-lark-token',
+    event: {
+      message: {
+        message_id: messageId,
+        chat_id: chatId,
+        chat_type: 'group',
+        message_type: 'text',
+        content: JSON.stringify({ text }),
+        create_time: String(Date.now()),
+      },
+      sender: {
+        sender_id: { open_id: actorId },
+        tenant_key: 'dev-workspace',
+      },
     },
   };
 }
@@ -79,8 +100,11 @@ test(
         OPENTAG_DATA_DIR: dataDir,
         OPENTAG_EXECUTOR_MODE: 'dry-run',
         OPENTAG_LARK_REQUIRE_BINDING: 'true',
+        OPENTAG_LARK_EVENT_MODE: 'webhook',
+        OPENTAG_LARK_VERIFICATION_TOKEN: 'telegram-suite-lark-token',
+        OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS: '0',
         OPENTAG_TELEGRAM_TRANSPORT: 'memory',
-        OPENTAG_TELEGRAM_BOT_USERNAME: 'OpenTagBot',
+        OPENTAG_TELEGRAM_BOT_USERNAME: 'MaxTagBot',
         OPENTAG_TELEGRAM_WEBHOOK_SECRET: 'integration-secret',
         OPENTAG_TELEGRAM_REQUIRE_BINDING: 'true',
         OPENTAG_AGENT_WORKER: 'inline',
@@ -118,6 +142,7 @@ test(
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         event_id: 'lark-blocked-event-1',
+        token: 'telegram-suite-lark-token',
         event: {
           message: {
             message_id: 'om_blocked_1',
@@ -155,31 +180,43 @@ test(
           projectId: 'opentag',
           activationMode: 'mention',
           requireMention: true,
+          allowedActorIds: ['ou_pairing_user'],
         }),
       },
     );
     assert.equal(larkInvitationResponse.status, 201);
     const larkInvitation = await larkInvitationResponse.json();
+    assert.deepEqual(larkInvitation.invitation.allowedActorIds, ['ou_pairing_user']);
+    const larkRejectedPairResponse = await fetch(`${baseUrl}/v1/lark/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(
+        larkPairingEvent(
+          'lark-pair-event-rejected',
+          'om_pair_rejected',
+          'oc_pairing_rejected',
+          'ou_pairing_intruder',
+          `/pair ${larkInvitation.code}`,
+        ),
+      ),
+    });
+    assert.equal(larkRejectedPairResponse.status, 200);
+    const larkRejected = await larkRejectedPairResponse.json();
+    assert.equal(larkRejected.paired, false);
+    assert.equal(larkRejected.reason, 'actor_not_allowed');
+
     const larkPairResponse = await fetch(`${baseUrl}/v1/lark/events`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        event_id: 'lark-pair-event-1',
-        event: {
-          message: {
-            message_id: 'om_pair_1',
-            chat_id: 'oc_pairing',
-            chat_type: 'group',
-            message_type: 'text',
-            content: JSON.stringify({ text: `/pair ${larkInvitation.code}` }),
-            create_time: String(Date.now()),
-          },
-          sender: {
-            sender_id: { open_id: 'ou_pairing_user' },
-            tenant_key: 'dev-workspace',
-          },
-        },
-      }),
+      body: JSON.stringify(
+        larkPairingEvent(
+          'lark-pair-event-1',
+          'om_pair_1',
+          'oc_pairing',
+          'ou_pairing_user',
+          `/pair ${larkInvitation.code}`,
+        ),
+      ),
     });
     assert.equal(larkPairResponse.status, 200);
     const larkPaired = await larkPairResponse.json();

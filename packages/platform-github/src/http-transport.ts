@@ -96,7 +96,7 @@ export class HttpGitHubTransport implements GitHubTransport {
         accept: 'application/vnd.github+json',
         authorization: `Bearer ${this.token}`,
         'content-type': 'application/json; charset=utf-8',
-        'user-agent': 'OpenTag',
+        'user-agent': 'MaxTag',
         'x-github-api-version': '2022-11-28',
       },
       body: JSON.stringify({ body }),

@@ -228,6 +228,107 @@ test('CLI artifact collection strips declarations and rejects traversal and syml
   }
 });
 
+test('CLI output extracts bounded memory candidates without exposing declarations', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-memory-candidates-'));
+  try {
+    const result = await collectCliArtifacts({
+      finalMessage: [
+        'Work complete.',
+        'OPENTAG_MEMORY: {"scope":"project","text":"Use SQLite WAL for shared workers.","reason":"Runtime invariant"}',
+        'OPENTAG_MEMORY: {"scope":"project","text":"Use SQLite WAL for shared workers."}',
+        'OPENTAG_MEMORY: {"scope":"workspace","text":"Workspace-wide durable convention"}',
+        'OPENTAG_MEMORY: {"scope":"thread","text":"Follow up after deployment"}',
+        'OPENTAG_MEMORY: {"scope":"channel","text":"This fourth distinct declaration is ignored"}',
+      ].join('\n'),
+      cwd: root,
+      runId: 'run-memory-candidate-1',
+    });
+
+    assert.equal(result.summary, 'Work complete.');
+    assert.deepEqual(result.memoryCandidates, [
+      {
+        scope: 'project',
+        text: 'Use SQLite WAL for shared workers.',
+        reason: 'Runtime invariant',
+      },
+      {
+        scope: 'workspace',
+        text: 'Workspace-wide durable convention',
+        reason: undefined,
+      },
+    ]);
+    assert.ok(result.warnings.some((warning) => warning.includes('candidate limit')));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('CLI output extracts bounded semantic memory merge decisions', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-memory-decisions-'));
+  try {
+    const result = await collectCliArtifacts({
+      finalMessage: [
+        'OPENTAG_MEMORY_DECISION: {"operation":"replace","scope":"project","text":"Use Postgres for distributed workers.","selector":"Use SQLite WAL for shared workers.","expectedDocumentVersion":3,"reason":"User explicitly replaced the storage decision","confidence":0.94}',
+        'OPENTAG_MEMORY_DECISION: {"operation":"merge","scope":"project","text":"Use Postgres with 30-day backups.","selectors":["Use Postgres for distributed workers.","Keep database backups for 30 days."],"expectedDocumentVersion":3,"reason":"Consolidate storage policy","confidence":0.96}',
+        'OPENTAG_MEMORY_DECISION: {"operation":"skip","scope":"thread","reason":"Transient status","confidence":0.2}',
+        'OPENTAG_MEMORY_DECISION: {"operation":"forget","scope":"project","selector":"missing version"}',
+        'OPENTAG_MEMORY_DECISION: {"operation":"merge","scope":"project","text":"Too broad.","selectors":["one","two","three","four","five","six","seven","eight","nine"],"expectedDocumentVersion":3}',
+      ].join('\n'),
+      cwd: root,
+      runId: 'run-memory-decision-1',
+    });
+
+    assert.equal(result.summary, '');
+    assert.deepEqual(result.memoryDecisions, [
+      {
+        operation: 'replace',
+        scope: 'project',
+        text: 'Use Postgres for distributed workers.',
+        selector: 'Use SQLite WAL for shared workers.',
+        selectors: undefined,
+        expectedDocumentVersion: 3,
+        reason: 'User explicitly replaced the storage decision',
+        confidence: 0.94,
+      },
+      {
+        operation: 'merge',
+        scope: 'project',
+        text: 'Use Postgres with 30-day backups.',
+        selector: undefined,
+        selectors: [
+          'Use Postgres for distributed workers.',
+          'Keep database backups for 30 days.',
+        ],
+        expectedDocumentVersion: 3,
+        reason: 'Consolidate storage policy',
+        confidence: 0.96,
+      },
+      {
+        operation: 'skip',
+        scope: 'thread',
+        text: undefined,
+        selector: undefined,
+        selectors: undefined,
+        expectedDocumentVersion: undefined,
+        reason: 'Transient status',
+        confidence: 0.2,
+      },
+    ]);
+    assert.ok(
+      result.warnings.some((warning) =>
+        warning.includes('expectedDocumentVersion is required'),
+      ),
+    );
+    assert.ok(
+      result.warnings.some((warning) =>
+        warning.includes('at most eight selectors are allowed'),
+      ),
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('CLI artifact collection refuses a redirected managed runs directory', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-artifact-root-link-'));
   const cwd = path.join(root, 'project');

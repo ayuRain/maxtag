@@ -123,6 +123,75 @@ test('durable transcript preserves ordered provenance without replaying the curr
   assert.equal(bounded.truncated, true);
 });
 
+test('source thread messages hydrate transcript and de-duplicate run messages', async (context) => {
+  const root = await rootFixture(context, 'opentag-source-context-');
+  const store = new FileDeliveryStore(root);
+  const sourceThread = thread('source-context');
+  const createdAt = new Date('2026-01-01T00:00:00.000Z').toISOString();
+  await store.upsertSourceThreadMessages({
+    thread: sourceThread,
+    origin: 'history',
+    messages: [
+      {
+        ...message(sourceThread, 'source-1', 'We already chose option B.'),
+        createdAt,
+      },
+      {
+        ...message(sourceThread, 'source-dup', 'This became a run too.'),
+        createdAt: new Date('2026-01-01T00:00:01.000Z').toISOString(),
+      },
+    ],
+  });
+  const previous = await store.createAgentRunOrSteer({
+    runId: 'source-run-dup',
+    thread: sourceThread,
+    message: {
+      ...message(sourceThread, 'source-dup', 'This became a run too.'),
+      createdAt: new Date('2026-01-01T00:00:01.000Z').toISOString(),
+    },
+    metadata: { agentDisplayName: 'MaxTag' },
+  });
+  await store.claimQueuedAgentRuns({ workerId: 'worker-1' });
+  await store.markAgentRunCompleted(previous.run.id, 'Acknowledged.');
+
+  const current = await store.createAgentRunOrSteer({
+    runId: 'source-run-current',
+    thread: sourceThread,
+    message: {
+      ...message(sourceThread, 'source-current', 'Continue from there.'),
+      createdAt: new Date('2026-01-01T00:00:02.000Z').toISOString(),
+    },
+  });
+  const transcript = await store.loadThreadTranscript({
+    thread: sourceThread,
+    excludeRunId: current.run.id,
+  });
+
+  assert.deepEqual(
+    transcript.entries.map((entry) => [
+      entry.role,
+      entry.source,
+      entry.messageId,
+      entry.text,
+    ]),
+    [
+      [
+        'user',
+        'source_message',
+        'source-1',
+        'We already chose option B.',
+      ],
+      ['user', 'source_message', 'source-dup', 'This became a run too.'],
+      ['assistant', 'run', undefined, 'Acknowledged.'],
+    ],
+  );
+  assert.equal(
+    transcript.entries.filter((entry) => entry.messageId === 'source-dup')
+      .length,
+    1,
+  );
+});
+
 test('next-turn steering appears once after its continuation completes', async (context) => {
   const root = await rootFixture(context, 'opentag-context-next-');
   const store = new FileDeliveryStore(root);
@@ -233,6 +302,100 @@ test('long thread transcripts keep the newest complete context window', async (c
   assert.ok(charBounded.entries.length < transcript.totalEntries);
   assert.equal(charBounded.truncated, true);
   assert.equal(charBounded.entries.at(-1).runId, 'long-run-11');
+});
+
+test('incremental transcripts advance from the oldest unseen entry without gaps', async (context) => {
+  const root = await rootFixture(context, 'opentag-context-cursor-');
+  const store = new FileDeliveryStore(root);
+  const sourceThread = thread('cursor-thread');
+  const messages = Array.from({ length: 5 }, (_, index) => ({
+    ...message(
+      sourceThread,
+      `cursor-message-${index + 1}`,
+      `Cursor message ${index + 1}`,
+    ),
+    createdAt: new Date(`2026-01-01T00:00:0${index}.000Z`).toISOString(),
+  }));
+  await store.upsertSourceThreadMessages({
+    thread: sourceThread,
+    messages,
+    origin: 'history',
+  });
+
+  const first = await store.loadThreadTranscript({
+    thread: sourceThread,
+    maxEntries: 2,
+    maxChars: 40_000,
+    order: 'oldest',
+  });
+  const second = await store.loadThreadTranscript({
+    thread: sourceThread,
+    maxEntries: 2,
+    maxChars: 40_000,
+    afterCursor: first.nextCursor,
+    order: 'oldest',
+  });
+  const third = await store.loadThreadTranscript({
+    thread: sourceThread,
+    maxEntries: 2,
+    maxChars: 40_000,
+    afterCursor: second.nextCursor,
+    order: 'oldest',
+  });
+
+  assert.deepEqual(
+    [...first.entries, ...second.entries, ...third.entries].map(
+      (entry) => entry.messageId,
+    ),
+    messages.map((item) => item.id),
+  );
+  assert.equal(first.omittedEntries, 3);
+  assert.equal(second.omittedEntries, 1);
+  assert.equal(third.omittedEntries, 0);
+});
+
+test('incremental cursor resumes by exact sorted position for equal timestamps', async (context) => {
+  const root = await rootFixture(context, 'opentag-context-cursor-tie-');
+  const store = new FileDeliveryStore(root);
+  const sourceThread = thread('cursor-tie');
+  const createdAt = new Date('2026-01-01T00:00:00.000Z').toISOString();
+  await store.upsertSourceThreadMessages({
+    thread: sourceThread,
+    origin: 'history',
+    messages: [
+      { ...message(sourceThread, 'z-message', 'First by source order.'), createdAt },
+      { ...message(sourceThread, 'a-message', 'Second by source order.'), createdAt },
+    ],
+  });
+  const run = await store.createAgentRunOrSteer({
+    runId: 'cursor-tie-run',
+    thread: sourceThread,
+    message: { ...message(sourceThread, 'run-message', 'Third.'), createdAt },
+  });
+  await store.claimQueuedAgentRuns({ workerId: 'cursor-worker' });
+  await store.markAgentRunCompleted(run.run.id, 'Fourth.');
+
+  const all = await store.loadThreadTranscript({
+    thread: sourceThread,
+    maxEntries: 20,
+    maxChars: 40_000,
+    order: 'oldest',
+  });
+  const seen = [];
+  let cursor;
+  for (let index = 0; index < all.entries.length; index += 1) {
+    const page = await store.loadThreadTranscript({
+      thread: sourceThread,
+      maxEntries: 2,
+      maxChars: 1_000,
+      afterCursor: cursor,
+      order: 'oldest',
+    });
+    if (!page.entries.length) break;
+    seen.push(...page.entries.map((entry) => entry.id));
+    cursor = page.nextCursor;
+  }
+  assert.deepEqual(seen, all.entries.map((entry) => entry.id));
 });
 
 test('provider sessions survive SQLite process boundaries and can be invalidated', async (context) => {

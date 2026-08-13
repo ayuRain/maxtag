@@ -134,7 +134,12 @@ export class TelegramPlatformAdapter implements PlatformAdapter {
     thread: SourceThread,
     text: string,
     artifacts?: Artifact[],
-    options?: { runId?: string; replyToMessageId?: string },
+    options?: {
+      runId?: string;
+      replyToMessageId?: string;
+      stage?: 'thread-reply' | 'routine-notification';
+      notificationId?: string;
+    },
   ): Promise<void> {
     const links = (artifacts || [])
       .filter((artifact) => artifact.url)
@@ -154,7 +159,8 @@ export class TelegramPlatformAdapter implements PlatformAdapter {
         metadata: {
           runId: options?.runId,
           thread,
-          stage: 'thread-reply',
+          stage: options?.stage || 'thread-reply',
+          notificationId: options?.notificationId,
         },
       });
     }

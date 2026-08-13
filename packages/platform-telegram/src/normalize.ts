@@ -70,7 +70,7 @@ function mentionsAgent(
     if (entity.type === 'bot_command') {
       const command = value.replace(/^\//u, '').split('@', 2);
       if (
-        command[0] === 'opentag' &&
+        ['maxtag', 'opentag'].includes(command[0]) &&
         (!command[1] || (username && command[1] === username))
       ) {
         return true;
@@ -88,7 +88,7 @@ function mentionsAgent(
       return true;
     }
   }
-  const command = /^\s*\/opentag(?:@([a-z0-9_]+))?\b/iu.exec(text);
+  const command = /^\s*\/(?:maxtag|opentag)(?:@([a-z0-9_]+))?\b/iu.exec(text);
   if (command && (!command[1] || (username && command[1].toLowerCase() === username))) {
     return true;
   }

@@ -73,7 +73,7 @@ function safeSliceEnd(text: string, end: number): number {
 function progressText(state: ProgressState): string {
   const lines = [
     `<!-- opentag-progress:${state.runId} -->`,
-    `**OpenTag · ${state.status}**`,
+    `**MaxTag · ${state.status}**`,
     state.summary || state.title,
     '',
     ...state.checklist.map((item) => {
@@ -161,14 +161,19 @@ export class GitHubPlatformAdapter implements PlatformAdapter {
     thread: SourceThread,
     text: string,
     artifacts?: Artifact[],
-    options?: { runId?: string; replyToMessageId?: string },
+    options?: {
+      runId?: string;
+      replyToMessageId?: string;
+      stage?: 'thread-reply' | 'routine-notification';
+      notificationId?: string;
+    },
   ): Promise<void> {
     const links = (artifacts || [])
       .filter((artifact) => artifact.url)
       .map((artifact) => `- [${artifact.title}](${artifact.url})`);
     const local = (artifacts || [])
       .filter((artifact) => !artifact.url)
-      .map((artifact) => `- ${artifact.title} (available in OpenTag)`);
+      .map((artifact) => `- ${artifact.title} (available in MaxTag)`);
     const artifactLines = [...links, ...local];
     const combined = artifactLines.length
       ? `${text}\n\n**Artifacts**\n${artifactLines.join('\n')}`
@@ -182,7 +187,8 @@ export class GitHubPlatformAdapter implements PlatformAdapter {
         metadata: {
           runId: options?.runId,
           thread,
-          stage: 'thread-reply',
+          stage: options?.stage || 'thread-reply',
+          notificationId: options?.notificationId,
         },
       });
     }

@@ -18,7 +18,7 @@ export interface ManagedAttachmentInput {
   bytes: Uint8Array;
   mimeType?: string;
   name?: string;
-  source: 'lark' | 'telegram' | 'client';
+  source: 'lark' | 'telegram' | 'slack' | 'client';
 }
 
 export class ManagedContentError extends Error {

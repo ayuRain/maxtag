@@ -61,7 +61,7 @@ test('project policy persists and resolves scoped identity and access', async ()
     assert.ok(resolved.access.grants.some((grant) => grant.kind === 'github'));
     assert.equal(
       resolved.access.grants.filter((grant) => grant.kind === 'memory').length,
-      3,
+      4,
     );
     assert.equal(
       resolved.access.grants.some((grant) => grant.scope === 'global'),
@@ -168,7 +168,7 @@ test('workspace agent inheritance and memory boundaries follow the project profi
       shared.access.grants
         .filter((grant) => grant.kind === 'memory')
         .map((grant) => grant.scope),
-      ['workspace', 'project', 'thread'],
+      ['workspace', 'project', 'channel', 'thread'],
     );
 
     const isolated = await store.resolveThreadPolicy(publicThread('legal'));
@@ -183,7 +183,7 @@ test('workspace agent inheritance and memory boundaries follow the project profi
       isolated.access.grants
         .filter((grant) => grant.kind === 'memory')
         .map((grant) => grant.scope),
-      ['project', 'thread'],
+      ['project', 'channel', 'thread'],
     );
 
     const direct = await store.resolveThreadPolicy({
@@ -223,6 +223,474 @@ test('workspace agent inheritance and memory boundaries follow the project profi
     assert.equal(
       audit.find((record) => record.action === 'workspace.updated')?.actor,
       'operator:owner',
+    );
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('budget policies inherit from workspace and can be overridden per project', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-budget-policy-'));
+  try {
+    const store = new FileThreadConfigStore(rootDir, {
+      workspace: { id: 'acme', name: 'Acme', defaultProjectId: 'shared' },
+    });
+    await store.upsertWorkspacePolicy({
+      workspaceId: 'acme',
+      budgetPolicy: {
+        mode: 'custom',
+        scope: 'workspace',
+        maxRunsPerMonth: 20,
+        maxCostUsdPerMonth: 12.5,
+      },
+      actor: 'operator:owner',
+    });
+    await store.upsertProjectPolicy({
+      workspaceId: 'acme',
+      projectId: 'shared',
+      budgetPolicy: { mode: 'inherit' },
+      actor: 'operator:owner',
+    });
+    await store.upsertProjectPolicy({
+      workspaceId: 'acme',
+      projectId: 'incidents',
+      budgetPolicy: {
+        mode: 'custom',
+        scope: 'project',
+        maxRunsPerMonth: 3,
+      },
+      actor: 'operator:owner',
+    });
+    await store.upsertProjectPolicy({
+      workspaceId: 'acme',
+      projectId: 'lab',
+      budgetPolicy: { mode: 'disabled' },
+      actor: 'operator:owner',
+    });
+
+    const thread = (projectId) => ({
+      id: `lark:${projectId}:root`,
+      platform: 'lark',
+      externalId: `${projectId}:root`,
+      workspaceId: 'acme',
+      projectId,
+      visibility: 'public',
+    });
+
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(thread('shared'))).access.budgetPolicy,
+      {
+        mode: 'custom',
+        scope: 'workspace',
+        maxRunsPerMonth: 20,
+        maxCostUsdPerMonth: 12.5,
+      },
+    );
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(thread('incidents'))).access.budgetPolicy,
+      {
+        mode: 'custom',
+        scope: 'project',
+        maxRunsPerMonth: 3,
+      },
+    );
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(thread('incidents'))).access.budgetPolicies,
+      [
+        {
+          mode: 'custom',
+          scope: 'workspace',
+          maxRunsPerMonth: 20,
+          maxCostUsdPerMonth: 12.5,
+        },
+        {
+          mode: 'custom',
+          scope: 'project',
+          maxRunsPerMonth: 3,
+        },
+      ],
+    );
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(thread('lab'))).access.budgetPolicy,
+      { mode: 'disabled' },
+    );
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(thread('lab'))).access.budgetPolicies,
+      [
+        {
+          mode: 'custom',
+          scope: 'workspace',
+          maxRunsPerMonth: 20,
+          maxCostUsdPerMonth: 12.5,
+        },
+      ],
+    );
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('memory approval policies inherit from workspace and can be overridden per project', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-memory-approval-policy-'));
+  try {
+    const store = new FileThreadConfigStore(rootDir, {
+      workspace: { id: 'acme', name: 'Acme', defaultProjectId: 'shared' },
+    });
+    await store.upsertWorkspacePolicy({
+      workspaceId: 'acme',
+      memoryApprovalPolicy: {
+        mode: 'require_approval',
+        scopes: ['workspace'],
+        actions: ['remember'],
+      },
+      actor: 'operator:owner',
+    });
+    await store.upsertProjectPolicy({
+      workspaceId: 'acme',
+      projectId: 'shared',
+      memoryApprovalPolicy: { mode: 'inherit' },
+      actor: 'operator:owner',
+    });
+    await store.upsertProjectPolicy({
+      workspaceId: 'acme',
+      projectId: 'legal',
+      memoryApprovalPolicy: {
+        mode: 'require_approval',
+        scopes: ['project'],
+        actions: ['remember', 'forget'],
+      },
+      actor: 'operator:owner',
+    });
+    await store.upsertProjectPolicy({
+      workspaceId: 'acme',
+      projectId: 'lab',
+      memoryApprovalPolicy: { mode: 'disabled' },
+      actor: 'operator:owner',
+    });
+
+    const thread = (projectId) => ({
+      id: `lark:${projectId}:root`,
+      platform: 'lark',
+      externalId: `${projectId}:root`,
+      workspaceId: 'acme',
+      projectId,
+      visibility: 'public',
+    });
+
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(thread('shared'))).access
+        .memoryApprovalPolicy,
+      {
+        mode: 'require_approval',
+        scopes: ['workspace'],
+        actions: ['remember'],
+      },
+    );
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(thread('legal'))).access
+        .memoryApprovalPolicy,
+      {
+        mode: 'require_approval',
+        scopes: ['project'],
+        actions: ['remember', 'forget'],
+      },
+    );
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(thread('lab'))).access
+        .memoryApprovalPolicy,
+      { mode: 'disabled' },
+    );
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('memory retention keeps workspace facts independent and lets projects inherit or override local scopes', async (context) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-memory-retention-policy-'));
+  context.after(() => fs.rm(rootDir, { recursive: true, force: true }));
+  const store = new FileThreadConfigStore(rootDir, {
+    workspace: { id: 'acme', name: 'Acme', defaultProjectId: 'shared' },
+  });
+  await store.upsertWorkspacePolicy({
+    workspaceId: 'acme',
+    memoryRetentionPolicy: { mode: 'custom', days: 180 },
+  });
+  await store.upsertProjectPolicy({
+    workspaceId: 'acme',
+    projectId: 'shared',
+    memoryRetentionPolicy: { mode: 'inherit' },
+  });
+  await store.upsertProjectPolicy({
+    workspaceId: 'acme',
+    projectId: 'incidents',
+    memoryRetentionPolicy: { mode: 'custom', days: 30 },
+  });
+  await store.upsertProjectPolicy({
+    workspaceId: 'acme',
+    projectId: 'archive',
+    memoryRetentionPolicy: { mode: 'keep' },
+  });
+  const route = (projectId) => ({
+    id: `lark:${projectId}:root`,
+    platform: 'lark',
+    externalId: `${projectId}:root`,
+    workspaceId: 'acme',
+    projectId,
+    channelId: `oc_${projectId}`,
+    visibility: 'public',
+  });
+
+  assert.deepEqual(
+    (await store.resolveThreadPolicy(route('shared'))).access.memoryRetentionDays,
+    { workspace: 180, project: 180, channel: 180, thread: 180 },
+  );
+  assert.deepEqual(
+    (await store.resolveThreadPolicy(route('incidents'))).access.memoryRetentionDays,
+    { workspace: 180, project: 30, channel: 30, thread: 30 },
+  );
+  assert.deepEqual(
+    (await store.resolveThreadPolicy(route('archive'))).access.memoryRetentionDays,
+    { workspace: 180 },
+  );
+});
+
+test('new channels inherit a default channel cap without replacing aggregate caps', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-default-channel-budget-'));
+  try {
+    const store = new FileThreadConfigStore(rootDir, {
+      workspace: { id: 'acme', name: 'Acme', defaultProjectId: 'shared' },
+    });
+    await store.upsertWorkspacePolicy({
+      workspaceId: 'acme',
+      budgetPolicy: { mode: 'custom', scope: 'workspace', maxRunsPerMonth: 100 },
+      defaultChannelBudgetPolicy: {
+        mode: 'custom',
+        scope: 'channel',
+        maxRunsPerMonth: 10,
+      },
+    });
+    const route = (channelId) => ({
+      id: `lark:${channelId}:root`,
+      platform: 'lark',
+      externalId: `${channelId}:root`,
+      workspaceId: 'acme',
+      projectId: 'shared',
+      channelId,
+      visibility: 'public',
+    });
+
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(route('oc_new'))).access.budgetPolicies,
+      [
+        { mode: 'custom', scope: 'workspace', maxRunsPerMonth: 100 },
+        { mode: 'custom', scope: 'channel', maxRunsPerMonth: 10 },
+      ],
+    );
+    await store.upsertChannelPolicy({
+      workspaceId: 'acme',
+      projectId: 'shared',
+      platform: 'lark',
+      channelId: 'oc_unlimited',
+      budgetPolicy: { mode: 'disabled' },
+    });
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(route('oc_unlimited'))).access.budgetPolicies,
+      [{ mode: 'custom', scope: 'workspace', maxRunsPerMonth: 100 }],
+    );
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('channel policy overlays project instructions, capabilities, and budget without leaking', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-channel-policy-'));
+  try {
+    const store = new FileThreadConfigStore(rootDir, {
+      workspace: { id: 'acme', name: 'Acme', defaultProjectId: 'shared' },
+    });
+    await store.upsertWorkspacePolicy({
+      workspaceId: 'acme',
+      identity: {
+        id: 'workspace-agent',
+        displayName: 'Acme Tag',
+        instructions: 'Follow workspace policy.',
+        defaultExecutorId: 'codex',
+      },
+      grants: [
+        { id: 'workspace:github', kind: 'github', scope: 'workspace', label: 'GitHub' },
+      ],
+      networkPolicy: { mode: 'restricted', allowedHosts: ['github.com'] },
+      actor: 'operator:owner',
+    });
+    await store.upsertProjectPolicy({
+      workspaceId: 'acme',
+      projectId: 'shared',
+      agentMode: 'custom',
+      identity: {
+        id: 'shared-agent',
+        displayName: 'Shared Agent',
+        instructions: 'Follow project policy.',
+        defaultExecutorId: 'claude',
+      },
+      capabilityMode: 'inherit',
+      actor: 'operator:owner',
+    });
+    await store.upsertChannelPolicy({
+      workspaceId: 'acme',
+      projectId: 'shared',
+      platform: 'lark',
+      channelId: 'oc_incidents',
+      title: 'Incidents',
+      instructionMode: 'append',
+      instructions: 'Escalate P0 incidents immediately.',
+      capabilityMode: 'extend',
+      grants: [
+        { id: 'channel:lark-docs', kind: 'lark-docs', scope: 'channel', label: 'Lark Docs' },
+      ],
+      networkPolicy: { mode: 'restricted', allowedHosts: ['open.feishu.cn'] },
+      budgetPolicy: { mode: 'custom', scope: 'channel', maxRunsPerMonth: 5 },
+      memoryApprovalPolicy: {
+        mode: 'require_approval',
+        scopes: ['channel'],
+        actions: ['forget'],
+      },
+      actor: 'operator:owner',
+    });
+
+    const channelThread = (channelId, visibility = 'public') => ({
+      id: `lark:${channelId}:root`,
+      platform: 'lark',
+      externalId: `${channelId}:root`,
+      workspaceId: 'acme',
+      projectId: 'shared',
+      channelId,
+      visibility,
+    });
+    const resolved = await store.resolveThreadPolicy(channelThread('oc_incidents'));
+    assert.match(resolved.identity.instructions, /Follow project policy/);
+    assert.match(resolved.identity.instructions, /Escalate P0 incidents immediately/);
+    assert.equal(resolved.identity.defaultExecutorId, 'claude');
+    assert.deepEqual(
+      resolved.access.grants
+        .filter((grant) => grant.kind !== 'memory')
+        .map((grant) => grant.kind),
+      ['github', 'lark-docs'],
+    );
+    assert.deepEqual(resolved.access.networkPolicy, {
+      mode: 'restricted',
+      allowedHosts: ['github.com', 'open.feishu.cn'],
+    });
+    assert.deepEqual(resolved.access.budgetPolicy, {
+      mode: 'custom',
+      scope: 'channel',
+      maxRunsPerMonth: 5,
+    });
+    assert.deepEqual(resolved.access.memoryApprovalPolicy, {
+      mode: 'require_approval',
+      scopes: ['channel'],
+      actions: ['forget'],
+    });
+    assert.equal(resolved.channelPolicy.title, 'Incidents');
+
+    const sibling = await store.resolveThreadPolicy(channelThread('oc_general'));
+    assert.equal(sibling.identity.instructions, 'Follow project policy.');
+    assert.deepEqual(
+      sibling.access.grants
+        .filter((grant) => grant.kind !== 'memory')
+        .map((grant) => grant.kind),
+      ['github'],
+    );
+    assert.deepEqual(sibling.access.networkPolicy, {
+      mode: 'restricted',
+      allowedHosts: ['github.com'],
+    });
+    assert.equal(sibling.channelPolicy, undefined);
+
+    const direct = await store.resolveThreadPolicy(
+      channelThread('oc_incidents', 'direct'),
+    );
+    assert.equal(direct.identity.instructions, 'Follow project policy.');
+    assert.equal(direct.channelPolicy, undefined);
+
+    const reloaded = new FileThreadConfigStore(rootDir);
+    assert.equal((await reloaded.listChannelPolicies('acme', 'shared')).length, 1);
+    const removed = await reloaded.removeChannelPolicy({
+      workspaceId: 'acme',
+      projectId: 'shared',
+      platform: 'lark',
+      channelId: 'oc_incidents',
+      actor: 'operator:admin',
+    });
+    assert.equal(removed.title, 'Incidents');
+    const fallback = await reloaded.resolveThreadPolicy(channelThread('oc_incidents'));
+    assert.equal(fallback.identity.instructions, 'Follow project policy.');
+    assert.equal(fallback.channelPolicy, undefined);
+    assert.deepEqual(
+      (await reloaded.listAudit(10, 'acme'))
+        .filter((record) => record.action.startsWith('channel.'))
+        .map((record) => record.action),
+      ['channel.removed', 'channel.created'],
+    );
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('external write approval policy inherits and overrides at workspace project and channel', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-tool-approval-policy-'));
+  try {
+    const store = new FileThreadConfigStore(rootDir, {
+      workspace: { id: 'acme', name: 'Acme', defaultProjectId: 'shared' },
+    });
+    const route = (projectId, channelId = `oc_${projectId}`) => ({
+      id: `lark:${channelId}:root`,
+      platform: 'lark',
+      externalId: `${channelId}:root`,
+      workspaceId: 'acme',
+      projectId,
+      channelId,
+      visibility: 'public',
+    });
+
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(route('shared'))).access.toolApprovalPolicy,
+      { mode: 'require_approval', risks: ['write'] },
+    );
+    await store.upsertWorkspacePolicy({
+      workspaceId: 'acme',
+      toolApprovalPolicy: { mode: 'disabled' },
+    });
+    await store.upsertProjectPolicy({
+      workspaceId: 'acme',
+      projectId: 'guarded',
+      toolApprovalPolicy: { mode: 'require_approval', risks: ['write'] },
+    });
+    await store.upsertChannelPolicy({
+      workspaceId: 'acme',
+      projectId: 'guarded',
+      platform: 'lark',
+      channelId: 'oc_direct',
+      toolApprovalPolicy: { mode: 'disabled' },
+    });
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(route('shared'))).access.toolApprovalPolicy,
+      { mode: 'disabled' },
+    );
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(route('guarded'))).access.toolApprovalPolicy,
+      { mode: 'require_approval', risks: ['write'] },
+    );
+    assert.deepEqual(
+      (await store.resolveThreadPolicy(route('guarded', 'oc_direct'))).access
+        .toolApprovalPolicy,
+      { mode: 'disabled' },
+    );
+
+    const reloaded = new FileThreadConfigStore(rootDir);
+    assert.deepEqual(
+      (await reloaded.resolveThreadPolicy(route('guarded', 'oc_direct'))).access
+        .toolApprovalPolicy,
+      { mode: 'disabled' },
     );
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });

@@ -47,9 +47,15 @@ export class TrackedGitHubTransport implements GitHubTransport {
           ? 'github.progress.create'
           : 'github.comment',
       target: target(input, input.metadata),
-      payload: { body: input.body, stage: input.metadata?.stage },
+      payload: {
+        body: input.body,
+        stage: input.metadata?.stage,
+        notificationId: input.metadata?.notificationId,
+      },
       runId: input.metadata?.runId,
       thread: input.metadata?.thread,
+      maxAttempts:
+        input.metadata?.stage === 'routine-notification' ? 1 : undefined,
     });
     await this.store.markSending(envelope.id);
     try {

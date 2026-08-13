@@ -49,10 +49,77 @@ test('daily schedules honor the configured IANA time zone', () => {
   );
 });
 
+test('one-time schedules normalize an explicit offset and stage exactly once', async () => {
+  assert.equal(
+    nextRoutineRunAt(
+      { kind: 'once', at: '2026-08-14T09:00:00+08:00' },
+      new Date('2026-08-13T00:00:00.000Z'),
+    ).toISOString(),
+    '2026-08-14T01:00:00.000Z',
+  );
+  const fixture = await storeFixture();
+  const created = await fixture.store.upsertRoutine(
+    routineInput({
+      name: 'One-time release follow-up',
+      schedule: { kind: 'once', at: '2026-08-14T09:00:00+08:00' },
+    }),
+    new Date('2026-08-13T00:00:00.000Z'),
+  );
+  assert.equal(created.nextRunAt, '2026-08-14T01:00:00.000Z');
+  assert.equal(
+    (await fixture.store.stageDue(new Date('2026-08-14T01:00:01.000Z'))).length,
+    1,
+  );
+  const disabled = await fixture.store.getRoutine(created.id);
+  assert.equal(disabled.enabled, false);
+  assert.equal(disabled.nextRunAt, undefined);
+  assert.equal(
+    (await fixture.store.stageDue(new Date('2026-08-15T01:00:00.000Z'))).length,
+    0,
+  );
+  await assert.rejects(
+    fixture.store.setRoutineEnabled(
+      created.id,
+      true,
+      'operator',
+      new Date('2026-08-15T01:00:00.000Z'),
+    ),
+    /routine_once_already_elapsed/u,
+  );
+  await assert.rejects(
+    fixture.store.upsertRoutine(
+      routineInput({
+        name: 'Past follow-up',
+        schedule: { kind: 'once', at: '2026-08-12T09:00:00+08:00' },
+      }),
+      new Date('2026-08-13T00:00:00.000Z'),
+    ),
+    /routine_once_at_must_be_in_future/u,
+  );
+});
+
 test('standing-work commands parse English, Chinese, and client addressing', () => {
   assert.deepEqual(
     parseRoutineCommand(
-      '/opentag@OpenTagBot schedule every 2h: Check failed pipelines',
+      'schedule once 2026-08-14T09:00:00+08:00: Check release status',
+    ),
+    {
+      kind: 'create',
+      instructions: 'Check release status',
+      schedule: { kind: 'once', at: '2026-08-14T09:00:00+08:00' },
+    },
+  );
+  assert.deepEqual(
+    parseRoutineCommand('安排一次 2026-08-14T09:00:00+08:00：检查发布状态'),
+    {
+      kind: 'create',
+      instructions: '检查发布状态',
+      schedule: { kind: 'once', at: '2026-08-14T09:00:00+08:00' },
+    },
+  );
+  assert.deepEqual(
+    parseRoutineCommand(
+      '/maxtag@MaxTagBot schedule every 2h: Check failed pipelines',
     ),
     {
       kind: 'create',
@@ -61,7 +128,7 @@ test('standing-work commands parse English, Chinese, and client addressing', () 
     },
   );
   assert.deepEqual(
-    parseRoutineCommand('@OpenTag 每天 09:30：汇总项目进展', {
+    parseRoutineCommand('@MaxTag 每天 09:30：汇总项目进展', {
       defaultTimeZone: 'Asia/Shanghai',
     }),
     {
@@ -109,6 +176,23 @@ test('standing-work service scopes lifecycle commands to their source thread', a
   const listed = await service.execute({ kind: 'list' }, thread, 'user-bob');
   assert.equal(listed.routines.length, 1);
   assert.match(listed.summary, /Check payment alerts/);
+  assert.match(listed.summary, /last never/);
+  const execution = await fixture.store.triggerRoutine(
+    created.routine.id,
+    'user-ada',
+    new Date('2026-08-11T10:00:00.000Z'),
+  );
+  await fixture.store.markExecutionQueued(execution.id, 'routine-list-run');
+  await fixture.store.reconcileRun({
+    runId: 'routine-list-run',
+    status: 'completed',
+    summary: 'No payment alerts are open.',
+    at: new Date('2026-08-11T10:01:00.000Z'),
+  });
+  const listedAfterRun = await service.execute({ kind: 'list' }, thread, 'user-bob');
+  assert.match(listedAfterRun.summary, /last completed 2026-08-11T10:01:00.000Z/);
+  assert.match(listedAfterRun.summary, /No payment alerts are open\./);
+  assert.equal(listedAfterRun.recentExecutions[created.routine.id].length, 1);
   const anotherThread = {
     ...thread,
     id: 'lark:oc_payments:om_other',
@@ -206,6 +290,240 @@ test('scheduled routine executions are deduped, reclaimable, and reconcilable', 
     summary.oldestExecutionUpdatedAt.completed,
     executions[0].updatedAt,
   );
+});
+
+test('recent execution digests are bounded and do not follow a routine to another thread', async () => {
+  const fixture = await storeFixture();
+  const original = await fixture.store.upsertRoutine(
+    routineInput({
+      destination: {
+        platform: 'lark',
+        externalId: 'oc_payments:om_original',
+        channelId: 'oc_payments',
+        threadId: 'lark:oc_payments:om_original',
+        rootMessageId: 'om_original',
+        topicId: 'om_original',
+        visibility: 'private',
+      },
+    }),
+  );
+  for (let index = 0; index < 4; index += 1) {
+    const execution = await fixture.store.triggerRoutine(
+      original.id,
+      'operator',
+      new Date(`2026-08-11T10:0${index}:00.000Z`),
+    );
+    await fixture.store.markExecutionQueued(execution.id, `digest-run-${index}`);
+    await fixture.store.reconcileRun({
+      runId: `digest-run-${index}`,
+      status: 'completed',
+      summary: `${index}:${'result '.repeat(80)}`,
+      at: new Date(`2026-08-11T10:0${index}:30.000Z`),
+    });
+  }
+  const digests = await fixture.store.listRecentExecutionDigests({
+    routines: [original],
+    limitPerRoutine: 10,
+  });
+  assert.equal(digests[original.id].length, 3);
+  assert.match(digests[original.id][0].summary, /^3:/u);
+  assert.equal(digests[original.id][0].summary.length, 300);
+
+  const moved = await fixture.store.upsertRoutine({
+    ...routineInput(),
+    id: original.id,
+    destination: {
+      platform: 'lark',
+      externalId: 'oc_payments:om_moved',
+      channelId: 'oc_payments',
+      threadId: 'lark:oc_payments:om_moved',
+      rootMessageId: 'om_moved',
+      topicId: 'om_moved',
+      visibility: 'private',
+    },
+  });
+  const afterMove = await fixture.store.listRecentExecutionDigests({
+    routines: [moved],
+  });
+  assert.deepEqual(afterMove[moved.id], []);
+});
+
+test('routine failure escalation is thresholded, deduplicated, recoverable, and route-bound', async () => {
+  const fixture = await storeFixture();
+  const routine = await fixture.store.upsertRoutine(
+    routineInput({
+      notifications: {
+        mode: 'failures_only',
+        failureThreshold: 2,
+        recovery: true,
+      },
+      destination: {
+        platform: 'lark',
+        externalId: 'oc_payments:om_alerts',
+        channelId: 'oc_payments',
+        threadId: 'lark:oc_payments:om_alerts',
+        rootMessageId: 'om_alerts',
+        topicId: 'om_alerts',
+        visibility: 'private',
+      },
+    }),
+  );
+  const finish = async (index, status, detail) => {
+    const at = new Date(`2026-08-11T10:0${index}:00.000Z`);
+    const execution = await fixture.store.triggerRoutine(routine.id, 'test', at);
+    await fixture.store.markExecutionQueued(execution.id, `alert-run-${index}`, at);
+    return fixture.store.reconcileRun({
+      runId: `alert-run-${index}`,
+      status,
+      ...(status === 'failed' ? { error: detail } : { summary: detail }),
+      at,
+    });
+  };
+
+  await finish(1, 'failed', 'first outage');
+  assert.equal((await fixture.store.listNotifications()).length, 0);
+  const thresholdExecution = await finish(2, 'failed', 'second outage');
+  let notifications = await fixture.store.listNotifications();
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].kind, 'failure');
+  assert.equal(notifications[0].consecutiveFailures, 2);
+  assert.equal(notifications[0].executionId, thresholdExecution.id);
+  assert.match(notifications[0].message, /second outage/u);
+
+  await fixture.store.reconcileRun({
+    runId: 'alert-run-2',
+    status: 'failed',
+    error: 'second outage repeated',
+  });
+  await finish(3, 'failed', 'third outage');
+  assert.equal((await fixture.store.listNotifications()).length, 1);
+  await finish(4, 'completed', 'service healthy');
+  notifications = await fixture.store.listNotifications();
+  assert.equal(notifications.length, 2);
+  assert.equal(notifications[0].kind, 'recovery');
+  assert.equal(notifications[0].consecutiveFailures, 3);
+  assert.match(notifications[0].message, /service healthy/u);
+
+  const [claimed] = await fixture.store.claimNotifications({
+    claimerId: 'notifier-a',
+    at: new Date('2026-08-11T10:05:00.000Z'),
+  });
+  assert.equal(claimed.notification.status, 'claimed');
+  const retried = await fixture.store.retryNotification(
+    claimed.notification.id,
+    'temporary delivery failure',
+    {
+      at: new Date('2026-08-11T10:05:00.000Z'),
+      retryBaseMs: 1_000,
+    },
+  );
+  assert.equal(retried.status, 'pending');
+  assert.equal(retried.nextAttemptAt, '2026-08-11T10:05:01.000Z');
+
+  const moved = await fixture.store.upsertRoutine({
+    ...routineInput(),
+    id: routine.id,
+    notifications: routine.notifications,
+    destination: {
+      ...routine.destination,
+      externalId: 'oc_payments:om_moved_alerts',
+      threadId: 'lark:oc_payments:om_moved_alerts',
+      rootMessageId: 'om_moved_alerts',
+      topicId: 'om_moved_alerts',
+    },
+  });
+  assert.equal(moved.destination.topicId, 'om_moved_alerts');
+  const cancelled = await fixture.store.getNotification(claimed.notification.id);
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(
+    cancelled.lastError,
+    'routine_route_or_notification_policy_changed',
+  );
+  const summary = await fixture.store.summarize('acme', 'payments');
+  assert.equal(summary.notifications.pending, 0);
+  assert.equal(summary.notifications.cancelled, 0);
+});
+
+test('routine notification dispatch retries once and recognizes a delivered receipt', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-routine-notify-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const routineStore = new FileRoutineStore(path.join(root, 'routines'));
+  const deliveryStore = new FileDeliveryStore(path.join(root, 'delivery'));
+  const threadConfigStore = new FileThreadConfigStore(path.join(root, 'config'));
+  const routine = await routineStore.upsertRoutine(
+    routineInput({
+      notifications: {
+        mode: 'failures_only',
+        failureThreshold: 1,
+        recovery: true,
+      },
+    }),
+  );
+  const execution = await routineStore.triggerRoutine(
+    routine.id,
+    'test',
+    new Date('2026-08-11T10:00:00.000Z'),
+  );
+  await routineStore.markExecutionQueued(
+    execution.id,
+    'notify-run',
+    new Date('2026-08-11T10:00:00.000Z'),
+  );
+  await routineStore.reconcileRun({
+    runId: 'notify-run',
+    status: 'failed',
+    error: 'pipeline unavailable',
+    at: new Date('2026-08-11T10:01:00.000Z'),
+  });
+  const [notification] = await routineStore.listNotifications();
+  let sends = 0;
+  const scheduler = new RoutineSchedulerService({
+    routineStore,
+    deliveryStore,
+    threadConfigStore,
+    schedulerId: 'notification-test',
+    sendNotification: async (thread, pending) => {
+      sends += 1;
+      assert.equal(thread.channelId, 'oc_payments');
+      assert.equal(pending.id, notification.id);
+      throw new Error('lark temporarily unavailable');
+    },
+  });
+  const first = await scheduler.dispatchNotifications(
+    new Date('2026-08-11T10:01:00.000Z'),
+  );
+  assert.equal(first.failed, 1);
+  assert.equal(sends, 1);
+  assert.equal((await routineStore.getNotification(notification.id)).status, 'pending');
+
+  const receipt = await deliveryStore.enqueue({
+    kind: 'lark.text',
+    target: { platform: 'lark', chatId: 'oc_payments' },
+    payload: {
+      stage: 'routine-notification',
+      notificationId: notification.id,
+      text: notification.message,
+    },
+    runId: notification.runId,
+    thread: {
+      id: routine.destination.threadId || routine.destination.externalId,
+      platform: 'lark',
+      externalId: routine.destination.externalId,
+      workspaceId: routine.workspaceId,
+      projectId: routine.projectId,
+      channelId: routine.destination.channelId,
+      visibility: routine.destination.visibility,
+    },
+    maxAttempts: 1,
+  });
+  await deliveryStore.markSending(receipt.id);
+  await deliveryStore.markDelivered(receipt.id, 'om_notification');
+  const second = await scheduler.dispatchNotifications(
+    new Date('2026-08-11T10:01:31.000Z'),
+  );
+  assert.equal(second.delivered, 1);
+  assert.equal(sends, 1);
+  assert.equal((await routineStore.getNotification(notification.id)).status, 'delivered');
 });
 
 test('disabling a routine cancels staged work while manual runs remain auditable', async () => {

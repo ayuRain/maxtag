@@ -4,10 +4,13 @@ import type {
   ToolGrant,
 } from './types.js';
 
+const MAX_MEMORY_RETENTION_DAYS = 3_650;
+
 export const MEMORY_SCOPE_ORDER: MemoryScopeKind[] = [
   'global',
   'workspace',
   'project',
+  'channel',
   'thread',
 ];
 
@@ -39,6 +42,42 @@ export function readableMemoryScopes(
 ): MemoryScopeKind[] {
   return MEMORY_SCOPE_ORDER.filter((scope) =>
     memoryScopeGranted(access, scope, 'read'),
+  );
+}
+
+export function normalizedMemoryRetentionDays(
+  value: number | undefined,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value)) return undefined;
+  return value >= 1 && value <= MAX_MEMORY_RETENTION_DAYS ? value : undefined;
+}
+
+export function memoryRetentionDaysFor(
+  access: AccessBundle,
+  scope: MemoryScopeKind,
+): number | undefined {
+  if (scope === 'global') return undefined;
+  return normalizedMemoryRetentionDays(access.memoryRetentionDays?.[scope]);
+}
+
+export function memoryExpiryFromRetentionDays(
+  days: number | undefined,
+  at: Date = new Date(),
+): string | undefined {
+  const normalized = normalizedMemoryRetentionDays(days);
+  if (!normalized) return undefined;
+  return new Date(at.getTime() + normalized * 24 * 60 * 60 * 1_000).toISOString();
+}
+
+export function memoryExpiryForAccess(
+  access: AccessBundle,
+  scope: MemoryScopeKind,
+  at: Date = new Date(),
+): string | undefined {
+  return memoryExpiryFromRetentionDays(
+    memoryRetentionDaysFor(access, scope),
+    at,
   );
 }
 

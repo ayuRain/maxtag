@@ -49,9 +49,15 @@ export class TrackedTelegramTransport implements TelegramTransport {
         },
         input.metadata,
       ),
-      payload: { text: input.text, stage: input.metadata?.stage },
+      payload: {
+        text: input.text,
+        stage: input.metadata?.stage,
+        notificationId: input.metadata?.notificationId,
+      },
       runId: input.metadata?.runId,
       thread: input.metadata?.thread,
+      maxAttempts:
+        input.metadata?.stage === 'routine-notification' ? 1 : undefined,
     });
     await this.store.markSending(envelope.id);
     try {

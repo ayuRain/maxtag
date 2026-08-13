@@ -7,7 +7,8 @@
   },
   "references": [
     { "path": "../core" },
-    { "path": "../executor-cli" }
+    { "path": "../executor-cli" },
+    { "path": "../routines" }
   ],
   "include": ["src/**/*.ts"]
 }

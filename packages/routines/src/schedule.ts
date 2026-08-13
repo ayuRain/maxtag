@@ -97,6 +97,13 @@ function nextLocalDay(parts: LocalDateTime): LocalDateTime {
 export function normalizeRoutineSchedule(
   schedule: RoutineSchedule,
 ): RoutineSchedule {
+  if (schedule.kind === 'once') {
+    const at = new Date(schedule.at);
+    if (!schedule.at || Number.isNaN(at.getTime())) {
+      throw new Error('routine_once_at_must_be_iso_timestamp');
+    }
+    return { kind: 'once', at: at.toISOString() };
+  }
   if (schedule.kind === 'interval') {
     const everyMinutes = Number(schedule.everyMinutes);
     if (
@@ -130,6 +137,7 @@ export function nextRoutineRunAt(
   after: Date,
 ): Date {
   const schedule = normalizeRoutineSchedule(scheduleInput);
+  if (schedule.kind === 'once') return new Date(schedule.at);
   if (schedule.kind === 'interval') {
     return new Date(after.getTime() + schedule.everyMinutes * 60_000);
   }

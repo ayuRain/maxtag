@@ -60,6 +60,14 @@ async function createWorkflow(workflowStore, overrides = {}) {
 
 test('workflow coordinator bridges internal nodes and publishes only sinks', async (context) => {
   const { workflowStore, deliveryStore, coordinator } = await fixture(context);
+  await deliveryStore.configureThreadBinding({
+    platform: 'lark',
+    externalId: 'oc_payments',
+    workspaceId: 'acme',
+    projectId: 'payments',
+    scope: 'channel',
+    source: 'configured',
+  });
   const workflow = await createWorkflow(workflowStore);
   const execution = await workflowStore.triggerWorkflow(workflow.id, {
     payload: { build: 481, branch: 'main' },
@@ -73,6 +81,7 @@ test('workflow coordinator bridges internal nodes and publishes only sinks', asy
   assert.equal(analyzeRun.platform, 'workflow');
   assert.equal(analyzeRun.metadata.workflowPublish, false);
   assert.match(analyzeRun.message.text, /"build": 481/);
+  assert.match(analyzeRun.message.text, /untrusted external data/u);
 
   await deliveryStore.markAgentRunCompleted(
     analyzeRun.id,
@@ -101,6 +110,21 @@ test('workflow coordinator bridges internal nodes and publishes only sinks', asy
   assert.equal(completed.summary, 'Repair the migration and rerun build 481.');
 });
 
+test('workflow coordinator requires an explicit sink binding', async (context) => {
+  const { workflowStore, coordinator } = await fixture(context);
+  const workflow = await createWorkflow(workflowStore, {
+    nodes: [{ id: 'publish', instructions: 'Publish the event.' }],
+  });
+  const execution = await workflowStore.triggerWorkflow(workflow.id);
+
+  const result = await coordinator.tick();
+  assert.equal(result.queued, 0);
+  assert.equal(result.failed, 1);
+  const failed = await workflowStore.getExecution(execution.id);
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.nodes[0].error, 'workflow_destination_binding_required');
+});
+
 test('workflow coordinator refuses a sink bound outside its project', async (context) => {
   const { workflowStore, deliveryStore, coordinator } = await fixture(context);
   await deliveryStore.configureThreadBinding({
@@ -125,4 +149,54 @@ test('workflow coordinator refuses a sink bound outside its project', async (con
     failed.nodes[0].error,
     'workflow_destination_binding_scope_mismatch',
   );
+});
+
+test('workflow retries create a new agent run and preserve the failed attempt', async (context) => {
+  const { workflowStore, deliveryStore, coordinator } = await fixture(context);
+  await deliveryStore.configureThreadBinding({
+    platform: 'lark',
+    externalId: 'oc_payments',
+    workspaceId: 'acme',
+    projectId: 'payments',
+    scope: 'channel',
+    source: 'configured',
+  });
+  const workflow = await createWorkflow(workflowStore, {
+    nodes: [{ id: 'analyze', instructions: 'Analyze the event.' }],
+  });
+  const execution = await workflowStore.triggerWorkflow(workflow.id);
+  await coordinator.tick(new Date('2026-08-12T03:00:00.000Z'));
+  const firstRunId = `workflow:${execution.id}:analyze`;
+  await deliveryStore.markAgentRunFailed(firstRunId, 'temporary_provider_failure');
+  await coordinator.tick(new Date('2026-08-12T03:01:00.000Z'));
+  await workflowStore.retryNode(execution.id, 'analyze');
+  const result = await coordinator.tick(new Date('2026-08-12T03:02:00.000Z'));
+  const retryRunId = `${firstRunId}:attempt-2`;
+  assert.deepEqual(result.runIds, [retryRunId]);
+  assert.equal((await deliveryStore.getAgentRun(firstRunId)).status, 'failed');
+  assert.equal((await deliveryStore.getAgentRun(retryRunId)).status, 'queued');
+  assert.equal(
+    (await deliveryStore.getAgentRun(retryRunId)).metadata.workflowAttempt,
+    2,
+  );
+});
+
+test('stale scheduler reclaim does not masquerade as an operator retry attempt', async (context) => {
+  const { workflowStore, deliveryStore, coordinator } = await fixture(context);
+  const workflow = await createWorkflow(workflowStore, {
+    nodes: [
+      { id: 'analyze', instructions: 'Analyze the event.', publish: false },
+    ],
+  });
+  const execution = await workflowStore.triggerWorkflow(workflow.id);
+  await workflowStore.claimReadyNodes({
+    claimerId: 'crashed-scheduler',
+    at: new Date('2026-08-12T04:00:00.000Z'),
+  });
+
+  const result = await coordinator.tick(new Date('2026-08-12T04:03:00.000Z'));
+  const baseRunId = `workflow:${execution.id}:analyze`;
+  assert.deepEqual(result.runIds, [baseRunId]);
+  assert.equal((await deliveryStore.getAgentRun(baseRunId)).metadata.workflowAttempt, 1);
+  assert.equal(await deliveryStore.getAgentRun(`${baseRunId}:attempt-2`), undefined);
 });

@@ -1,7 +1,11 @@
 import type {
   LarkDeliveryMetadata,
+  LarkChatInfo,
   LarkDownloadedResource,
   LarkFileInput,
+  LarkHistoryMessage,
+  LarkListMessagesInput,
+  LarkMessagePage,
   LarkTransport,
 } from '@opentag/platform-lark';
 import type { DeliveryStore } from './file-delivery-store.js';
@@ -31,6 +35,21 @@ export class TrackedLarkTransport implements LarkTransport {
     this.store = store;
   }
 
+  getChat(
+    chatId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<LarkChatInfo | undefined> {
+    return this.delegate.getChat(chatId, options);
+  }
+
+  getMessage(messageId: string): Promise<LarkHistoryMessage | undefined> {
+    return this.delegate.getMessage(messageId);
+  }
+
+  listMessages(input: LarkListMessagesInput): Promise<LarkMessagePage> {
+    return this.delegate.listMessages(input);
+  }
+
   async sendText(input: {
     chatId: string;
     text: string;
@@ -52,9 +71,12 @@ export class TrackedLarkTransport implements LarkTransport {
       payload: {
         text: input.text,
         stage: input.metadata?.stage,
+        notificationId: input.metadata?.notificationId,
       },
       runId: input.metadata?.runId,
       thread: input.metadata?.thread,
+      maxAttempts:
+        input.metadata?.stage === 'routine-notification' ? 1 : undefined,
     });
     await this.store.markSending(envelope.id);
     try {
@@ -87,6 +109,8 @@ export class TrackedLarkTransport implements LarkTransport {
       payload: {
         card: input.card,
         stage: input.metadata?.stage,
+        proposalId: input.metadata?.proposalId,
+        approvalId: input.metadata?.approvalId,
       },
       runId: input.metadata?.runId,
       thread: input.metadata?.thread,
@@ -119,6 +143,8 @@ export class TrackedLarkTransport implements LarkTransport {
       payload: {
         card: input.card,
         stage: input.metadata?.stage,
+        proposalId: input.metadata?.proposalId,
+        approvalId: input.metadata?.approvalId,
       },
       runId: input.metadata?.runId,
       thread: input.metadata?.thread,
@@ -139,7 +165,7 @@ export class TrackedLarkTransport implements LarkTransport {
     rootId?: string;
     replyToMessageId?: string;
     metadata?: LarkDeliveryMetadata;
-  }): Promise<{ messageId: string }> {
+  }): Promise<{ messageId: string; messageType: 'file' | 'image' }> {
     const envelope = await this.store.enqueue({
       kind: 'lark.file',
       target: metadataTarget(

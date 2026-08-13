@@ -1,5 +1,6 @@
 import {
   OPENTAG_STOP_RUN_ACTION,
+  OPENTAG_TAKE_OVER_RUN_ACTION,
   type ChecklistItem,
   type ProgressState,
 } from '@opentag/core';
@@ -116,6 +117,29 @@ export function buildLarkProgressCard(state: ProgressState): LarkCardDocument {
                   tag: 'button',
                   text: {
                     tag: 'plain_text',
+                    content: 'Take over',
+                  },
+                  type: 'primary',
+                  value: {
+                    action: OPENTAG_TAKE_OVER_RUN_ACTION,
+                    run_id: state.runId,
+                  },
+                  confirm: {
+                    title: {
+                      tag: 'plain_text',
+                      content: 'Take over this task?',
+                    },
+                    text: {
+                      tag: 'plain_text',
+                      content:
+                        'MaxTag will stop the current run and queued follow-ups, then leave the task with you.',
+                    },
+                  },
+                },
+                {
+                  tag: 'button',
+                  text: {
+                    tag: 'plain_text',
                     content: 'Stop',
                   },
                   type: 'danger',
@@ -130,7 +154,7 @@ export function buildLarkProgressCard(state: ProgressState): LarkCardDocument {
                     },
                     text: {
                       tag: 'plain_text',
-                      content: 'OpenTag will stop the current run and queued follow-ups.',
+                      content: 'MaxTag will stop the current run and queued follow-ups.',
                     },
                   },
                 },

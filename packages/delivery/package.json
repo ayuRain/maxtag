@@ -19,6 +19,7 @@
     "@opentag/core": "0.1.0",
     "@opentag/platform-github": "0.1.0",
     "@opentag/platform-lark": "0.1.0",
+    "@opentag/platform-slack": "0.1.0",
     "@opentag/platform-telegram": "0.1.0"
   }
 }

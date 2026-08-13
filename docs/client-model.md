@@ -1,6 +1,6 @@
 # Client Model
 
-OpenTag treats Lark, Telegram, Slack, GitHub comments, and future surfaces as
+MaxTag treats Lark, Telegram, Slack, GitHub comments, Web Assistant, and future surfaces as
 clients of the same thread-agent core.
 
 ## Core Objects
@@ -28,6 +28,8 @@ clients of the same thread-agent core.
 - `Executor`: Codex, Claude, or another agent runner.
 - `Workflow`: a versioned project DAG whose nodes are durable agent runs and
   whose sink nodes publish through a client-neutral destination.
+- `WorkflowProducerRoute`: an operator-owned mapping from one native producer
+  endpoint to an immutable workspace/project scope.
 
 ## Current Status
 
@@ -38,10 +40,10 @@ clients of the same thread-agent core.
 - GitHub: native `issue_comment` webhook adapter with repository-level project
   binding, issue/PR threads, editable progress comments, chunked replies,
   HMAC-SHA256 verification, self-loop suppression, and tracked delivery.
-- Lark, Telegram, and GitHub share the same invitation model: an operator targets a
+- Lark, Telegram, Slack, and GitHub share the same invitation model: an operator targets a
   workspace/project/client, then `/pair CODE` turns the consuming chat into a
   configured channel binding.
-- Lark, Telegram, GitHub, and generic client events share the same actor authorization
+- Lark, Telegram, Slack, GitHub, and generic client events share the same actor authorization
   model after routing. Projects can be open, workspace-member-only, or
   project-member-only.
 - Client-thread membership and operator access are separate trust planes.
@@ -51,20 +53,35 @@ clients of the same thread-agent core.
 - A project inherits the workspace agent identity, executor, tool grants, and
   network policy unless it selects an explicit project override.
 - Memory policy is separate from capability inheritance. Workspace-shared
-  projects load workspace/project/thread memory, isolated projects load
-  project/thread, private threads get read-only workspace context, and direct
-  messages load thread memory only. Installation memory is control-plane only.
+  channels load workspace/project/channel/thread memory, isolated projects load
+  project/channel/thread, private channels get read-only workspace context, and
+  direct messages load thread memory only. Installation memory is control-plane
+  only.
 - Workspace memory writes also require an identified active non-guest workspace
-  member; project/thread writes follow project capability.
+  member; project/channel/thread writes follow project capability.
 - Manual and typed-event workflows resolve the same project policy, executor,
   scoped memory, run queue, and client destination as an inbound conversation.
-- Slack: planned.
+- Slack: signed Events API ingress for channel mentions and direct messages,
+  stable `thread_ts` routing, editable progress, native replies/files, pairing,
+  managed inbound attachments, and tracked delivery. A real installed-workspace
+  smoke test remains a release gate.
+- Web Assistant: operator-authenticated project conversations create durable
+  `web` thread bindings, enter the same inbound ledger and worker queue, retain
+  transcript/session continuity across restart, support managed uploads and
+  artifacts, and expose the same Stop contract as chat clients. The browser
+  consumes workspace-authorized SSE over the durable run timeline: global
+  monotonic event cursors resume after disconnect, Claude text deltas and all
+  executor progress arrive without polling, and tool events expose only safe
+  identity/status/duration fields. Assistant output uses a local allowlisted
+  GFM renderer and keeps script, image, event-handler, and unsafe URL content
+  out of the DOM. The same sanitized timeline restores collapsible run traces
+  after a reload without returning historical text deltas.
 - GitHub tools and GitHub as a source client are separate capabilities: the
   client adapter handles comments, while project grants govern repository and
   issue reads/writes inside an agent run.
 
 The goal is not to clone AgentDock feature-for-feature. AgentDock is the mature
-workbench; OpenTag is the shared-thread product layer that can reuse selected
+workbench; MaxTag is the shared-thread product layer that can reuse selected
 AgentDock ideas behind a platform-neutral boundary.
 
 ## Routing Rule
@@ -81,9 +98,9 @@ Client onboarding is separate from execution:
 pairing invitation -> client chat -> configured project binding -> SourceThread route
 ```
 
-Lark groups/topics, Telegram chats/forum topics, and GitHub repositories/issues
-now share this route. Slack threads should only add an adapter; they should not
-add new executor or memory concepts.
+Lark groups/topics, Telegram chats/forum topics, Slack threads, GitHub
+repositories/issues, and Web Assistant conversations now share this route.
+Clients add adapters and surfaces, not new executor or memory concepts.
 
 Standing work follows the same rule. A routine created in a Lark topic,
 Telegram forum topic, or GitHub issue retains the resolved workspace, project,
@@ -96,10 +113,26 @@ Workflow events add no alternate execution plane:
 typed event -> workspace/project workflow -> ready DAG node -> agent run queue -> client sink
 ```
 
-Intermediate nodes use an internal workflow thread, while sink nodes resolve a
-real destination binding. An event producer retries safely with a stable event
+Intermediate nodes use an internal workflow thread, while sink nodes require a
+configured destination binding in the same workspace and project. An event
+producer retries safely with a stable event
 ID; exact workspace, project, and event-type matching prevents cross-project
 activation.
+
+Native producers never choose workspace or project from webhook payload data.
+The first GitHub producer family maps a signed repository webhook through its
+configured `github` channel binding, emits bounded `github.pull_request.*`,
+`github.issue.*`, or `github.workflow_run.*` events, and deduplicates on the
+GitHub delivery ID. The normalized payload is untrusted workflow evidence, not
+agent instructions.
+
+Alertmanager maps a bearer-authenticated route ID through a durable
+`WorkflowProducerRoute`, emits bounded `alertmanager.firing` or
+`alertmanager.resolved` evidence, and deduplicates an exact normalized alert
+state. The body cannot override the route's workspace or project. GitHub uses a
+configured client binding because a repository is also a conversation source;
+Alertmanager uses a producer route because it is ingress only, not an outbound
+client.
 
 Before a native adapter exists, a client can submit the normalized envelope to
 `/v1/client/events`. The server records inbound idempotency, resolves bindings,

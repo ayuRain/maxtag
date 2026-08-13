@@ -1,6 +1,6 @@
 [Unit]
-Description=OpenTag workspace agent services
-Wants=opentag-server.service opentag-worker.service opentag-scheduler.service
+Description=MaxTag workspace agent services
+Wants=opentag-server.service opentag-lark-bridge.service opentag-worker.service opentag-scheduler.service
 After=network-online.target
 
 [Install]

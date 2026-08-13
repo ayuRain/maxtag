@@ -45,6 +45,7 @@ async function waitForJson(url, predicate, child, logs, timeoutMs = 8_000) {
 function larkEvent(eventId, messageId, text, rootId = 'om_standing_root') {
   return {
     event_id: eventId,
+    token: 'routine-lark-token',
     event: {
       message: {
         message_id: messageId,
@@ -53,12 +54,12 @@ function larkEvent(eventId, messageId, text, rootId = 'om_standing_root') {
         chat_id: 'oc_standing_work',
         chat_type: 'group',
         message_type: 'text',
-        content: JSON.stringify({ text: `@OpenTag ${text}` }),
+        content: JSON.stringify({ text: `@MaxTag ${text}` }),
         mentions: [
           {
-            key: '@OpenTag',
+            key: '@MaxTag',
             id: { open_id: 'ou_opentag_bot' },
-            name: 'OpenTag',
+            name: 'MaxTag',
           },
         ],
         create_time: String(Date.now()),
@@ -87,6 +88,9 @@ test(
         OPENTAG_DATA_DIR: dataDir,
         OPENTAG_EXECUTOR_MODE: 'dry-run',
         OPENTAG_LARK_TRANSPORT: 'memory',
+        OPENTAG_LARK_EVENT_MODE: 'webhook',
+        OPENTAG_LARK_VERIFICATION_TOKEN: 'routine-lark-token',
+        OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS: '0',
         OPENTAG_LARK_BOT_OPEN_ID: 'ou_opentag_bot',
         OPENTAG_AGENT_WORKER: 'inline',
         OPENTAG_AGENT_WORKER_INTERVAL_MS: '50',
@@ -167,6 +171,143 @@ test(
     assert.equal(run.status, 'completed');
     assert.equal(run.metadata.source, 'routine');
     assert.equal(run.metadata.routineName, 'Integration digest');
+
+    const quietResponse = await fetch(`${baseUrl}/v1/routines`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'dev-workspace',
+        projectId: 'opentag',
+        name: 'Quiet failure watcher',
+        instructions: 'Check quietly and only alert after repeated failures.',
+        enabled: true,
+        schedule: { kind: 'interval', everyMinutes: 60 },
+        notifications: {
+          mode: 'failures_only',
+          failureThreshold: 2,
+          recovery: true,
+        },
+        destination: {
+          platform: 'lark',
+          externalId: 'quiet-chat:om_quiet_root',
+          channelId: 'quiet-chat',
+          threadId: 'lark:quiet-chat:om_quiet_root',
+          rootMessageId: 'om_quiet_root',
+          topicId: 'om_quiet_root',
+          visibility: 'private',
+        },
+      }),
+    });
+    assert.equal(quietResponse.status, 200);
+    const quietRoutine = (await quietResponse.json()).routine;
+    assert.equal(quietRoutine.notifications.mode, 'failures_only');
+    assert.equal(quietRoutine.notifications.failureThreshold, 2);
+    const quietTrigger = await fetch(
+      `${baseUrl}/v1/routines/${quietRoutine.id}/trigger`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      },
+    ).then((response) => response.json());
+    const quietSnapshot = await waitForJson(
+      `${baseUrl}/v1/routines?workspaceId=dev-workspace`,
+      (data) =>
+        data.executions.some(
+          (item) =>
+            item.id === quietTrigger.execution.id && item.status === 'completed',
+        ),
+      child,
+      logs,
+    );
+    assert.equal(
+      quietSnapshot.notifications.filter(
+        (item) => item.routineId === quietRoutine.id,
+      ).length,
+      0,
+    );
+    const quietRunDetail = await fetch(
+      `${baseUrl}/v1/runs/${encodeURIComponent(quietTrigger.execution.runId)}/events`,
+    ).then((response) => response.json());
+    assert.equal(quietRunDetail.run.status, 'completed');
+    assert.equal(quietRunDetail.usage.purpose, 'agent');
+    assert.deepEqual(quietRunDetail.deliveries.outbox, []);
+
+    const onceAt = new Date(Date.now() + 150).toISOString();
+    const onceResponse = await fetch(`${baseUrl}/v1/routines`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'dev-workspace',
+        projectId: 'opentag',
+        name: 'One-time thread follow-up',
+        instructions: 'Report the one-time release status.',
+        enabled: true,
+        schedule: { kind: 'once', at: onceAt },
+        destination: {
+          platform: 'lark',
+          externalId: 'once-chat:om_once_root',
+          channelId: 'once-chat',
+          threadId: 'lark:once-chat:om_once_root',
+          rootMessageId: 'om_once_root',
+          topicId: 'om_once_root',
+          visibility: 'private',
+        },
+      }),
+    });
+    assert.equal(onceResponse.status, 200);
+    const onceRoutineCreated = (await onceResponse.json()).routine;
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    const onceTick = await fetch(`${baseUrl}/v1/routines/tick`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(onceTick.status, 200);
+    const onceSnapshot = await waitForJson(
+      `${baseUrl}/v1/routines?workspaceId=dev-workspace`,
+      (data) =>
+        data.executions.some(
+          (item) =>
+            item.routineId === onceRoutineCreated.id &&
+            item.status === 'completed',
+        ),
+      child,
+      logs,
+    );
+    const onceRoutine = onceSnapshot.routines.find(
+      (item) => item.id === onceRoutineCreated.id,
+    );
+    const onceExecutions = onceSnapshot.executions.filter(
+      (item) => item.routineId === onceRoutineCreated.id,
+    );
+    assert.equal(onceRoutine.enabled, false);
+    assert.equal(onceRoutine.nextRunAt, undefined);
+    assert.equal(onceExecutions.length, 1);
+    const onceRunResponse = await fetch(`${baseUrl}/v1/runs?limit=20`);
+    assert.equal(onceRunResponse.status, 200);
+    const onceRun = (await onceRunResponse.json()).runs.find(
+      (item) => item.id === onceExecutions[0].runId,
+    );
+    assert.ok(onceRun);
+    assert.equal(onceRun.threadId, 'lark:once-chat:om_once_root');
+    assert.equal(onceRun.thread.rootMessageId, 'om_once_root');
+    assert.equal(onceRun.thread.topicId, 'om_once_root');
+    assert.equal(onceRun.thread.visibility, 'private');
+    await fetch(`${baseUrl}/v1/routines/tick`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const afterSecondTick = await fetch(
+      `${baseUrl}/v1/routines?workspaceId=dev-workspace`,
+    ).then((response) => response.json());
+    assert.equal(
+      afterSecondTick.executions.filter(
+        (item) => item.routineId === onceRoutineCreated.id,
+      ).length,
+      1,
+    );
 
     const bindingResponse = await fetch(`${baseUrl}/v1/bindings`, {
       method: 'POST',

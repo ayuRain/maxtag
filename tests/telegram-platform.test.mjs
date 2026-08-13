@@ -26,14 +26,14 @@ function telegramUpdate(overrides = {}) {
       message_id: 41,
       message_thread_id: 77,
       date: 1_786_450_000,
-      chat: { id: -100123, type: 'supergroup', title: 'OpenTag Lab' },
+      chat: { id: -100123, type: 'supergroup', title: 'MaxTag Lab' },
       from: {
         id: 88,
         is_bot: false,
         first_name: 'Ada',
         username: 'ada',
       },
-      text: '/opentag@OpenTagBot check this',
+      text: '/maxtag@MaxTagBot check this',
       entities: [{ type: 'bot_command', offset: 0, length: 19 }],
       document: {
         file_id: 'file-1',
@@ -76,7 +76,7 @@ test('Telegram callback validates the webhook secret and exposes stable ids', ()
 
 test('Telegram updates normalize forum topics, mentions, actors, and files', () => {
   const normalized = normalizeTelegramUpdate(telegramUpdate(), {
-    botUsername: 'OpenTagBot',
+    botUsername: 'MaxTagBot',
     workspaceId: 'acme',
   });
   assert.ok(normalized);
@@ -119,7 +119,7 @@ test('Telegram updates normalize forum topics, mentions, actors, and files', () 
       text: '/opentag@AnotherBot check this',
       entities: [{ type: 'bot_command', offset: 0, length: 19 }],
     }),
-    { botUsername: 'OpenTagBot' },
+    { botUsername: 'MaxTagBot' },
   );
   assert.equal(wrongBot.message.mentionsAgent, false);
 });

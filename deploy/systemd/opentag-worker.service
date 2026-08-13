@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenTag durable agent worker
+Description=MaxTag durable agent worker
 Documentation=file:/opt/opentag/deploy/README.md
 Wants=network-online.target opentag-server.service
 After=network-online.target opentag-server.service

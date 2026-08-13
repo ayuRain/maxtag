@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {
+  CancelWorkflowExecutionResult,
+  CompleteWorkflowProducerPollInput,
+  FailWorkflowProducerPollInput,
+  RetryWorkflowNodeResult,
+  UpsertWorkflowProducerRouteInput,
   UpsertWorkflowInput,
   Workflow,
   WorkflowAuditFilter,
@@ -13,6 +18,11 @@ import type {
   WorkflowExecutionFilter,
   WorkflowExecutionStatus,
   WorkflowListFilter,
+  WorkflowProducerAuditRecord,
+  WorkflowProducerClaim,
+  WorkflowProducerRoute,
+  WorkflowProducerRouteFilter,
+  WorkflowProducerRuntime,
   WorkflowNode,
   WorkflowNodeClaim,
   WorkflowNodeExecution,
@@ -43,7 +53,15 @@ function bounded(value: string | undefined, max: number): string | undefined {
 }
 
 export function createEmptyWorkflowState(): WorkflowState {
-  return { version: 1, workflows: [], executions: [], audit: [] };
+  return {
+    version: 1,
+    workflows: [],
+    executions: [],
+    audit: [],
+    producerRoutes: [],
+    producerRuntime: [],
+    producerAudit: [],
+  };
 }
 
 export function normalizeWorkflowState(
@@ -59,6 +77,15 @@ export function normalizeWorkflowState(
       : [],
     audit: Array.isArray(input.audit)
       ? (input.audit as WorkflowAuditRecord[])
+      : [],
+    producerRoutes: Array.isArray(input.producerRoutes)
+      ? (input.producerRoutes as WorkflowProducerRoute[])
+      : [],
+    producerRuntime: Array.isArray(input.producerRuntime)
+      ? (input.producerRuntime as WorkflowProducerRuntime[])
+      : [],
+    producerAudit: Array.isArray(input.producerAudit)
+      ? (input.producerAudit as WorkflowProducerAuditRecord[])
       : [],
   };
 }
@@ -83,6 +110,9 @@ export function trimWorkflowState(state: WorkflowState): void {
   }
   if (state.audit.length > 500) {
     state.audit.splice(0, state.audit.length - 500);
+  }
+  if (state.producerAudit.length > 500) {
+    state.producerAudit.splice(0, state.producerAudit.length - 500);
   }
 }
 
@@ -208,6 +238,27 @@ function nodeExecutionFor(
   return execution.nodes.find((node) => node.nodeId === nodeId);
 }
 
+function descendantNodeIds(workflow: Workflow, nodeId: string): Set<string> {
+  const descendants = new Set<string>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of workflow.nodes) {
+      if (
+        node.id !== nodeId &&
+        !descendants.has(node.id) &&
+        (node.dependsOn ?? []).some(
+          (dependency) => dependency === nodeId || descendants.has(dependency),
+        )
+      ) {
+        descendants.add(node.id);
+        changed = true;
+      }
+    }
+  }
+  return descendants;
+}
+
 function terminalNodeStatus(status: WorkflowNodeExecutionStatus): boolean {
   return (
     status === 'completed' ||
@@ -314,6 +365,7 @@ function createExecution(
       nodeId: node.id,
       status: 'pending',
       attempts: 0,
+      retryCount: 0,
       createdAt: timestamp,
       updatedAt: timestamp,
     })),
@@ -435,6 +487,327 @@ export class FileWorkflowStore {
     const state = await this.readState();
     const workflow = state.workflows.find((item) => item.id === id);
     return workflow ? clone(workflow) : undefined;
+  }
+
+  async listProducerRoutes(
+    filter: WorkflowProducerRouteFilter = {},
+  ): Promise<WorkflowProducerRoute[]> {
+    const state = await this.readState();
+    return state.producerRoutes
+      .filter(
+        (route) =>
+          (!filter.workspaceId || route.workspaceId === filter.workspaceId) &&
+          (!filter.projectId || route.projectId === filter.projectId) &&
+          (!filter.kind || route.kind === filter.kind) &&
+          (filter.includeArchived || route.status !== 'archived'),
+      )
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(clone);
+  }
+
+  async getProducerRoute(
+    id: string,
+  ): Promise<WorkflowProducerRoute | undefined> {
+    const state = await this.readState();
+    const route = state.producerRoutes.find((item) => item.id === id);
+    return route ? clone(route) : undefined;
+  }
+
+  async upsertProducerRoute(
+    input: UpsertWorkflowProducerRouteInput,
+    at = new Date(),
+  ): Promise<WorkflowProducerRoute> {
+    const workspaceId = required(
+      input.workspaceId,
+      'workflow_producer_workspace_required',
+    );
+    const projectId = required(
+      input.projectId,
+      'workflow_producer_project_required',
+    );
+    const name = required(input.name, 'workflow_producer_name_required').slice(
+      0,
+      160,
+    );
+    if (input.kind !== 'alertmanager' && input.kind !== 'lark-document') {
+      throw new Error('workflow_producer_kind_invalid');
+    }
+    const documentId =
+      input.kind === 'lark-document'
+        ? required(
+            input.documentId || '',
+            'workflow_producer_document_id_required',
+          ).slice(0, 100)
+        : undefined;
+    const pollIntervalSeconds =
+      input.kind === 'lark-document'
+        ? Math.max(
+            30,
+            Math.min(
+              86_400,
+              Math.floor(input.pollIntervalSeconds ?? 60),
+            ),
+          )
+        : undefined;
+    const timestamp = iso(at);
+    return this.mutate((state) => {
+      const existing = input.id
+        ? state.producerRoutes.find(
+            (route) => route.id === input.id && route.status !== 'archived',
+          )
+        : undefined;
+      if (input.id && !existing) {
+        throw new Error('workflow_producer_route_not_found');
+      }
+      if (
+        existing &&
+        (existing.workspaceId !== workspaceId ||
+          existing.projectId !== projectId ||
+          existing.kind !== input.kind ||
+          existing.documentId !== documentId)
+      ) {
+        throw new Error('workflow_producer_route_scope_immutable');
+      }
+      const actor = input.actor?.trim() || 'admin';
+      const route: WorkflowProducerRoute = {
+        id: existing?.id ?? randomUUID(),
+        kind: input.kind,
+        workspaceId,
+        projectId,
+        name,
+        documentId,
+        pollIntervalSeconds,
+        enabled: input.enabled ?? existing?.enabled ?? true,
+        status: 'active',
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+        createdBy: existing?.createdBy ?? actor,
+        updatedBy: actor,
+      };
+      if (existing) {
+        state.producerRoutes.splice(
+          state.producerRoutes.indexOf(existing),
+          1,
+          route,
+        );
+      } else {
+        state.producerRoutes.push(route);
+      }
+      if (route.kind === 'lark-document') {
+        const runtime = state.producerRuntime.find(
+          (item) => item.routeId === route.id,
+        );
+        if (!runtime) {
+          state.producerRuntime.push({
+            routeId: route.id,
+            failureCount: 0,
+            nextPollAt: timestamp,
+          });
+        } else if (route.enabled && !runtime.nextPollAt) {
+          runtime.nextPollAt = timestamp;
+        }
+      }
+      state.producerAudit.push({
+        id: randomUUID(),
+        action: existing
+          ? 'workflow.producer.updated'
+          : 'workflow.producer.created',
+        routeId: route.id,
+        workspaceId,
+        projectId,
+        actor,
+        at: timestamp,
+        snapshot: clone(route),
+      });
+      return clone(route);
+    });
+  }
+
+  async archiveProducerRoute(
+    id: string,
+    actor = 'admin',
+    at = new Date(),
+  ): Promise<WorkflowProducerRoute | undefined> {
+    return this.mutate((state) => {
+      const route = state.producerRoutes.find(
+        (item) => item.id === id && item.status !== 'archived',
+      );
+      if (!route) return undefined;
+      const timestamp = iso(at);
+      route.enabled = false;
+      route.status = 'archived';
+      route.updatedAt = timestamp;
+      route.updatedBy = actor.trim() || 'admin';
+      route.archivedAt = timestamp;
+      const runtime = state.producerRuntime.find(
+        (item) => item.routeId === route.id,
+      );
+      if (runtime) {
+        runtime.claimerId = undefined;
+        runtime.claimedAt = undefined;
+        runtime.nextPollAt = undefined;
+      }
+      state.producerAudit.push({
+        id: randomUUID(),
+        action: 'workflow.producer.archived',
+        routeId: route.id,
+        workspaceId: route.workspaceId,
+        projectId: route.projectId,
+        actor: route.updatedBy,
+        at: timestamp,
+        snapshot: clone(route),
+      });
+      return clone(route);
+    });
+  }
+
+  async listProducerAudit(
+    filter: WorkflowAuditFilter = {},
+  ): Promise<WorkflowProducerAuditRecord[]> {
+    const state = await this.readState();
+    return state.producerAudit
+      .filter(
+        (entry) =>
+          (!filter.workspaceId || entry.workspaceId === filter.workspaceId) &&
+          (!filter.projectId || entry.projectId === filter.projectId),
+      )
+      .sort((left, right) => right.at.localeCompare(left.at))
+      .slice(0, Math.max(1, Math.min(filter.limit ?? 50, 200)))
+      .map(clone);
+  }
+
+  async listProducerRuntime(
+    filter: WorkflowProducerRouteFilter = {},
+  ): Promise<WorkflowProducerRuntime[]> {
+    const state = await this.readState();
+    const routeIds = new Set(
+      state.producerRoutes
+        .filter(
+          (route) =>
+            (!filter.workspaceId || route.workspaceId === filter.workspaceId) &&
+            (!filter.projectId || route.projectId === filter.projectId) &&
+            (!filter.kind || route.kind === filter.kind) &&
+            (filter.includeArchived || route.status !== 'archived'),
+        )
+        .map((route) => route.id),
+    );
+    return state.producerRuntime
+      .filter((runtime) => routeIds.has(runtime.routeId))
+      .map(clone);
+  }
+
+  async claimDueProducerRoutes(
+    input: {
+      kind: 'lark-document';
+      claimerId: string;
+      staleAfterMs?: number;
+      limit?: number;
+      force?: boolean;
+    },
+    at = new Date(),
+  ): Promise<WorkflowProducerClaim[]> {
+    const claimerId = required(
+      input.claimerId,
+      'workflow_producer_claimer_required',
+    );
+    const limit = Math.max(1, Math.min(input.limit ?? 20, 100));
+    const staleBefore = at.getTime() - Math.max(1_000, input.staleAfterMs ?? 120_000);
+    const timestamp = iso(at);
+    return this.mutate((state) => {
+      const claims: WorkflowProducerClaim[] = [];
+      for (const route of state.producerRoutes) {
+        if (claims.length >= limit) break;
+        if (
+          route.kind !== input.kind ||
+          route.status !== 'active' ||
+          !route.enabled
+        ) {
+          continue;
+        }
+        let runtime = state.producerRuntime.find(
+          (item) => item.routeId === route.id,
+        );
+        if (!runtime) {
+          runtime = { routeId: route.id, failureCount: 0 };
+          state.producerRuntime.push(runtime);
+        }
+        const due =
+          input.force ||
+          !runtime.nextPollAt ||
+          Date.parse(runtime.nextPollAt) <= at.getTime();
+        const claimStale =
+          !runtime.claimerId ||
+          !runtime.claimedAt ||
+          Date.parse(runtime.claimedAt) <= staleBefore;
+        if (!due || !claimStale) continue;
+        runtime.claimerId = claimerId;
+        runtime.claimedAt = timestamp;
+        claims.push({ route: clone(route), runtime: clone(runtime) });
+      }
+      return claims;
+    });
+  }
+
+  async completeProducerPoll(
+    input: CompleteWorkflowProducerPollInput,
+    at = new Date(),
+  ): Promise<WorkflowProducerRuntime> {
+    return this.mutate((state) => {
+      const route = state.producerRoutes.find(
+        (item) => item.id === input.routeId && item.status === 'active',
+      );
+      const runtime = state.producerRuntime.find(
+        (item) => item.routeId === input.routeId,
+      );
+      if (!route || !runtime) throw new Error('workflow_producer_route_not_found');
+      if (runtime.claimerId !== input.claimerId) {
+        throw new Error('workflow_producer_claim_lost');
+      }
+      const timestamp = iso(at);
+      runtime.lastRevisionId = input.revisionId;
+      runtime.lastContentHash = bounded(input.contentHash, 100);
+      runtime.lastTitle = bounded(input.title, 500);
+      runtime.lastCheckedAt = timestamp;
+      runtime.lastSuccessAt = timestamp;
+      if (input.changed) runtime.lastChangedAt = timestamp;
+      runtime.nextPollAt = iso(
+        new Date(at.getTime() + (route.pollIntervalSeconds ?? 60) * 1_000),
+      );
+      runtime.failureCount = 0;
+      runtime.lastError = undefined;
+      runtime.claimerId = undefined;
+      runtime.claimedAt = undefined;
+      return clone(runtime);
+    });
+  }
+
+  async failProducerPoll(
+    input: FailWorkflowProducerPollInput,
+    at = new Date(),
+  ): Promise<WorkflowProducerRuntime> {
+    return this.mutate((state) => {
+      const runtime = state.producerRuntime.find(
+        (item) => item.routeId === input.routeId,
+      );
+      if (!runtime) throw new Error('workflow_producer_route_not_found');
+      if (runtime.claimerId !== input.claimerId) {
+        throw new Error('workflow_producer_claim_lost');
+      }
+      runtime.failureCount += 1;
+      runtime.lastCheckedAt = iso(at);
+      runtime.lastError = required(input.error, 'workflow_producer_error_required').slice(
+        0,
+        1_000,
+      );
+      const backoffMs = Math.min(
+        15 * 60_000,
+        30_000 * 2 ** Math.min(runtime.failureCount - 1, 5),
+      );
+      runtime.nextPollAt = iso(new Date(at.getTime() + backoffMs));
+      runtime.claimerId = undefined;
+      runtime.claimedAt = undefined;
+      return clone(runtime);
+    });
   }
 
   async upsertWorkflow(
@@ -616,6 +989,8 @@ export class FileWorkflowStore {
       0,
       500,
     );
+    const producer = bounded(input.producer, 120);
+    const sourceExternalId = bounded(input.sourceExternalId, 500);
     return this.mutate((state) => {
       const timestamp = iso(at);
       const workflows = state.workflows.filter(
@@ -647,6 +1022,8 @@ export class FileWorkflowStore {
               actor: input.actor?.trim() || 'workflow-event',
               eventType,
               eventId,
+              producer,
+              sourceExternalId,
             },
             payload: input.payload,
           },
@@ -654,6 +1031,21 @@ export class FileWorkflowStore {
         );
         state.executions.push(execution);
         staged.push(clone(execution));
+        state.audit.push({
+          id: randomUUID(),
+          action: 'workflow.event.staged',
+          workflowId: workflow.id,
+          workspaceId: workflow.workspaceId,
+          projectId: workflow.projectId,
+          actor: input.actor?.trim() || 'workflow-event',
+          at: timestamp,
+          snapshot: clone(workflow),
+          executionId: execution.id,
+          eventType,
+          eventId,
+          producer,
+          sourceExternalId,
+        });
       }
       return { matched: workflows.length, staged, duplicates };
     });
@@ -735,9 +1127,12 @@ export class FileWorkflowStore {
     at = new Date(),
   ): Promise<WorkflowNodeExecution | undefined> {
     return this.updateNode(nodeExecutionId, at, (node) => {
+      if (node.status !== 'claimed') return false;
       node.status = 'queued';
       node.runId = runId;
+      node.runIds = [...new Set([...(node.runIds ?? []), runId])];
       node.error = undefined;
+      return true;
     });
   }
 
@@ -747,6 +1142,7 @@ export class FileWorkflowStore {
     at = new Date(),
   ): Promise<WorkflowNodeExecution | undefined> {
     return this.updateNode(nodeExecutionId, at, (node) => {
+      if (terminalNodeStatus(node.status)) return false;
       node.status = 'failed';
       node.error = error.slice(0, 2_000);
       node.completedAt = iso(at);
@@ -766,6 +1162,9 @@ export class FileWorkflowStore {
       );
       const node = execution?.nodes.find((item) => item.runId === input.runId);
       if (!execution || !node) return undefined;
+      if (execution.status === 'cancelled' || node.status === 'cancelled') {
+        return clone(node);
+      }
       const at = input.at ?? new Date();
       const timestamp = iso(at);
       node.status = input.status;
@@ -788,7 +1187,7 @@ export class FileWorkflowStore {
   private async updateNode(
     nodeExecutionId: string,
     at: Date,
-    update: (node: WorkflowNodeExecution) => void,
+    update: (node: WorkflowNodeExecution) => boolean | void,
   ): Promise<WorkflowNodeExecution | undefined> {
     return this.mutate((state) => {
       const execution = state.executions.find((item) =>
@@ -796,12 +1195,135 @@ export class FileWorkflowStore {
       );
       const node = execution?.nodes.find((item) => item.id === nodeExecutionId);
       if (!execution || !node) return undefined;
-      update(node);
+      if (update(node) === false) return undefined;
       const timestamp = iso(at);
       node.updatedAt = timestamp;
       execution.updatedAt = timestamp;
       updateExecutionState(execution, timestamp);
       return clone(node);
+    });
+  }
+
+  async cancelExecution(
+    id: string,
+    input: { actor?: string; reason?: string } = {},
+    at = new Date(),
+  ): Promise<CancelWorkflowExecutionResult> {
+    return this.mutate((state) => {
+      const execution = state.executions.find((item) => item.id === id);
+      if (!execution) throw new Error('workflow_execution_not_found');
+      if (execution.status === 'completed' || execution.status === 'failed') {
+        throw new Error('workflow_execution_not_active');
+      }
+      const activeRunIds = execution.nodes
+        .filter(
+          (node) =>
+            node.status === 'claimed' ||
+            node.status === 'queued' ||
+            node.status === 'running' ||
+            (execution.status === 'cancelled' && node.status === 'cancelled'),
+        )
+        .flatMap((node) => (node.runId ? [node.runId] : []));
+      if (execution.status === 'cancelled') {
+        return { execution: clone(execution), changed: false, activeRunIds };
+      }
+      const timestamp = iso(at);
+      const reason = bounded(input.reason, 500) || 'workflow_execution_cancelled';
+      for (const node of execution.nodes) {
+        if (terminalNodeStatus(node.status)) continue;
+        node.status = 'cancelled';
+        node.error = reason;
+        node.completedAt = timestamp;
+        node.updatedAt = timestamp;
+      }
+      execution.status = 'cancelled';
+      execution.error = reason;
+      execution.completedAt = timestamp;
+      execution.updatedAt = timestamp;
+      state.audit.push({
+        id: randomUUID(),
+        action: 'workflow.execution.cancelled',
+        workflowId: execution.workflowId,
+        workspaceId: execution.workflow.workspaceId,
+        projectId: execution.workflow.projectId,
+        actor: input.actor?.trim() || 'admin',
+        at: timestamp,
+        snapshot: clone(execution.workflow),
+        executionId: execution.id,
+        reason,
+      });
+      return { execution: clone(execution), changed: true, activeRunIds };
+    });
+  }
+
+  async retryNode(
+    executionId: string,
+    nodeId: string,
+    input: { actor?: string; reason?: string } = {},
+    at = new Date(),
+  ): Promise<RetryWorkflowNodeResult> {
+    return this.mutate((state) => {
+      const execution = state.executions.find((item) => item.id === executionId);
+      if (!execution) throw new Error('workflow_execution_not_found');
+      if (execution.status !== 'failed') {
+        throw new Error('workflow_execution_not_failed');
+      }
+      const node = nodeExecutionFor(execution, nodeId);
+      if (!node) throw new Error('workflow_node_not_found');
+      if (node.status !== 'failed') throw new Error('workflow_node_not_failed');
+      const timestamp = iso(at);
+      const nextAttempt = (node.retryCount ?? 0) + 2;
+      node.retryCount = (node.retryCount ?? 0) + 1;
+      const descendants = descendantNodeIds(execution.workflow, nodeId);
+      const resetNodeIds = [nodeId];
+      for (const candidate of execution.nodes) {
+        const resetTarget =
+          candidate.id === node.id ||
+          (descendants.has(candidate.nodeId) &&
+            candidate.status === 'skipped' &&
+            candidate.error === 'workflow_dependency_failed');
+        if (!resetTarget) continue;
+        if (candidate.id !== node.id) resetNodeIds.push(candidate.nodeId);
+        if (candidate.runId) {
+          candidate.runIds = [
+            ...new Set([...(candidate.runIds ?? []), candidate.runId]),
+          ];
+        }
+        candidate.status = 'pending';
+        candidate.claimerId = undefined;
+        candidate.claimedAt = undefined;
+        candidate.runId = undefined;
+        candidate.summary = undefined;
+        candidate.error = undefined;
+        candidate.startedAt = undefined;
+        candidate.completedAt = undefined;
+        candidate.updatedAt = timestamp;
+      }
+      execution.status = 'pending';
+      execution.summary = undefined;
+      execution.error = undefined;
+      execution.completedAt = undefined;
+      execution.updatedAt = timestamp;
+      state.audit.push({
+        id: randomUUID(),
+        action: 'workflow.node.retried',
+        workflowId: execution.workflowId,
+        workspaceId: execution.workflow.workspaceId,
+        projectId: execution.workflow.projectId,
+        actor: input.actor?.trim() || 'admin',
+        at: timestamp,
+        snapshot: clone(execution.workflow),
+        executionId: execution.id,
+        nodeId,
+        attempt: nextAttempt,
+        reason: bounded(input.reason, 500) || 'workflow_node_retried',
+      });
+      return {
+        execution: clone(execution),
+        node: clone(node),
+        resetNodeIds,
+        nextAttempt,
+      };
     });
   }
 
@@ -837,6 +1359,20 @@ export class FileWorkflowStore {
       .map(clone);
   }
 
+  async referencedRunIds(workspaceId: string): Promise<string[]> {
+    const state = await this.readState();
+    return [...new Set(
+      state.executions
+        .filter((execution) => execution.workflow.workspaceId === workspaceId)
+        .flatMap((execution) =>
+          execution.nodes.flatMap((node) => [
+            ...(node.runIds ?? []),
+            ...(node.runId ? [node.runId] : []),
+          ]),
+        ),
+    )];
+  }
+
   async getExecution(id: string): Promise<WorkflowExecution | undefined> {
     const state = await this.readState();
     const execution = state.executions.find((item) => item.id === id);
@@ -848,6 +1384,12 @@ export class FileWorkflowStore {
     projectId?: string,
   ): Promise<WorkflowSummary> {
     const state = await this.readState();
+    const producerRoutes = state.producerRoutes.filter(
+      (route) =>
+        route.status !== 'archived' &&
+        (!workspaceId || route.workspaceId === workspaceId) &&
+        (!projectId || route.projectId === projectId),
+    );
     const workflows = state.workflows.filter(
       (workflow) =>
         workflow.status !== 'archived' &&
@@ -855,6 +1397,10 @@ export class FileWorkflowStore {
         (!projectId || workflow.projectId === projectId),
     );
     const ids = new Set(workflows.map((workflow) => workflow.id));
+    const producerRouteIds = new Set(producerRoutes.map((route) => route.id));
+    const producerRuntime = state.producerRuntime.filter((runtime) =>
+      producerRouteIds.has(runtime.routeId),
+    );
     const executions = executionCounts();
     const nodes = nodeCounts();
     const oldestExecutionUpdatedAt: Partial<
@@ -877,6 +1423,20 @@ export class FileWorkflowStore {
       }
     }
     return {
+      producerRoutes: {
+        enabled: producerRoutes.filter((route) => route.enabled).length,
+        disabled: producerRoutes.filter((route) => !route.enabled).length,
+      },
+      producerRuntime: {
+        ready: producerRuntime.filter(
+          (runtime) => runtime.lastSuccessAt && !runtime.lastError && !runtime.claimerId,
+        ).length,
+        pending: producerRuntime.filter(
+          (runtime) => !runtime.lastSuccessAt && !runtime.lastError && !runtime.claimerId,
+        ).length,
+        error: producerRuntime.filter((runtime) => Boolean(runtime.lastError)).length,
+        claimed: producerRuntime.filter((runtime) => Boolean(runtime.claimerId)).length,
+      },
       workflows: {
         enabled: workflows.filter((workflow) => workflow.enabled).length,
         disabled: workflows.filter((workflow) => !workflow.enabled).length,

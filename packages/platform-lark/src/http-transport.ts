@@ -3,8 +3,12 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   LarkDeliveryMetadata,
+  LarkChatInfo,
   LarkDownloadedResource,
   LarkFileInput,
+  LarkHistoryMessage,
+  LarkListMessagesInput,
+  LarkMessagePage,
   LarkTransport,
 } from './types.js';
 
@@ -37,6 +41,21 @@ interface LarkFileData {
 
 interface LarkImageData {
   image_key?: string;
+}
+
+interface LarkHistoryData {
+  items?: LarkHistoryMessage[];
+  has_more?: boolean;
+  page_token?: string;
+}
+
+interface LarkChatData {
+  chat_id?: string;
+  name?: string;
+  description?: string;
+  chat_mode?: 'group' | 'p2p' | 'topic';
+  chat_type?: 'private' | 'public';
+  external?: boolean;
 }
 
 interface TenantTokenCache {
@@ -183,6 +202,60 @@ export class HttpLarkTransport implements LarkTransport {
     this.now = options.now ?? (() => new Date());
   }
 
+  async readiness(): Promise<{ ok: boolean }> {
+    await this.tenantAccessToken();
+    return { ok: true };
+  }
+
+  async getChat(
+    chatId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<LarkChatInfo | undefined> {
+    const data = await this.openApiRequest<LarkChatData>(
+      `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}`,
+      { method: 'GET', signal: options?.signal },
+    );
+    return {
+      chatId: data.chat_id || chatId,
+      name: data.name?.trim() || undefined,
+      description: data.description?.trim() || undefined,
+      chatMode: data.chat_mode,
+      chatType: data.chat_type,
+      external: data.external,
+    };
+  }
+
+  async getMessage(messageId: string): Promise<LarkHistoryMessage | undefined> {
+    const data = await this.openApiRequest<LarkHistoryData>(
+      `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
+      { method: 'GET' },
+    );
+    return data.items?.[0];
+  }
+
+  async listMessages(input: LarkListMessagesInput): Promise<LarkMessagePage> {
+    const data = await this.openApiRequest<LarkHistoryData>(
+      '/open-apis/im/v1/messages',
+      {
+        method: 'GET',
+        query: {
+          container_id_type: input.containerType,
+          container_id: input.containerId,
+          start_time: input.startTime,
+          end_time: input.endTime,
+          sort_type: input.sortType ?? 'ByCreateTimeAsc',
+          page_size: Math.max(1, Math.min(input.pageSize ?? 50, 50)),
+          page_token: input.pageToken,
+        },
+      },
+    );
+    return {
+      items: data.items ?? [],
+      hasMore: data.has_more === true,
+      pageToken: data.page_token,
+    };
+  }
+
   async openApiRequest<T>(
     pathname: string,
     options: {
@@ -263,7 +336,7 @@ export class HttpLarkTransport implements LarkTransport {
     rootId?: string;
     replyToMessageId?: string;
     metadata?: LarkDeliveryMetadata;
-  }): Promise<{ messageId: string }> {
+  }): Promise<{ messageId: string; messageType: 'file' | 'image' }> {
     const bytes = await readFile(input.file.path);
     if (!bytes.byteLength) throw new LarkApiError({ message: 'Lark file cannot be empty.' });
     if (bytes.byteLength > 30 * 1024 * 1024) {
@@ -327,7 +400,7 @@ export class HttpLarkTransport implements LarkTransport {
     if (!message.message_id) {
       throw new LarkApiError({ message: 'Lark file message response did not include message_id.' });
     }
-    return { messageId: message.message_id };
+    return { messageId: message.message_id, messageType: msgType };
   }
 
   async downloadMessageResource(input: {

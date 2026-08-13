@@ -94,7 +94,7 @@ function signatureHeaders(headers: IncomingHttpHeaders): {
     nonce,
     signature,
     complete: Boolean(timestamp && nonce && signature),
-    absent: !timestamp && !nonce && !signature,
+    absent: !nonce && !signature,
   };
 }
 
@@ -151,7 +151,7 @@ function validateTimestamp(
 ): LarkCallbackValidationResult {
   if (!options.maxTimestampSkewSeconds) return { ok: true };
   const raw = headerValue(headers, 'x-lark-request-timestamp');
-  if (!raw) return { ok: true };
+  if (!raw) return { ok: false, statusCode: 401, reason: 'stale_request' };
   const seconds = Number(raw);
   if (!Number.isFinite(seconds)) {
     return { ok: false, statusCode: 401, reason: 'stale_request' };
@@ -295,6 +295,7 @@ export function normalizeLarkCardAction(
   body: LarkIncomingEvent & Record<string, unknown>,
 ): LarkCardAction | undefined {
   if (larkCallbackEventType(body) !== 'card.action.trigger') return undefined;
+  if (!body.event) return normalizeFlatLarkCardAction(body);
   const event = body.event;
   const value = event?.action?.value;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -308,13 +309,69 @@ export function normalizeLarkCardAction(
   const chatId = event?.context?.open_chat_id?.trim() || '';
   if (!action || !actorId || !cardMessageId || !chatId) return undefined;
   const runId = typeof record.run_id === 'string' ? record.run_id.trim() : '';
+  const proposalId =
+    typeof record.proposal_id === 'string' ? record.proposal_id.trim() : '';
+  const approvalId =
+    typeof record.approval_id === 'string' ? record.approval_id.trim() : '';
   return {
     action,
     runId: runId || undefined,
+    ...(proposalId ? { proposalId } : {}),
+    ...(approvalId ? { approvalId } : {}),
     actorId,
     cardMessageId,
     chatId,
     tenantKey: event?.operator?.tenant_key || body.header?.tenant_key,
     componentTag: event?.action?.tag,
+  };
+}
+
+function parseCardActionValue(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function flatString(
+  body: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = body[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+export function normalizeFlatLarkCardAction(
+  body: Record<string, unknown>,
+): LarkCardAction | undefined {
+  if (flatString(body, 'type') !== 'card.action.trigger') return undefined;
+  const record = parseCardActionValue(body.action_value);
+  const action = typeof record?.action === 'string' ? record.action.trim() : '';
+  const actorId = flatString(body, 'operator_id') || '';
+  const cardMessageId = flatString(body, 'message_id') || '';
+  const chatId = flatString(body, 'chat_id') || '';
+  if (!action || !actorId || !cardMessageId || !chatId) return undefined;
+  const runId = typeof record?.run_id === 'string' ? record.run_id.trim() : '';
+  const proposalId =
+    typeof record?.proposal_id === 'string' ? record.proposal_id.trim() : '';
+  const approvalId =
+    typeof record?.approval_id === 'string' ? record.approval_id.trim() : '';
+  return {
+    action,
+    runId: runId || undefined,
+    ...(proposalId ? { proposalId } : {}),
+    ...(approvalId ? { approvalId } : {}),
+    actorId,
+    cardMessageId,
+    chatId,
+    componentTag: flatString(body, 'action_tag'),
   };
 }

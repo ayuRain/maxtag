@@ -1,7 +1,11 @@
 import type {
   LarkDeliveryMetadata,
+  LarkChatInfo,
   LarkDownloadedResource,
   LarkFileInput,
+  LarkHistoryMessage,
+  LarkListMessagesInput,
+  LarkMessagePage,
   LarkTransport,
 } from './types.js';
 
@@ -17,6 +21,59 @@ export class MemoryLarkTransport implements LarkTransport {
     metadata?: LarkDeliveryMetadata;
   }> = [];
   readonly resources = new Map<string, LarkDownloadedResource>();
+  readonly historyMessages: LarkHistoryMessage[] = [];
+  readonly chats = new Map<string, LarkChatInfo>();
+
+  async readiness(): Promise<{ ok: boolean }> {
+    return { ok: true };
+  }
+
+  async getChat(chatId: string): Promise<LarkChatInfo | undefined> {
+    const chat = this.chats.get(chatId);
+    return chat ? structuredClone(chat) : undefined;
+  }
+
+  async getMessage(messageId: string): Promise<LarkHistoryMessage | undefined> {
+    const message = this.historyMessages.find(
+      (item) => item.message_id === messageId,
+    );
+    return message ? structuredClone(message) : undefined;
+  }
+
+  async listMessages(input: LarkListMessagesInput): Promise<LarkMessagePage> {
+    const ascending = (input.sortType ?? 'ByCreateTimeAsc') === 'ByCreateTimeAsc';
+    const startMs = input.startTime ? Number(input.startTime) * 1000 : undefined;
+    const endMs = input.endTime ? Number(input.endTime) * 1000 : undefined;
+    const matching = this.historyMessages
+      .filter((message) =>
+        input.containerType === 'thread'
+          ? message.thread_id === input.containerId
+          : message.chat_id === input.containerId,
+      )
+      .filter((message) => {
+        if (input.containerType === 'thread') return true;
+        const raw = Number(message.create_time);
+        const createdMs = raw < 10_000_000_000 ? raw * 1000 : raw;
+        return (
+          Number.isFinite(createdMs) &&
+          (startMs === undefined || createdMs >= startMs) &&
+          (endMs === undefined || createdMs <= endMs)
+        );
+      })
+      .sort((left, right) =>
+        String(left.create_time || '').localeCompare(String(right.create_time || '')),
+      );
+    if (!ascending) matching.reverse();
+    const offset = Math.max(0, Number(input.pageToken || 0) || 0);
+    const pageSize = Math.max(1, Math.min(input.pageSize ?? 50, 50));
+    const items = matching.slice(offset, offset + pageSize);
+    const nextOffset = offset + items.length;
+    return {
+      items: structuredClone(items),
+      hasMore: nextOffset < matching.length,
+      pageToken: nextOffset < matching.length ? String(nextOffset) : undefined,
+    };
+  }
 
   async sendText(input: {
     chatId: string;
@@ -59,10 +116,13 @@ export class MemoryLarkTransport implements LarkTransport {
     rootId?: string;
     replyToMessageId?: string;
     metadata?: LarkDeliveryMetadata;
-  }): Promise<{ messageId: string }> {
+  }): Promise<{ messageId: string; messageType: 'file' | 'image' }> {
     const messageId = `file_${this.files.length + 1}`;
     this.files.push({ messageId, ...input });
-    return { messageId };
+    return {
+      messageId,
+      messageType: input.file.mimeType?.startsWith('image/') ? 'image' : 'file',
+    };
   }
 
   async downloadMessageResource(input: {

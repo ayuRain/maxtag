@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
 const SESSION_COOKIE = 'opentag_operator_session';
@@ -21,9 +21,20 @@ interface OperatorSessionPayload {
   csrfToken: string;
 }
 
+interface RevisionedOperatorSessionPayload {
+  version: 3;
+  principalId: string;
+  credentialSource: 'static' | 'persistent';
+  credentialRevision: number;
+  issuedAt: number;
+  expiresAt: number;
+  csrfToken: string;
+}
+
 type DecodedOperatorSessionPayload =
   | LegacyOperatorSessionPayload
-  | OperatorSessionPayload;
+  | OperatorSessionPayload
+  | RevisionedOperatorSessionPayload;
 
 export type OperatorRole = 'owner' | 'admin' | 'viewer';
 
@@ -61,6 +72,25 @@ export interface OperatorAuthOptions {
   sessionSecret?: string;
   sessionTtlSeconds?: number;
   secureCookie?: boolean;
+  persistentCredentials?: PersistentOperatorCredentialProvider;
+  persistentCredentialCount?: number;
+}
+
+export interface PersistentOperatorCredentialProvider {
+  authenticateToken(token: string): Promise<{
+    principal: OperatorPrincipal;
+    revision: number;
+  } | undefined>;
+  resolveActive(id: string, revision: number): Promise<{
+    principal: OperatorPrincipal;
+    revision: number;
+  } | undefined>;
+}
+
+interface ResolvedCredential {
+  principal: OperatorPrincipal;
+  source: 'static' | 'persistent';
+  revision: number;
 }
 
 const LOCAL_PRINCIPAL: OperatorPrincipal = {
@@ -159,6 +189,11 @@ function validateToken(token: string, label: string): string {
   return token;
 }
 
+function staticCredentialRevision(token: string): number {
+  const digest = createHash('sha256').update(token, 'utf8').digest();
+  return digest.readUIntBE(0, 6) || 1;
+}
+
 function encodePayload(payload: DecodedOperatorSessionPayload): string {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
@@ -171,15 +206,21 @@ function decodePayload(
       Buffer.from(value, 'base64url').toString('utf8'),
     ) as Partial<DecodedOperatorSessionPayload>;
     if (
-      (parsed.version !== 1 && parsed.version !== 2) ||
+      (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) ||
       !Number.isFinite(parsed.issuedAt) ||
       !Number.isFinite(parsed.expiresAt) ||
       typeof parsed.csrfToken !== 'string' ||
       !parsed.csrfToken ||
-      (parsed.version === 2 &&
+      ((parsed.version === 2 || parsed.version === 3) &&
         (!('principalId' in parsed) ||
           typeof parsed.principalId !== 'string' ||
-          !parsed.principalId))
+          !parsed.principalId)) ||
+      (parsed.version === 3 &&
+        (parsed.credentialSource !== 'static' &&
+          parsed.credentialSource !== 'persistent')) ||
+      (parsed.version === 3 &&
+        (!Number.isInteger(parsed.credentialRevision) ||
+          (parsed.credentialRevision ?? 0) < 1))
     ) {
       return undefined;
     }
@@ -252,12 +293,12 @@ export function bearerTokenMatches(
 }
 
 export class OperatorAuth {
-  readonly configured: boolean;
   readonly sessionTtlSeconds: number;
-  readonly principalCount: number;
   private readonly credentials: OperatorCredential[];
   private readonly sessionSecret?: string;
   private readonly secureCookie: boolean;
+  private readonly persistentCredentials?: PersistentOperatorCredentialProvider;
+  private persistentCredentialCount: number;
 
   constructor(options: OperatorAuthOptions = {}) {
     const credentials = (options.credentials ?? []).map((credential) => ({
@@ -291,8 +332,11 @@ export class OperatorAuth {
       tokens.add(credential.token);
     }
     this.credentials = credentials;
-    this.configured = credentials.length > 0;
-    this.principalCount = credentials.length;
+    this.persistentCredentials = options.persistentCredentials;
+    this.persistentCredentialCount = Math.max(
+      0,
+      Math.floor(options.persistentCredentialCount ?? 0),
+    );
     this.sessionSecret = options.sessionSecret
       ? validateToken(options.sessionSecret, 'OPENTAG_OPERATOR_SESSION_SECRET')
       : credentials[0]?.token;
@@ -300,10 +344,33 @@ export class OperatorAuth {
     this.secureCookie = Boolean(options.secureCookie);
   }
 
-  authenticate(
+  get configured(): boolean {
+    return this.credentials.length > 0 || this.persistentCredentialCount > 0;
+  }
+
+  get principalCount(): number {
+    return this.credentials.length + this.persistentCredentialCount;
+  }
+
+  setPersistentCredentialCount(count: number): void {
+    this.persistentCredentialCount = Math.max(0, Math.floor(count));
+  }
+
+  hasStaticPrincipal(id: string): boolean {
+    return this.credentials.some((credential) => credential.id === id);
+  }
+
+  hasStaticInstallationOwner(): boolean {
+    return this.credentials.some(
+      (credential) =>
+        credential.role === 'owner' && credential.workspaceIds.includes('*'),
+    );
+  }
+
+  async authenticate(
     request: IncomingMessage,
     at = new Date(),
-  ): OperatorAuthentication {
+  ): Promise<OperatorAuthentication> {
     if (!this.configured) {
       return {
         authenticated: true,
@@ -313,28 +380,54 @@ export class OperatorAuth {
       };
     }
     const suppliedBearer = bearerToken(request);
-    const bearerCredential = suppliedBearer
+    const staticBearerCredential = suppliedBearer
       ? this.credentials.find((credential) =>
           constantTimeEqual(suppliedBearer, credential.token),
         )
       : undefined;
-    if (bearerCredential) {
+    if (staticBearerCredential) {
       return {
         authenticated: true,
         method: 'bearer',
         csrfValid: true,
-        principal: clonePrincipal(bearerCredential),
+        principal: clonePrincipal(staticBearerCredential),
+      };
+    }
+    const persistentBearerCredential = suppliedBearer
+      ? await this.persistentCredentials?.authenticateToken(suppliedBearer)
+      : undefined;
+    if (persistentBearerCredential) {
+      return {
+        authenticated: true,
+        method: 'bearer',
+        csrfValid: true,
+        principal: clonePrincipal(persistentBearerCredential.principal),
       };
     }
     const session = this.parseSession(cookieValue(request, SESSION_COOKIE), at);
     if (!session) return { authenticated: false, csrfValid: false };
-    const credential =
-      session.version === 2
-        ? this.credentials.find(
-            (candidate) => candidate.id === session.principalId,
-          )
-        : this.credentials[0];
-    if (!credential) return { authenticated: false, csrfValid: false };
+    let principal: OperatorPrincipal | undefined;
+    if (session.version === 1) {
+      principal = this.credentials[0];
+    } else if (session.version === 2) {
+      principal = this.credentials.find(
+        (candidate) => candidate.id === session.principalId,
+      );
+    } else if (session.credentialSource === 'static') {
+      principal = this.credentials.find(
+        (candidate) =>
+          candidate.id === session.principalId &&
+          staticCredentialRevision(candidate.token) === session.credentialRevision,
+      );
+    } else {
+      principal = (
+        await this.persistentCredentials?.resolveActive(
+          session.principalId,
+          session.credentialRevision,
+        )
+      )?.principal;
+    }
+    if (!principal) return { authenticated: false, csrfValid: false };
     const suppliedCsrf = request.headers['x-opentag-csrf'];
     const csrfValue = Array.isArray(suppliedCsrf)
       ? suppliedCsrf[0]
@@ -347,19 +440,40 @@ export class OperatorAuth {
       ),
       expiresAt: new Date(session.expiresAt * 1000).toISOString(),
       csrfToken: session.csrfToken,
-      principal: clonePrincipal(credential),
+      principal: clonePrincipal(principal),
     };
   }
 
-  createSession(suppliedToken: string, at = new Date()): OperatorSession | undefined {
-    const credential = this.credentials.find((candidate) =>
+  async createSession(
+    suppliedToken: string,
+    at = new Date(),
+  ): Promise<OperatorSession | undefined> {
+    const staticCredential = this.credentials.find((candidate) =>
       constantTimeEqual(suppliedToken, candidate.token),
     );
-    if (!credential) return undefined;
+    const resolved: ResolvedCredential | undefined = staticCredential
+      ? {
+          principal: staticCredential,
+          source: 'static',
+          revision: staticCredentialRevision(staticCredential.token),
+        }
+      : await this.persistentCredentials?.authenticateToken(suppliedToken)
+        .then((credential) =>
+          credential
+            ? {
+                principal: credential.principal,
+                source: 'persistent' as const,
+                revision: credential.revision,
+              }
+            : undefined,
+        );
+    if (!resolved) return undefined;
     const issuedAt = Math.floor(at.getTime() / 1000);
-    const payload: OperatorSessionPayload = {
-      version: 2,
-      principalId: credential.id,
+    const payload: RevisionedOperatorSessionPayload = {
+      version: 3,
+      principalId: resolved.principal.id,
+      credentialSource: resolved.source,
+      credentialRevision: resolved.revision,
       issuedAt,
       expiresAt: issuedAt + this.sessionTtlSeconds,
       csrfToken: randomBytes(24).toString('base64url'),
@@ -370,7 +484,7 @@ export class OperatorAuth {
       cookie: this.cookie(`${encoded}.${signature}`, this.sessionTtlSeconds),
       expiresAt: new Date(payload.expiresAt * 1000).toISOString(),
       csrfToken: payload.csrfToken,
-      principal: clonePrincipal(credential),
+      principal: clonePrincipal(resolved.principal),
     };
   }
 

@@ -7,7 +7,10 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { OPENTAG_STOP_RUN_ACTION } from '@opentag/core';
+import {
+  OPENTAG_STOP_RUN_ACTION,
+  OPENTAG_TAKE_OVER_RUN_ACTION,
+} from '@opentag/core';
 
 async function freePort() {
   const server = net.createServer();
@@ -93,7 +96,14 @@ async function postLarkEvent(baseUrl, event, encryptKey) {
   return { response, data: await response.json() };
 }
 
-function messageEvent({ eventId, messageId, actorId, token }) {
+function messageEvent({
+  eventId,
+  messageId,
+  actorId,
+  token,
+  text = 'inspect the project',
+  rootId,
+}) {
   return {
     schema: '2.0',
     header: {
@@ -108,8 +118,9 @@ function messageEvent({ eventId, messageId, actorId, token }) {
         chat_id: 'oc_card_project',
         chat_type: 'group',
         message_type: 'text',
-        content: JSON.stringify({ text: 'inspect the project' }),
+        content: JSON.stringify({ text }),
         create_time: String(Date.now()),
+        root_id: rootId,
       },
       sender: {
         sender_id: { open_id: actorId },
@@ -125,6 +136,7 @@ function cardActionEvent({
   runId,
   cardMessageId,
   token,
+  action = OPENTAG_STOP_RUN_ACTION,
 }) {
   return {
     schema: '2.0',
@@ -142,7 +154,7 @@ function cardActionEvent({
       action: {
         tag: 'button',
         value: {
-          action: OPENTAG_STOP_RUN_ACTION,
+          action,
           run_id: runId,
         },
       },
@@ -155,8 +167,31 @@ function cardActionEvent({
   };
 }
 
+function flatCardActionEvent({
+  eventId,
+  actorId,
+  runId,
+  cardMessageId,
+  action = OPENTAG_STOP_RUN_ACTION,
+}) {
+  return {
+    type: 'card.action.trigger',
+    event_id: eventId,
+    timestamp: String(Date.now()),
+    operator_id: actorId,
+    message_id: cardMessageId,
+    chat_id: 'oc_card_project',
+    host: 'im_message',
+    action_tag: 'button',
+    action_value: JSON.stringify({
+      action,
+      run_id: runId,
+    }),
+  };
+}
+
 test(
-  'Lark progress-card Stop is receipt-bound, authorized, cancellable, and idempotent',
+  'Lark progress-card takeover and Stop are receipt-bound, authorized, cancellable, and idempotent',
   { timeout: 30_000 },
   async (context) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-card-'));
@@ -205,6 +240,7 @@ setInterval(() => {
         OPENTAG_ROUTINES_ENABLED: 'false',
         OPENTAG_WORKFLOWS_ENABLED: 'false',
         OPENTAG_LARK_TRANSPORT: 'memory',
+        OPENTAG_LARK_EVENT_MODE: 'webhook',
         OPENTAG_LARK_VERIFICATION_TOKEN: verificationToken,
         OPENTAG_LARK_ENCRYPT_KEY: encryptKey,
         OPENTAG_LARK_REQUIRE_BINDING: 'true',
@@ -245,12 +281,31 @@ setInterval(() => {
       externalId: 'ou-card-owner',
     });
     assert.equal(owner.response.status, 200);
+    const collaborator = await postJson(baseUrl, '/v1/access/members', {
+      workspaceId: 'dev-workspace',
+      displayName: 'Card collaborator',
+      role: 'member',
+      platform: 'lark',
+      externalId: 'ou-card-collaborator',
+    });
+    assert.equal(collaborator.response.status, 200);
     const policy = await postJson(baseUrl, '/v1/access/project-policy', {
       workspaceId: 'dev-workspace',
       projectId: 'card-project',
       mode: 'members',
     });
     assert.equal(policy.response.status, 200);
+    const collaboratorMembership = await postJson(
+      baseUrl,
+      '/v1/access/project-memberships',
+      {
+        workspaceId: 'dev-workspace',
+        projectId: 'card-project',
+        memberId: collaborator.data.member.id,
+        role: 'contributor',
+      },
+    );
+    assert.equal(collaboratorMembership.response.status, 200);
     const binding = await postJson(baseUrl, '/v1/bindings', {
       platform: 'lark',
       externalId: 'oc_card_project',
@@ -301,6 +356,7 @@ setInterval(() => {
         runId,
         cardMessageId: receipt.externalId,
         token: verificationToken,
+        action: OPENTAG_TAKE_OVER_RUN_ACTION,
       }),
       encryptKey,
     );
@@ -311,10 +367,11 @@ setInterval(() => {
       baseUrl,
       cardActionEvent({
         eventId: 'card-action-forged-run-1',
-        actorId: 'ou-card-owner',
+        actorId: 'ou-card-collaborator',
         runId: 'forged-run-id',
         cardMessageId: receipt.externalId,
         token: verificationToken,
+        action: OPENTAG_TAKE_OVER_RUN_ACTION,
       }),
       encryptKey,
     );
@@ -326,21 +383,39 @@ setInterval(() => {
     );
     assert.equal(activeRuns.runs.find((run) => run.id === runId).status, 'running');
 
-    const stopped = await postLarkEvent(
+    const followUp = await postLarkEvent(
       baseUrl,
-      cardActionEvent({
-        eventId: 'card-action-owner-stop-1',
-        actorId: 'ou-card-owner',
-        runId,
-        cardMessageId: receipt.externalId,
+      messageEvent({
+        eventId: 'card-message-follow-up-1',
+        messageId: 'om-card-follow-up-1',
+        actorId: 'ou-card-collaborator',
         token: verificationToken,
+        text: 'Also verify the deployment evidence.',
+        rootId: 'om-card-message-1',
       }),
       encryptKey,
     );
-    assert.equal(stopped.response.status, 200);
-    assert.deepEqual(stopped.data.toast, {
+    assert.equal(followUp.response.status, 202);
+    assert.equal(followUp.data.disposition, 'steered');
+    assert.equal(followUp.data.steering.status, 'pending');
+    assert.equal(followUp.data.run.id, runId);
+
+    const takenOver = await postLarkEvent(
+      baseUrl,
+      cardActionEvent({
+        eventId: 'card-action-collaborator-takeover-1',
+        actorId: 'ou-card-collaborator',
+        runId,
+        cardMessageId: receipt.externalId,
+        token: verificationToken,
+        action: OPENTAG_TAKE_OVER_RUN_ACTION,
+      }),
+      encryptKey,
+    );
+    assert.equal(takenOver.response.status, 200);
+    assert.deepEqual(takenOver.data.toast, {
       type: 'success',
-      content: 'Cancellation requested.',
+      content: 'Task handed over to you.',
     });
 
     const cancelled = await waitForValue(
@@ -355,11 +430,12 @@ setInterval(() => {
     const repeated = await postLarkEvent(
       baseUrl,
       cardActionEvent({
-        eventId: 'card-action-owner-stop-2',
-        actorId: 'ou-card-owner',
+        eventId: 'card-action-collaborator-takeover-2',
+        actorId: 'ou-card-collaborator',
         runId,
         cardMessageId: receipt.externalId,
         token: verificationToken,
+        action: OPENTAG_TAKE_OVER_RUN_ACTION,
       }),
       encryptKey,
     );
@@ -372,16 +448,128 @@ setInterval(() => {
     const duplicate = await postLarkEvent(
       baseUrl,
       cardActionEvent({
-        eventId: 'card-action-owner-stop-2',
-        actorId: 'ou-card-owner',
+        eventId: 'card-action-collaborator-takeover-2',
+        actorId: 'ou-card-collaborator',
         runId,
         cardMessageId: receipt.externalId,
         token: verificationToken,
+        action: OPENTAG_TAKE_OVER_RUN_ACTION,
       }),
       encryptKey,
     );
     assert.equal(duplicate.response.status, 200);
     assert.equal(duplicate.data.duplicate, true);
+
+    const takeoverDetail = await fetch(
+      `${baseUrl}/v1/runs/${encodeURIComponent(runId)}/events`,
+    ).then((response) => response.json());
+    const takeoverEvent = takeoverDetail.events.find(
+      (event) => event.type === 'human_takeover',
+    );
+    assert.ok(takeoverEvent);
+    assert.equal(takeoverEvent.metadata.actorId, 'ou-card-collaborator');
+    assert.equal(
+      takeoverEvent.metadata.actorDisplayName,
+      'Card collaborator',
+    );
+    assert.equal(takeoverEvent.metadata.cardMessageId, receipt.externalId);
+    assert.equal(
+      takeoverDetail.run.metadata.humanTakeover.actorId,
+      'ou-card-collaborator',
+    );
+    assert.equal(takeoverDetail.steering.length, 1);
+    assert.equal(takeoverDetail.steering[0].status, 'cancelled');
+    assert.match(takeoverDetail.steering[0].lastError, /human_takeover/u);
+    assert.ok(
+      takeoverEvent.sequence <
+        takeoverDetail.events.find(
+          (event) => event.type === 'steering_cancelled',
+        ).sequence,
+    );
+
+    const takeoverAudit = await fetch(
+      `${baseUrl}/v1/audit?workspaceId=dev-workspace&action=human_takeover`,
+    ).then((response) => response.json());
+    assert.equal(takeoverAudit.entries.length, 1);
+    assert.equal(
+      takeoverAudit.entries[0].actor,
+      'lark:ou-card-collaborator',
+    );
+    assert.equal(takeoverAudit.entries[0].outcome, 'changed');
+
+    const takeoverDelivery = await fetch(
+      `${baseUrl}/v1/deliveries?limit=100`,
+    ).then((response) => response.json());
+    assert.ok(
+      takeoverDelivery.outbox.some(
+        (item) =>
+          item.runId === runId &&
+          item.kind === 'lark.text' &&
+          item.target.chatId === 'oc_card_project' &&
+          item.target.rootId === 'om-card-message-1',
+      ),
+    );
+
+    const longConnectionAccepted = await postLarkEvent(
+      baseUrl,
+      messageEvent({
+        eventId: 'card-message-event-long-connection',
+        messageId: 'om-card-message-long-connection',
+        actorId: 'ou-card-owner',
+        token: verificationToken,
+      }),
+      encryptKey,
+    );
+    assert.equal(longConnectionAccepted.response.status, 202);
+    assert.equal(longConnectionAccepted.data.accepted, true);
+    const longConnectionRunId = longConnectionAccepted.data.run.id;
+    const longConnectionDelivery = await waitForValue(
+      () => fetch(`${baseUrl}/v1/deliveries?limit=100`).then((response) => response.json()),
+      (snapshot) =>
+        snapshot.outbox.some(
+          (item) =>
+            item.runId === longConnectionRunId &&
+            item.kind === 'lark.card.create' &&
+            item.status === 'delivered' &&
+            item.externalId,
+        ),
+      'long-connection progress card receipt',
+      logs,
+    );
+    const longConnectionReceipt = longConnectionDelivery.outbox.find(
+      (item) =>
+        item.runId === longConnectionRunId &&
+        item.kind === 'lark.card.create',
+    );
+    const longConnectionStop = await postJson(
+      baseUrl,
+      '/v1/lark/card-actions',
+      flatCardActionEvent({
+        eventId: 'card-action-long-connection-stop',
+        actorId: 'ou-card-owner',
+        runId: longConnectionRunId,
+        cardMessageId: longConnectionReceipt.externalId,
+      }),
+    );
+    assert.equal(longConnectionStop.response.status, 200);
+    assert.deepEqual(longConnectionStop.data.toast, {
+      type: 'success',
+      content: 'Cancellation requested.',
+    });
+    const longConnectionCancelled = await waitForValue(
+      () => fetch(`${baseUrl}/v1/runs?limit=10`).then((response) => response.json()),
+      (snapshot) =>
+        snapshot.runs.some(
+          (run) => run.id === longConnectionRunId && run.status === 'cancelled',
+        ),
+      'long-connection cancelled run',
+      logs,
+    );
+    assert.equal(
+      longConnectionCancelled.runs.find((run) => run.id === longConnectionRunId)
+        .status,
+      'cancelled',
+    );
 
     const finalDelivery = await waitForValue(
       () => fetch(`${baseUrl}/v1/deliveries?limit=100`).then((response) => response.json()),
@@ -409,9 +597,21 @@ setInterval(() => {
     );
     assert.equal(
       finalDelivery.inboundEvents.find(
-        (event) => event.externalId === 'card-action-owner-stop-1',
+        (event) => event.externalId === 'card-action-long-connection-stop',
       ).status,
       'processed',
     );
+    assert.equal(
+      finalDelivery.inboundEvents.find(
+        (event) =>
+          event.externalId === 'card-action-collaborator-takeover-1',
+      ).status,
+      'processed',
+    );
+    const followUpInbound = finalDelivery.inboundEvents.find(
+      (event) => event.externalId === 'card-message-follow-up-1',
+    );
+    assert.equal(followUpInbound.status, 'ignored');
+    assert.match(followUpInbound.reason, /human_takeover/u);
   },
 );

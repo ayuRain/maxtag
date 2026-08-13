@@ -1,12 +1,18 @@
 import type {
   Artifact,
+  MemoryProposal,
   PlatformAdapter,
   PlatformCapabilities,
   ProgressState,
   ProgressSurface,
   SourceThread,
+  ToolApprovalRecord,
 } from '@opentag/core';
-import { buildLarkProgressCard } from '@opentag/ui-cards';
+import {
+  buildLarkMemoryProposalCard,
+  buildLarkProgressCard,
+  buildLarkToolApprovalCard,
+} from '@opentag/ui-cards';
 import path from 'node:path';
 import type { LarkTransport } from './types.js';
 
@@ -70,11 +76,106 @@ export class LarkPlatformAdapter implements PlatformAdapter {
     return new LarkProgressSurface(thread, this.transport);
   }
 
+  async sendMemoryProposalCard(
+    thread: SourceThread,
+    proposal: MemoryProposal,
+    options?: {
+      runId?: string;
+      replyToMessageId?: string;
+    },
+  ): Promise<{ cardId: string }> {
+    return this.transport.createCard({
+      chatId: thread.channelId || thread.externalId,
+      rootId: thread.rootMessageId,
+      replyToMessageId: options?.replyToMessageId,
+      card: buildLarkMemoryProposalCard(proposal) as unknown as Record<
+        string,
+        unknown
+      >,
+      metadata: {
+        runId: options?.runId,
+        thread,
+        stage: 'memory-proposal-card',
+        proposalId: proposal.id,
+      },
+    });
+  }
+
+  async updateMemoryProposalCard(input: {
+    thread: SourceThread;
+    proposal: MemoryProposal;
+    cardId: string;
+    runId?: string;
+  }): Promise<void> {
+    await this.transport.updateCard({
+      cardId: input.cardId,
+      card: buildLarkMemoryProposalCard(
+        input.proposal,
+      ) as unknown as Record<string, unknown>,
+      metadata: {
+        runId: input.runId,
+        thread: input.thread,
+        stage: 'memory-proposal-card',
+        proposalId: input.proposal.id,
+      },
+    });
+  }
+
+  async sendToolApprovalCard(
+    thread: SourceThread,
+    approval: ToolApprovalRecord,
+    options?: {
+      runId?: string;
+      replyToMessageId?: string;
+    },
+  ): Promise<{ cardId: string }> {
+    return this.transport.createCard({
+      chatId: thread.channelId || thread.externalId,
+      rootId: thread.rootMessageId,
+      replyToMessageId: options?.replyToMessageId,
+      card: buildLarkToolApprovalCard(approval) as unknown as Record<
+        string,
+        unknown
+      >,
+      metadata: {
+        runId: options?.runId,
+        thread,
+        stage: 'tool-approval-card',
+        approvalId: approval.id,
+      },
+    });
+  }
+
+  async updateToolApprovalCard(input: {
+    thread: SourceThread;
+    approval: ToolApprovalRecord;
+    cardId: string;
+    runId?: string;
+  }): Promise<void> {
+    await this.transport.updateCard({
+      cardId: input.cardId,
+      card: buildLarkToolApprovalCard(
+        input.approval,
+      ) as unknown as Record<string, unknown>,
+      metadata: {
+        runId: input.runId,
+        thread: input.thread,
+        stage: 'tool-approval-card',
+        approvalId: input.approval.id,
+      },
+    });
+  }
+
   async sendMessage(
     thread: SourceThread,
     text: string,
     artifacts?: Artifact[],
-    options?: { runId?: string; replyToMessageId?: string },
+    options?: {
+      runId?: string;
+      replyToMessageId?: string;
+      stage?: 'thread-reply' | 'routine-notification';
+      notificationId?: string;
+    },
   ): Promise<void> {
     const artifactLines = (artifacts || [])
       .filter((artifact) => artifact.url)
@@ -88,7 +189,8 @@ export class LarkPlatformAdapter implements PlatformAdapter {
       metadata: {
         runId: options?.runId,
         thread,
-        stage: 'thread-reply',
+        stage: options?.stage || 'thread-reply',
+        notificationId: options?.notificationId,
       },
     });
 

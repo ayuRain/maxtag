@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { OpenTagRuntime } from '@opentag/core';
+import { OpenTagRuntime, openTagAbortSummary } from '@opentag/core';
+
+test('user cancellation has a stable public summary', () => {
+  const controller = new AbortController();
+  controller.abort('lark-card:user:receipt:stop');
+  assert.equal(
+    openTagAbortSummary(controller.signal, 'executor_aborted_before_start'),
+    'Stopped by request.',
+  );
+  assert.equal(openTagAbortSummary(undefined, 'provider_failed'), 'provider_failed');
+});
 
 test('runtime selects the executor configured by the project identity', async () => {
   const calls = [];
@@ -123,6 +133,416 @@ test('runtime selects the executor configured by the project identity', async ()
       entry.checklist.some((item) => item.label === 'Run Claude'),
     ),
   );
+});
+
+test('runtime resolves only currently enabled route skill summaries before execution', async () => {
+  let executorRequest;
+  const thread = {
+    id: 'lark:payments:skills',
+    platform: 'lark',
+    externalId: 'payments:skills',
+    workspaceId: 'acme',
+    projectId: 'payments',
+    channelId: 'oc_payments',
+    visibility: 'public',
+  };
+  const runtime = new OpenTagRuntime({
+    platform: {
+      kind: 'lark',
+      capabilities: {
+        supportsThreads: true,
+        supportsCards: true,
+        supportsFiles: true,
+        supportsReactions: true,
+        supportsMentions: true,
+      },
+      createProgressSurface() {
+        return {
+          async create() { return { surfaceId: 'skills-surface' }; },
+          async update() {},
+          async complete() {},
+        };
+      },
+      async sendMessage() {},
+    },
+    executor: {
+      id: 'codex',
+      label: 'Codex',
+      async run(request) {
+        executorRequest = request;
+        return { summary: 'done', artifacts: [] };
+      },
+    },
+    memory: {
+      async loadThreadMemory() { return ''; },
+      async remember() {},
+      async forget() {},
+    },
+    skills: {
+      async list(input) {
+        assert.deepEqual(input, {
+          ids: ['workspace-baseline', 'disabled-project-skill'],
+        });
+        return [
+          {
+            id: 'workspace-baseline',
+            name: 'Workspace baseline',
+            description: 'Follow the organization evidence contract.',
+            content: 'This body must not be copied into the runtime request.',
+            enabled: true,
+            revision: 3,
+            createdAt: '2026-08-13T00:00:00.000Z',
+            updatedAt: '2026-08-13T01:00:00.000Z',
+          },
+        ];
+      },
+      async get() { return undefined; },
+    },
+    delegatedAgents: {
+      async list(input) {
+        assert.deepEqual(input, {
+          ids: ['evidence-reviewer', 'disabled-reviewer'],
+        });
+        return [
+          {
+            id: 'evidence-reviewer',
+            name: 'Evidence reviewer',
+            description: 'Review bounded route evidence.',
+            instructions: 'This delegated body must not enter the parent request.',
+            executorId: 'codex',
+            model: 'gpt-5.6-luna',
+            enabled: true,
+            revision: 2,
+            skillIds: ['workspace-baseline'],
+            grantKinds: ['shell'],
+            memoryScopes: ['project'],
+            networkHosts: [],
+            maxTurns: 6,
+            timeoutMs: 60_000,
+            createdAt: '2026-08-13T00:00:00.000Z',
+            updatedAt: '2026-08-13T01:00:00.000Z',
+          },
+        ];
+      },
+      async get() { return undefined; },
+    },
+    knowledgeSources: {
+      async list(input) {
+        assert.deepEqual(input, {
+          workspaceId: 'acme',
+          ids: ['release-handbook', 'disabled-handbook'],
+        });
+        return [{
+          id: 'release-handbook',
+          workspaceId: 'acme',
+          name: 'Release handbook',
+          description: 'Approved release evidence.',
+          kind: 'text',
+          mediaType: 'text/markdown',
+          content: 'This source body must stay behind broker tools.',
+          contentHash: 'a'.repeat(64),
+          sizeBytes: 47,
+          enabled: true,
+          revision: 4,
+          createdAt: '2026-08-13T00:00:00.000Z',
+          updatedAt: '2026-08-13T01:00:00.000Z',
+        }];
+      },
+      async get() { return undefined; },
+      async search() { return []; },
+    },
+    threadConfig: {
+      async getWorkspace() { return { id: 'acme', name: 'Acme' }; },
+      async getProject() {
+        return {
+          id: 'acme:payments',
+          workspaceId: 'acme',
+          key: 'payments',
+          name: 'Payments',
+        };
+      },
+      async getIdentity() {
+        return {
+          id: 'opentag',
+          displayName: 'MaxTag',
+          instructions: 'Follow route policy.',
+          defaultExecutorId: 'codex',
+        };
+      },
+      async getAccessBundle() {
+        return {
+          id: 'skills-access',
+          threadId: thread.id,
+          skillIds: ['workspace-baseline', 'disabled-project-skill'],
+          agentIds: ['evidence-reviewer', 'disabled-reviewer'],
+          knowledgeSourceIds: ['release-handbook', 'disabled-handbook'],
+          grants: [],
+          networkPolicy: { mode: 'deny-by-default', allowedHosts: [] },
+        };
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    runId: 'skills-runtime-run',
+    thread,
+    message: {
+      id: 'skills-message',
+      threadId: thread.id,
+      platform: 'lark',
+      text: 'Use the workspace procedure.',
+      actor: { id: 'user-1' },
+      createdAt: '2026-08-13T02:00:00.000Z',
+      mentionsAgent: true,
+    },
+  });
+  assert.deepEqual(executorRequest.skills, [
+    {
+      id: 'workspace-baseline',
+      name: 'Workspace baseline',
+      description: 'Follow the organization evidence contract.',
+      revision: 3,
+    },
+  ]);
+  assert.equal(JSON.stringify(executorRequest).includes('This body must not'), false);
+  assert.deepEqual(executorRequest.delegatedAgents, [
+    {
+      id: 'evidence-reviewer',
+      name: 'Evidence reviewer',
+      description: 'Review bounded route evidence.',
+      executorId: 'codex',
+      revision: 2,
+    },
+  ]);
+  assert.equal(
+    JSON.stringify(executorRequest).includes('This delegated body must not'),
+    false,
+  );
+  assert.equal(JSON.stringify(executorRequest).includes('gpt-5.6-luna'), false);
+  assert.deepEqual(executorRequest.knowledgeSources, [{
+    id: 'release-handbook',
+    workspaceId: 'acme',
+    name: 'Release handbook',
+    description: 'Approved release evidence.',
+    kind: 'text',
+    mediaType: 'text/markdown',
+    contentHash: 'a'.repeat(64),
+    sizeBytes: 47,
+    enabled: true,
+    revision: 4,
+    createdAt: '2026-08-13T00:00:00.000Z',
+    updatedAt: '2026-08-13T01:00:00.000Z',
+  }]);
+  assert.equal(
+    JSON.stringify(executorRequest).includes('This source body must stay'),
+    false,
+  );
+});
+
+test('runtime can execute routine work without publishing progress or result chatter', async () => {
+  const visible = [];
+  const thread = {
+    id: 'lark:payments:quiet',
+    platform: 'lark',
+    externalId: 'payments:quiet',
+    workspaceId: 'acme',
+    projectId: 'payments',
+    channelId: 'payments',
+    visibility: 'private',
+  };
+  const runtime = new OpenTagRuntime({
+    platform: {
+      kind: 'lark',
+      capabilities: {
+        supportsThreads: true,
+        supportsCards: true,
+        supportsFiles: true,
+        supportsReactions: true,
+        supportsMentions: true,
+      },
+      createProgressSurface() {
+        throw new Error('silent_routine_must_not_create_progress');
+      },
+      async sendMessage() {
+        visible.push('message');
+      },
+    },
+    executor: {
+      id: 'codex',
+      label: 'Codex',
+      async run() {
+        return { summary: 'quiet result', artifacts: [] };
+      },
+    },
+    memory: {
+      async loadThreadMemory() { return ''; },
+      async remember() {},
+      async forget() {},
+    },
+    threadConfig: {
+      async getIdentity() {
+        return {
+          id: 'payments-agent',
+          displayName: 'Payments',
+          instructions: '',
+          defaultExecutorId: 'codex',
+        };
+      },
+      async getAccessBundle() {
+        return {
+          id: 'quiet-access',
+          threadId: thread.id,
+          grants: [],
+          networkPolicy: { mode: 'deny-by-default', allowedHosts: [] },
+        };
+      },
+    },
+  });
+  const result = await runtime.handleMessage({
+    runId: 'quiet-routine-run',
+    thread,
+    message: {
+      id: 'routine:quiet',
+      threadId: thread.id,
+      platform: 'lark',
+      text: 'check quietly',
+      actor: { id: 'routine:quiet', isBot: true },
+      createdAt: '2026-08-11T10:00:00.000Z',
+      mentionsAgent: true,
+    },
+    publishResult: false,
+  });
+  assert.equal(result.summary, 'quiet result');
+  assert.deepEqual(visible, []);
+});
+
+test('runtime queues only authorized non-sensitive memory candidates for approval', async () => {
+  const events = [];
+  const proposed = [];
+  const thread = {
+    id: 'lark:payments:root',
+    platform: 'lark',
+    externalId: 'payments:root',
+    workspaceId: 'acme',
+    projectId: 'payments',
+    channelId: 'oc_payments',
+    visibility: 'private',
+  };
+  const message = {
+    id: 'message-memory-1',
+    threadId: thread.id,
+    platform: 'lark',
+    text: 'Choose the durable runtime mode.',
+    actor: { id: 'user-1' },
+    createdAt: new Date().toISOString(),
+    mentionsAgent: true,
+  };
+  const runtime = new OpenTagRuntime({
+    platform: {
+      kind: 'lark',
+      capabilities: {
+        supportsThreads: true,
+        supportsCards: true,
+        supportsFiles: true,
+        supportsReactions: true,
+        supportsMentions: true,
+      },
+      createProgressSurface() {
+        return {
+          async create() { return { surfaceId: 'surface-memory' }; },
+          async update() {},
+          async complete() {},
+        };
+      },
+      async sendMessage() {},
+    },
+    executor: {
+      id: 'codex',
+      label: 'Codex',
+      async run() {
+        return {
+          summary: 'SQLite WAL selected.',
+          artifacts: [],
+          memoryCandidates: [
+            { scope: 'project', text: 'Use SQLite WAL for shared workers.' },
+            { scope: 'project', text: '  Use   SQLite WAL for shared workers.  ' },
+            { scope: 'channel', text: 'Verification Token: should-not-persist' },
+            { scope: 'thread', text: 'Keep this decision in the current thread.' },
+          ],
+        };
+      },
+    },
+    memory: {
+      async loadThreadMemory() { return ''; },
+      async remember() { throw new Error('automatic_memory_must_not_write'); },
+      async forget() {},
+      async proposeMemory(input) {
+        proposed.push(input);
+        return {
+          id: `proposal-${proposed.length}`,
+          status: 'pending',
+          action: input.action,
+          scope: input.scope,
+          documentKey: `${input.scope}:test`,
+          scopeRef: { kind: input.scope, label: input.scope },
+          thread: input.thread,
+          workspace: input.workspace,
+          project: input.project,
+          value: input.value,
+          actorId: input.actorId,
+          source: input.source,
+          reason: input.reason,
+          createdAt: new Date().toISOString(),
+        };
+      },
+    },
+    threadConfig: {
+      async getWorkspace() { return { id: 'acme', name: 'Acme' }; },
+      async getProject() {
+        return { id: 'acme:payments', workspaceId: 'acme', key: 'payments', name: 'Payments' };
+      },
+      async getIdentity() {
+        return {
+          id: 'payments-agent',
+          displayName: 'Payments Copilot',
+          instructions: 'Own payment incidents.',
+          defaultExecutorId: 'codex',
+        };
+      },
+      async getAccessBundle() {
+        return {
+          id: 'access-memory',
+          threadId: thread.id,
+          grants: [
+            {
+              id: 'project-memory',
+              kind: 'memory',
+              scope: 'project',
+              label: 'Project memory',
+              constraints: { permissions: ['read', 'write'] },
+            },
+          ],
+          networkPolicy: { mode: 'deny-by-default', allowedHosts: [] },
+          memoryRetentionDays: { project: 45 },
+        };
+      },
+    },
+  });
+
+  const result = await runtime.handleMessage({
+    runId: 'run-memory-1',
+    thread,
+    message,
+    onEvent(event) { events.push(event); },
+  });
+
+  assert.equal(proposed.length, 1);
+  assert.equal(proposed[0].scope, 'project');
+  assert.equal(proposed[0].value, 'Use SQLite WAL for shared workers.');
+  assert.equal(proposed[0].source, 'agent-run:run-memory-1');
+  assert.equal(proposed[0].retentionDays, 45);
+  assert.equal(result.memoryProposals.length, 1);
+  assert.equal(events.filter((event) => event.type === 'memory_proposal').length, 1);
 });
 
 test('runtime closes the progress surface when a configured executor is unavailable', async () => {
@@ -451,6 +871,13 @@ test('runtime loads only memory scopes granted by the resolved project policy', 
               constraints: { permissions: ['read', 'write'] },
             },
             {
+              id: 'memory:channel',
+              kind: 'memory',
+              scope: 'channel',
+              label: 'Channel memory',
+              constraints: { permissions: ['read', 'write'] },
+            },
+            {
               id: 'memory:thread',
               kind: 'memory',
               scope: 'thread',
@@ -479,11 +906,170 @@ test('runtime loads only memory scopes granted by the resolved project policy', 
     },
   });
 
-  assert.deepEqual(loaded, [['workspace', 'project', 'thread']]);
+  assert.deepEqual(loaded, [['workspace', 'project', 'channel', 'thread']]);
   assert.deepEqual(received, [
     {
-      scopes: ['workspace', 'project', 'thread'],
+      scopes: ['workspace', 'project', 'channel', 'thread'],
       workspacePermissions: ['read'],
     },
   ]);
+});
+
+test('runtime sends only retrieved memory to the selected project agent', async () => {
+  const received = [];
+  const events = [];
+  const thread = {
+    id: 'lark:payments:retrieval',
+    platform: 'lark',
+    externalId: 'payments:retrieval',
+    workspaceId: 'acme',
+    projectId: 'payments',
+    channelId: 'oc_payments',
+    visibility: 'private',
+  };
+  const now = new Date().toISOString();
+  const projectDocument = {
+    key: 'project:acme:acme_payments',
+    scope: {
+      kind: 'project',
+      workspaceId: 'acme',
+      projectId: 'acme:payments',
+      label: 'Project memory',
+    },
+    content: 'Relevant database decision.\nUnrelated launch color.',
+    version: 4,
+    createdAt: now,
+    updatedAt: now,
+    updatedBy: 'operator:owner',
+    latestRevisionId: 'revision-4',
+  };
+  const fullSnapshot = {
+    loadedAt: now,
+    scopes: [
+      {
+        scope: projectDocument.scope,
+        content: projectDocument.content,
+        document: projectDocument,
+      },
+    ],
+    text: `## Project memory\n${projectDocument.content}`,
+  };
+  const selectedSnapshot = {
+    loadedAt: now,
+    scopes: [
+      {
+        scope: projectDocument.scope,
+        content: '[line 1] Relevant database decision.',
+        document: projectDocument,
+      },
+    ],
+    text: '## Project memory [scope=project version=4]\n[line 1] Relevant database decision.',
+  };
+  const runtime = new OpenTagRuntime({
+    platform: {
+      kind: 'lark',
+      capabilities: {
+        supportsThreads: true,
+        supportsCards: true,
+        supportsFiles: true,
+        supportsReactions: true,
+        supportsMentions: true,
+      },
+      createProgressSurface() {
+        return {
+          async create() { return { surfaceId: 'surface-retrieval' }; },
+          async update() {},
+          async complete() {},
+        };
+      },
+      async sendMessage() {},
+    },
+    executor: {
+      id: 'codex',
+      label: 'Codex',
+      async run(request) {
+        received.push(request);
+        return { summary: 'Use Postgres.', artifacts: [] };
+      },
+    },
+    memoryRetriever: {
+      async retrieve(input) {
+        assert.equal(input.memorySnapshot, fullSnapshot);
+        return {
+          snapshot: selectedSnapshot,
+          strategy: 'semantic',
+          candidateLines: 2,
+          selectedLines: 1,
+          durationMs: 12,
+        };
+      },
+    },
+    memory: {
+      async loadMemory() { return fullSnapshot; },
+      async loadThreadMemory() { throw new Error('legacy_memory_not_expected'); },
+      async remember() {},
+      async forget() {},
+    },
+    threadConfig: {
+      async getWorkspace() { return { id: 'acme', name: 'Acme' }; },
+      async getProject() {
+        return {
+          id: 'acme:payments',
+          workspaceId: 'acme',
+          key: 'payments',
+          name: 'Payments',
+        };
+      },
+      async getIdentity() {
+        return {
+          id: 'payments-agent',
+          displayName: 'Payments Copilot',
+          instructions: 'Own payments.',
+          defaultExecutorId: 'codex',
+        };
+      },
+      async getAccessBundle() {
+        return {
+          id: 'access-retrieval',
+          threadId: thread.id,
+          grants: [{
+            id: 'memory:project',
+            kind: 'memory',
+            scope: 'project',
+            label: 'Project memory',
+            constraints: { permissions: ['read'] },
+          }],
+          networkPolicy: { mode: 'deny-by-default', allowedHosts: [] },
+        };
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    runId: 'run-retrieval-runtime',
+    thread,
+    message: {
+      id: 'message-retrieval-runtime',
+      threadId: thread.id,
+      platform: 'lark',
+      text: 'Which database?',
+      actor: { id: 'owner' },
+      createdAt: now,
+      mentionsAgent: true,
+    },
+    onEvent(event) { events.push(event); },
+  });
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].memorySnapshot, selectedSnapshot);
+  assert.match(received[0].memory, /Relevant database decision/u);
+  assert.doesNotMatch(received[0].memory, /Unrelated launch color/u);
+  assert.deepEqual(events.find((event) => event.type === 'memory_retrieval'), {
+    type: 'memory_retrieval',
+    strategy: 'semantic',
+    candidateLines: 2,
+    selectedLines: 1,
+    durationMs: 12,
+    fallbackReason: undefined,
+  });
 });

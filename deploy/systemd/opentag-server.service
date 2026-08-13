@@ -1,9 +1,9 @@
 [Unit]
-Description=OpenTag HTTP ingress and operator console
+Description=MaxTag HTTP ingress and operator console
 Documentation=file:/opt/opentag/deploy/README.md
 Wants=network-online.target
 After=network-online.target
-Before=opentag-worker.service opentag-scheduler.service
+Before=opentag-lark-bridge.service opentag-worker.service opentag-scheduler.service
 PartOf=opentag.target
 
 [Service]

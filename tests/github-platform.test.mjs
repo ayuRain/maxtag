@@ -9,6 +9,7 @@ import {
   TrackedGitHubTransport,
 } from '@opentag/delivery';
 import {
+  GITHUB_WORKFLOW_EVENT_CATALOG,
   GitHubApiError,
   GitHubPlatformAdapter,
   HttpGitHubTransport,
@@ -16,9 +17,102 @@ import {
   githubCallbackEventType,
   githubCallbackExternalId,
   normalizeGitHubWebhook,
+  normalizeGitHubWorkflowEvent,
   parseAndValidateGitHubCallback,
   splitGitHubText,
 } from '@opentag/platform-github';
+
+test('GitHub workflow producer normalizes bounded PR, issue, and CI events', () => {
+  const common = {
+    repository: {
+      id: 101,
+      name: 'opentag',
+      full_name: 'acme/opentag',
+      private: true,
+      html_url: 'https://github.com/acme/opentag',
+    },
+    sender: { id: 404, login: 'ada', type: 'User' },
+    installation: { id: 55 },
+    secret: 'must-not-leak',
+  };
+  const pullRequest = normalizeGitHubWorkflowEvent(
+    {
+      ...common,
+      action: 'opened',
+      number: 42,
+      pull_request: {
+        id: 2042,
+        number: 42,
+        title: 'Add watcher producers',
+        body: 'Review this change.',
+        state: 'open',
+        html_url: 'https://github.com/acme/opentag/pull/42',
+        user: { login: 'ada' },
+        head: { ref: 'watchers', sha: 'a'.repeat(40) },
+        base: { ref: 'main', sha: 'b'.repeat(40) },
+      },
+    },
+    { eventType: 'pull_request', deliveryId: 'delivery-pr-42' },
+  );
+  assert.equal(pullRequest.eventType, 'github.pull_request.opened');
+  assert.equal(pullRequest.eventId, 'delivery-pr-42');
+  assert.equal(pullRequest.repositoryExternalId, 'acme/opentag');
+  assert.equal(pullRequest.resourceExternalId, 'acme/opentag#42');
+  assert.equal(pullRequest.payload.pullRequest.number, 42);
+  assert.equal(JSON.stringify(pullRequest.payload).includes('must-not-leak'), false);
+
+  const issue = normalizeGitHubWorkflowEvent(
+    {
+      ...common,
+      action: 'labeled',
+      issue: {
+        number: 9,
+        title: 'Production incident',
+        body: 'Investigate.',
+        labels: [{ name: 'incident', color: 'd73a4a' }],
+      },
+    },
+    { eventType: 'issues', deliveryId: 'delivery-issue-9' },
+  );
+  assert.equal(issue.eventType, 'github.issue.labeled');
+  assert.deepEqual(issue.payload.issue.labels, [
+    { id: undefined, name: 'incident', color: 'd73a4a' },
+  ]);
+
+  const workflowRun = normalizeGitHubWorkflowEvent(
+    {
+      ...common,
+      action: 'completed',
+      workflow_run: {
+        id: 481,
+        name: 'CI',
+        display_title: 'Build main',
+        status: 'completed',
+        conclusion: 'failure',
+        html_url: 'https://github.com/acme/opentag/actions/runs/481',
+        run_number: 88,
+        run_attempt: 2,
+        head_branch: 'main',
+        head_sha: 'c'.repeat(40),
+      },
+    },
+    { eventType: 'workflow_run', deliveryId: 'delivery-run-481' },
+  );
+  assert.equal(workflowRun.eventType, 'github.workflow_run.failure');
+  assert.equal(workflowRun.payload.workflowRun.runAttempt, 2);
+  assert.ok(
+    GITHUB_WORKFLOW_EVENT_CATALOG.some(
+      (entry) => entry.value === workflowRun.eventType,
+    ),
+  );
+  assert.equal(
+    normalizeGitHubWorkflowEvent(
+      { ...common, action: 'created' },
+      { eventType: 'issue_comment', deliveryId: 'delivery-comment' },
+    ),
+    null,
+  );
+});
 
 function githubPayload(overrides = {}) {
   return {
@@ -39,7 +133,7 @@ function githubPayload(overrides = {}) {
     },
     comment: {
       id: 303,
-      body: '@OpenTagBot inspect this pull request',
+      body: '@MaxTagBot inspect this pull request',
       html_url: 'https://github.com/acme/opentag/issues/42#issuecomment-303',
       created_at: '2026-08-12T01:02:03.000Z',
       author_association: 'MEMBER',
@@ -91,7 +185,7 @@ test('GitHub callback validates HMAC-SHA256 and exposes delivery headers', () =>
 test('GitHub issue comments normalize repositories, threads, actors, and mentions', () => {
   const normalized = normalizeGitHubWebhook(githubPayload(), {
     eventType: 'issue_comment',
-    botLogin: 'OpenTagBot',
+    botLogin: 'MaxTagBot',
     workspaceId: 'acme-workspace',
   });
   assert.ok(normalized);
@@ -112,11 +206,11 @@ test('GitHub issue comments normalize repositories, threads, actors, and mention
       githubPayload({
         comment: {
           id: 304,
-          body: '@OpenTagBot loop',
-          user: { login: 'OpenTagBot', type: 'Bot' },
+          body: '@MaxTagBot loop',
+          user: { login: 'MaxTagBot', type: 'Bot' },
         },
       }),
-      { eventType: 'issue_comment', botLogin: 'OpenTagBot' },
+      { eventType: 'issue_comment', botLogin: 'MaxTagBot' },
     ),
     null,
   );
@@ -129,14 +223,14 @@ test('GitHub issue comments normalize repositories, threads, actors, and mention
           user: { login: 'service-user', type: 'User' },
         },
       }),
-      { eventType: 'issue_comment', botLogin: 'OpenTagBot' },
+      { eventType: 'issue_comment', botLogin: 'MaxTagBot' },
     ),
     null,
   );
   assert.equal(
     normalizeGitHubWebhook(githubPayload(), {
       eventType: 'issues',
-      botLogin: 'OpenTagBot',
+      botLogin: 'MaxTagBot',
     }),
     null,
   );
@@ -271,7 +365,7 @@ test('GitHub adapter edits progress, chunks replies, marks self output, and trac
     assert.ok(
       replies.every((item) => item.body.startsWith('<!-- opentag-reply:run-1 -->')),
     );
-    assert.match(replies.at(-1).body, /available in OpenTag/u);
+    assert.match(replies.at(-1).body, /available in MaxTag/u);
 
     const outbox = await store.listOutbox({ limit: 20 });
     assert.ok(outbox.every((item) => item.status === 'delivered'));

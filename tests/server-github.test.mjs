@@ -65,9 +65,9 @@ function payload(commentId, issueNumber, body, user = 'ada') {
       html_url: `https://github.com/acme/opentag/issues/${issueNumber}#issuecomment-${commentId}`,
       created_at: new Date().toISOString(),
       author_association: 'MEMBER',
-      user: { id: 404, login: user, type: user === 'OpenTagBot' ? 'Bot' : 'User' },
+      user: { id: 404, login: user, type: user === 'MaxTagBot' ? 'Bot' : 'User' },
     },
-    sender: { id: 404, login: user, type: user === 'OpenTagBot' ? 'Bot' : 'User' },
+    sender: { id: 404, login: user, type: user === 'MaxTagBot' ? 'Bot' : 'User' },
   };
 }
 
@@ -88,6 +88,32 @@ async function webhook(baseUrl, deliveryId, body, options = {}) {
   });
 }
 
+function workflowRunPayload(id, conclusion = 'failure') {
+  return {
+    action: 'completed',
+    repository: {
+      id: 101,
+      name: 'opentag',
+      full_name: 'acme/opentag',
+      private: true,
+      html_url: 'https://github.com/acme/opentag',
+    },
+    workflow_run: {
+      id,
+      name: 'CI',
+      display_title: 'Build main',
+      status: 'completed',
+      conclusion,
+      html_url: `https://github.com/acme/opentag/actions/runs/${id}`,
+      run_number: id,
+      run_attempt: 1,
+      head_branch: 'main',
+      head_sha: 'a'.repeat(40),
+    },
+    sender: { id: 404, login: 'github-actions', type: 'Bot' },
+  };
+}
+
 test(
   'native GitHub webhook pairs a repository and routes isolated issue threads',
   { timeout: 20_000 },
@@ -104,7 +130,7 @@ test(
         OPENTAG_DATA_DIR: dataDir,
         OPENTAG_EXECUTOR_MODE: 'dry-run',
         OPENTAG_GITHUB_TRANSPORT: 'memory',
-        OPENTAG_GITHUB_BOT_LOGIN: 'OpenTagBot',
+        OPENTAG_GITHUB_BOT_LOGIN: 'MaxTagBot',
         OPENTAG_GITHUB_WEBHOOK_SECRET: 'integration-secret',
         OPENTAG_GITHUB_REQUIRE_BINDING: 'true',
         OPENTAG_AGENT_WORKER: 'inline',
@@ -136,6 +162,12 @@ test(
     assert.equal(health.clients.github.mode, 'memory');
     assert.equal(health.clients.github.webhookSecretConfigured, true);
     assert.equal(health.clients.github.requireBinding, true);
+    assert.equal(health.clients.github.workflowProducers.enabled, true);
+    assert.deepEqual(health.clients.github.workflowProducers.eventFamilies, [
+      'pull_request',
+      'issues',
+      'workflow_run',
+    ]);
 
     const capabilities = await fetch(`${baseUrl}/v1/capabilities`).then((response) =>
       response.json(),
@@ -145,6 +177,12 @@ test(
       'ready',
     );
     assert.equal(capabilities.githubTransport.webhookSecretConfigured, true);
+    assert.equal(capabilities.githubTransport.workflowProducers.enabled, true);
+    assert.ok(
+      capabilities.workflowEventCatalog.some(
+        (entry) => entry.value === 'github.workflow_run.failure',
+      ),
+    );
 
     const invalidRoutineResponse = await fetch(`${baseUrl}/v1/routines`, {
       method: 'POST',
@@ -217,6 +255,56 @@ test(
     assert.equal(validWorkflow.destination.rootMessageId, '45');
     assert.equal(validWorkflow.destination.topicId, '45');
 
+    const larkSinkBinding = await fetch(`${baseUrl}/v1/bindings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        platform: 'lark',
+        externalId: 'oc_ci_watchers',
+        workspaceId: 'dev-workspace',
+        projectId: 'opentag',
+        activationMode: 'always',
+        requireMention: false,
+      }),
+    });
+    assert.equal(larkSinkBinding.status, 200);
+
+    const eventWorkflowResponse = await fetch(`${baseUrl}/v1/workflows`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'dev-workspace',
+        projectId: 'opentag',
+        name: 'GitHub CI failure triage',
+        trigger: { kind: 'event', eventType: 'github.workflow_run.failure' },
+        nodes: [
+          {
+            id: 'publish',
+            instructions: 'Summarize the CI failure and publish the next action.',
+          },
+        ],
+        destination: {
+          platform: 'lark',
+          externalId: 'oc_ci_watchers',
+          channelId: 'oc_ci_watchers',
+          visibility: 'private',
+        },
+      }),
+    });
+    assert.equal(eventWorkflowResponse.status, 200);
+    const eventWorkflow = (await eventWorkflowResponse.json()).workflow;
+
+    const blockedProducerResponse = await webhook(
+      baseUrl,
+      'delivery-ci-before-pairing',
+      workflowRunPayload(480),
+      { eventType: 'workflow_run' },
+    );
+    assert.equal(blockedProducerResponse.status, 202);
+    const blockedProducer = await blockedProducerResponse.json();
+    assert.equal(blockedProducer.reason, 'binding_required');
+    assert.equal(blockedProducer.eventType, 'github.workflow_run.failure');
+
     const pingResponse = await webhook(
       baseUrl,
       'delivery-ping',
@@ -229,7 +317,7 @@ test(
     const blockedResponse = await webhook(
       baseUrl,
       'delivery-blocked',
-      payload(300, 40, '@OpenTagBot inspect before pairing'),
+      payload(300, 40, '@MaxTagBot inspect before pairing'),
     );
     assert.equal(blockedResponse.status, 202);
     assert.equal((await blockedResponse.json()).reason, 'binding_required');
@@ -261,10 +349,65 @@ test(
     assert.equal(paired.binding.scope, 'channel');
     assert.equal(paired.binding.projectId, 'opentag');
 
+    const workflowResponse = await webhook(
+      baseUrl,
+      'delivery-ci-failure',
+      workflowRunPayload(481),
+      { eventType: 'workflow_run' },
+    );
+    assert.equal(workflowResponse.status, 202);
+    const produced = await workflowResponse.json();
+    assert.equal(produced.accepted, true);
+    assert.equal(produced.producer, 'github-webhook');
+    assert.equal(produced.eventType, 'github.workflow_run.failure');
+    assert.equal(produced.route.projectId, 'opentag');
+    assert.equal(produced.matched, 1);
+    assert.equal(produced.staged.length, 1);
+    assert.equal(produced.staged[0].workflowId, eventWorkflow.id);
+
+    const workflowCompletion = await waitForJson(
+      `${baseUrl}/v1/workflows?workspaceId=dev-workspace&projectId=opentag`,
+      (data) =>
+        data.executions.some(
+          (execution) =>
+            execution.id === produced.staged[0].id &&
+            execution.status === 'completed',
+        ),
+      child,
+      logs,
+    );
+    const producedExecution = workflowCompletion.executions.find(
+      (execution) => execution.id === produced.staged[0].id,
+    );
+    assert.equal(producedExecution.trigger.producer, 'github-webhook');
+    assert.equal(producedExecution.input.workflowRun.conclusion, 'failure');
+    assert.match(producedExecution.nodes[0].summary, /Dry-run Codex executor received/u);
+    const producedRun = await fetch(`${baseUrl}/v1/runs?limit=30`)
+      .then((response) => response.json())
+      .then((data) =>
+        data.runs.find((item) => item.id === producedExecution.nodes[0].runId),
+      );
+    assert.equal(producedRun.platform, 'lark');
+    assert.equal(producedRun.thread.channelId, 'oc_ci_watchers');
+    assert.equal(producedRun.projectId, 'opentag');
+
+    const producerDuplicateResponse = await webhook(
+      baseUrl,
+      'delivery-ci-failure',
+      workflowRunPayload(481),
+      { eventType: 'workflow_run' },
+    );
+    assert.equal(producerDuplicateResponse.status, 202);
+    const producerDuplicate = await producerDuplicateResponse.json();
+    assert.equal(producerDuplicate.accepted, true);
+    assert.equal(producerDuplicate.staged.length, 0);
+    assert.equal(producerDuplicate.duplicates.length, 1);
+    assert.equal(producerDuplicate.duplicates[0].id, produced.staged[0].id);
+
     const firstResponse = await webhook(
       baseUrl,
       'delivery-first',
-      payload(302, 42, '@OpenTagBot inspect this issue'),
+      payload(302, 42, '@MaxTagBot inspect this issue'),
     );
     assert.equal(firstResponse.status, 202);
     const accepted = await firstResponse.json();
@@ -308,7 +451,7 @@ test(
     const duplicateResponse = await webhook(
       baseUrl,
       'delivery-first',
-      payload(302, 42, '@OpenTagBot inspect this issue'),
+      payload(302, 42, '@MaxTagBot inspect this issue'),
     );
     assert.equal(duplicateResponse.status, 200);
     assert.equal((await duplicateResponse.json()).duplicate, true);
@@ -324,7 +467,7 @@ test(
     const botResponse = await webhook(
       baseUrl,
       'delivery-bot',
-      payload(306, 42, '@OpenTagBot loop', 'OpenTagBot'),
+      payload(306, 42, '@MaxTagBot loop', 'MaxTagBot'),
     );
     assert.equal(botResponse.status, 202);
     assert.equal((await botResponse.json()).reason, 'unsupported_github_event');
@@ -332,7 +475,7 @@ test(
     const badSignature = await webhook(
       baseUrl,
       'delivery-invalid',
-      payload(307, 42, '@OpenTagBot tampered'),
+      payload(307, 42, '@MaxTagBot tampered'),
       { signature: 'sha256=invalid' },
     );
     assert.equal(badSignature.status, 401);
@@ -360,6 +503,34 @@ test(
         (item) => item.externalId === 'delivery:delivery-first',
       ).status,
       'processed',
+    );
+    const producerInbound = delivery.inboundEvents.find(
+      (item) => item.externalId === 'delivery:delivery-ci-failure',
+    );
+    assert.equal(producerInbound.status, 'processed');
+    assert.equal(producerInbound.projectId, 'opentag');
+    assert.equal(producerInbound.metadata.workflowEventType, 'github.workflow_run.failure');
+    assert.equal(producerInbound.metadata.workflowStaged, 1);
+    assert.equal(producerInbound.duplicateCount, 1);
+    const producerOutbox = delivery.outbox.filter(
+      (item) => item.runId === producedExecution.nodes[0].runId,
+    );
+    assert.ok(producerOutbox.some((item) => item.kind === 'lark.card.create'));
+    assert.ok(producerOutbox.some((item) => item.kind === 'lark.text'));
+    const producerAudit = await fetch(
+      `${baseUrl}/v1/audit?workspaceId=dev-workspace&category=workflow&action=workflow.event.staged`,
+    ).then((response) => response.json());
+    assert.equal(producerAudit.total, 1);
+    assert.equal(producerAudit.entries[0].referenceId, produced.staged[0].id);
+    assert.match(producerAudit.entries[0].summary, /github\.workflow_run\.failure/u);
+    const metrics = await fetch(`${baseUrl}/metrics`).then((response) => response.text());
+    assert.match(
+      metrics,
+      /opentag_workflow_producer_events\{result="staged",service="opentag-server"\} 1/u,
+    );
+    assert.match(
+      metrics,
+      /opentag_workflow_producer_events\{result="duplicates",service="opentag-server"\} 1/u,
     );
     assert.ok(
       delivery.inboundEvents.some(

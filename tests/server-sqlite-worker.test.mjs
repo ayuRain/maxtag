@@ -107,7 +107,7 @@ test(
         platform: 'telegram',
         workspaceId: 'dev-workspace',
         projectId: 'opentag',
-        text: '@OpenTag verify the shared SQLite worker path',
+        text: '@MaxTag verify the shared SQLite worker path',
       }),
     });
     assert.equal(queuedResponse.status, 202);
@@ -229,5 +229,287 @@ test(
       restoredMemory.snapshot.scopes[0].content,
       /temporary second version/,
     );
+
+    const memoryExportQuery = new URLSearchParams({
+      workspaceId: 'dev-workspace',
+      projectId: 'opentag',
+      scope: 'project',
+      includeRevisions: 'true',
+    });
+    const memoryExport = await fetch(
+      `${secondServer.baseUrl}/v1/memory-export?${memoryExportQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.equal(memoryExport.schemaVersion, 1);
+    assert.equal(memoryExport.counts.documents, 1);
+    assert.equal(memoryExport.counts.revisions, 3);
+    assert.equal(memoryExport.documents[0].scope.kind, 'project');
+    assert.equal(memoryExport.documents[0].scope.workspaceId, 'dev-workspace');
+    assert.equal(memoryExport.documents[0].scope.projectId, 'dev-workspace:opentag');
+    assert.deepEqual(
+      memoryExport.revisions.map((revision) => revision.action),
+      ['restore', 'remember', 'remember'],
+    );
+
+    const memoryDiffQuery = new URLSearchParams({
+      ...memoryRoute,
+      revisionId: memoryExport.revisions[0].id,
+    });
+    const memoryDiff = await fetch(
+      `${secondServer.baseUrl}/v1/memory-diff?${memoryDiffQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.equal(memoryDiff.scope, 'project');
+    assert.equal(memoryDiff.diff.to.action, 'restore');
+    assert.equal(memoryDiff.diff.from.action, 'remember');
+    assert.equal(memoryDiff.diff.removedLines.length, 1);
+    assert.match(memoryDiff.diff.removedLines[0], /temporary second version/);
+    assert.equal(memoryDiff.diff.addedLines.length, 0);
+
+    const memoryCompactDryRun = await fetch(
+      `${secondServer.baseUrl}/v1/memory-compact`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: 'dev-workspace',
+          projectId: 'opentag',
+          scope: ['project'],
+          keepLatestPerDocument: 1,
+        }),
+      },
+    ).then((response) => response.json());
+    assert.equal(memoryCompactDryRun.dryRun, true);
+    assert.equal(memoryCompactDryRun.counts.scannedRevisions, 3);
+    assert.equal(memoryCompactDryRun.counts.droppedRevisions, 1);
+
+    const afterDryRunExport = await fetch(
+      `${secondServer.baseUrl}/v1/memory-export?${memoryExportQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.equal(afterDryRunExport.counts.revisions, 3);
+
+    const memoryCompactApply = await fetch(
+      `${secondServer.baseUrl}/v1/memory-compact`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: 'dev-workspace',
+          projectId: 'opentag',
+          scope: ['project'],
+          keepLatestPerDocument: 1,
+          apply: true,
+        }),
+      },
+    ).then((response) => response.json());
+    assert.equal(memoryCompactApply.dryRun, false);
+    assert.equal(memoryCompactApply.counts.droppedRevisions, 1);
+
+    const afterApplyExport = await fetch(
+      `${secondServer.baseUrl}/v1/memory-export?${memoryExportQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.deepEqual(
+      afterApplyExport.revisions.map((revision) => revision.action),
+      ['restore', 'remember'],
+    );
+
+    const proposalCreate = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...memoryRoute,
+          action: 'remember',
+          text: 'approved proposal fact',
+          actorId: 'lark:ou-requester',
+          source: 'lark-command',
+        }),
+      },
+    ).then((response) => response.json());
+    assert.equal(proposalCreate.proposal.status, 'pending');
+
+    const pendingProposals = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals?workspaceId=dev-workspace&projectId=opentag&status=pending`,
+    ).then((response) => response.json());
+    assert.equal(pendingProposals.proposals.length, 1);
+    assert.equal(pendingProposals.proposals[0].id, proposalCreate.proposal.id);
+
+    const approvedProposal = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals/${proposalCreate.proposal.id}/approve`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'useful project memory' }),
+      },
+    ).then((response) => response.json());
+    assert.equal(approvedProposal.proposal.status, 'approved');
+    assert.ok(approvedProposal.proposal.appliedRevisionId);
+    const afterApprovalMemory = await fetch(
+      `${secondServer.baseUrl}/v1/memory?${memoryQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.match(
+      afterApprovalMemory.snapshot.scopes[0].content,
+      /approved proposal fact/,
+    );
+
+    const secondMergeSource = await fetch(
+      `${secondServer.baseUrl}/v1/memory`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...memoryRoute,
+          action: 'remember',
+          text: 'merge source two',
+        }),
+      },
+    );
+    assert.equal(secondMergeSource.status, 200);
+    const mergeHistory = await fetch(
+      `${secondServer.baseUrl}/v1/memory?${memoryQuery.toString()}`,
+    ).then((response) => response.json());
+    const mergeProposalResponse = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...memoryRoute,
+          action: 'merge',
+          text: 'merged API fact',
+          selectors: ['approved proposal fact', 'merge source two'],
+          expectedDocumentVersion:
+            mergeHistory.snapshot.scopes[0].document.version,
+          searchAliases: ['merged API lookup'],
+        }),
+      },
+    );
+    assert.equal(mergeProposalResponse.status, 201);
+    const mergeProposal = await mergeProposalResponse.json();
+    assert.deepEqual(mergeProposal.proposal.selectors, [
+      'approved proposal fact',
+      'merge source two',
+    ]);
+    const oversizedMergeResponse = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...memoryRoute,
+          action: 'merge',
+          text: 'An over-broad API merge.',
+          selectors: Array.from({ length: 9 }, (_, index) => `fact-${index}`),
+          expectedDocumentVersion:
+            mergeHistory.snapshot.scopes[0].document.version,
+        }),
+      },
+    );
+    assert.equal(oversizedMergeResponse.status, 400);
+    assert.deepEqual(await oversizedMergeResponse.json(), {
+      error: 'memory_merge_selectors_limit_exceeded',
+    });
+    const approvedMerge = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals/${mergeProposal.proposal.id}/approve`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      },
+    );
+    assert.equal(approvedMerge.status, 200);
+    const afterMergeMemory = await fetch(
+      `${secondServer.baseUrl}/v1/memory?${memoryQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.match(afterMergeMemory.snapshot.scopes[0].content, /merged API fact/u);
+    assert.doesNotMatch(
+      afterMergeMemory.snapshot.scopes[0].content,
+      /approved proposal fact|merge source two/u,
+    );
+
+    const rejectProposal = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...memoryRoute,
+          action: 'forget',
+          selector: 'merged API fact',
+        }),
+      },
+    ).then((response) => response.json());
+    const rejectedProposal = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals/${rejectProposal.proposal.id}/reject`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'keep it' }),
+      },
+    ).then((response) => response.json());
+    assert.equal(rejectedProposal.proposal.status, 'rejected');
+    const afterRejectMemory = await fetch(
+      `${secondServer.baseUrl}/v1/memory?${memoryQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.match(
+      afterRejectMemory.snapshot.scopes[0].content,
+      /merged API fact/,
+    );
+
+    const firstBatchProposal = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...memoryRoute,
+          action: 'remember',
+          text: 'batch approved one',
+        }),
+      },
+    ).then((response) => response.json());
+    const secondBatchProposal = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...memoryRoute,
+          action: 'remember',
+          text: 'batch approved two',
+        }),
+      },
+    ).then((response) => response.json());
+    const batchApproved = await fetch(
+      `${secondServer.baseUrl}/v1/memory-proposals/batch`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'approve',
+          ids: [
+            firstBatchProposal.proposal.id,
+            secondBatchProposal.proposal.id,
+          ],
+        }),
+      },
+    ).then((response) => response.json());
+    assert.equal(batchApproved.decided, 2);
+    assert.equal(batchApproved.failed, 0);
+    assert.deepEqual(
+      batchApproved.proposals.map((proposal) => proposal.status),
+      ['approved', 'approved'],
+    );
+    const afterBatchApprovalMemory = await fetch(
+      `${secondServer.baseUrl}/v1/memory?${memoryQuery.toString()}`,
+    ).then((response) => response.json());
+    assert.match(
+      afterBatchApprovalMemory.snapshot.scopes[0].content,
+      /batch approved one/,
+    );
+    assert.match(
+      afterBatchApprovalMemory.snapshot.scopes[0].content,
+      /batch approved two/,
+    );
+
   },
 );

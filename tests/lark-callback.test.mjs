@@ -9,6 +9,7 @@ import {
   larkCallbackEventType,
   larkCallbackExternalId,
   normalizeLarkCardAction,
+  normalizeFlatLarkCardAction,
   normalizeLarkEvent,
   parseAndValidateLarkCallback,
 } from '@opentag/platform-lark';
@@ -49,7 +50,7 @@ function v2Message(token = 'verification-token') {
         chat_id: 'chat-v2',
         chat_type: 'group',
         message_type: 'text',
-        content: JSON.stringify({ text: '@OpenTag inspect' }),
+        content: JSON.stringify({ text: '@MaxTag inspect' }),
       },
       sender: {
         sender_id: { open_id: 'user-v2' },
@@ -120,6 +121,18 @@ test('unsigned encrypted URL verification requires a matching configured token',
 
   const noTokenPolicy = parseAndValidateLarkCallback(rawBody, {}, { encryptKey });
   assert.equal(noTokenPolicy.validation.reason, 'invalid_signature');
+
+  const timestamped = parseAndValidateLarkCallback(
+    rawBody,
+    { 'x-lark-request-timestamp': '1786492800' },
+    {
+      encryptKey,
+      verificationToken: 'challenge-token',
+      maxTimestampSkewSeconds: 300,
+      now: new Date('2026-08-12T00:00:00.000Z'),
+    },
+  );
+  assert.deepEqual(timestamped.validation, { ok: true });
 });
 
 test('encrypted Lark events fail closed on missing signature, bad ciphertext, and stale requests', () => {
@@ -176,6 +189,16 @@ test('encrypted Lark events fail closed on missing signature, bad ciphertext, an
     parseAndValidateLarkCallback(rawBody, staleHeaders, options).validation.reason,
     'stale_request',
   );
+});
+
+test('Lark callback timestamp policy rejects a missing timestamp header', () => {
+  const rawBody = JSON.stringify(v2Message());
+  const parsed = parseAndValidateLarkCallback(rawBody, {}, {
+    verificationToken: 'verification-token',
+    maxTimestampSkewSeconds: 300,
+    now: new Date('2026-08-12T00:00:00.000Z'),
+  });
+  assert.equal(parsed.validation.reason, 'stale_request');
 });
 
 test('Lark callback parser rejects non-object JSON and encrypted payloads without a key', () => {
@@ -237,6 +260,120 @@ test('Lark v2 card actions normalize actor, receipt, chat, and run scope', () =>
     tenantKey: 'tenant-card',
     componentTag: 'button',
   });
+});
+
+test('Lark long-connection card actions normalize from flat event output', () => {
+  const action = normalizeFlatLarkCardAction({
+    type: 'card.action.trigger',
+    event_id: 'flat-card-action-1',
+    operator_id: 'ou-flat-operator',
+    message_id: 'om-flat-progress-card',
+    chat_id: 'oc-flat-project',
+    action_tag: 'button',
+    action_value: JSON.stringify({
+      action: 'opentag.stop_run',
+      run_id: 'run-flat-1',
+    }),
+  });
+
+  assert.deepEqual(action, {
+    action: 'opentag.stop_run',
+    runId: 'run-flat-1',
+    actorId: 'ou-flat-operator',
+    cardMessageId: 'om-flat-progress-card',
+    chatId: 'oc-flat-project',
+    componentTag: 'button',
+  });
+
+  assert.deepEqual(
+    normalizeLarkCardAction({
+      type: 'card.action.trigger',
+      operator_id: 'ou-flat-operator',
+      message_id: 'om-flat-progress-card',
+      chat_id: 'oc-flat-project',
+      action_tag: 'button',
+      action_value: JSON.stringify({
+        action: 'opentag.stop_run',
+        run_id: 'run-flat-1',
+      }),
+    }),
+    action,
+  );
+});
+
+test('Lark memory proposal card actions normalize the proposal receipt scope', () => {
+  const v2 = normalizeLarkCardAction({
+    schema: '2.0',
+    header: {
+      event_id: 'memory-proposal-action-v2',
+      event_type: 'card.action.trigger',
+      tenant_key: 'tenant-card',
+    },
+    event: {
+      operator: { open_id: 'ou-manager' },
+      action: {
+        tag: 'button',
+        value: {
+          action: 'opentag.memory_proposal.approve',
+          proposal_id: 'proposal-1',
+        },
+      },
+      context: {
+        open_message_id: 'om-memory-card',
+        open_chat_id: 'oc-project',
+      },
+    },
+  });
+  const flat = normalizeFlatLarkCardAction({
+    type: 'card.action.trigger',
+    operator_id: 'ou-manager',
+    message_id: 'om-memory-card',
+    chat_id: 'oc-project',
+    action_tag: 'button',
+    action_value: JSON.stringify({
+      action: 'opentag.memory_proposal.reject',
+      proposal_id: 'proposal-1',
+    }),
+  });
+
+  assert.equal(v2.proposalId, 'proposal-1');
+  assert.equal(v2.runId, undefined);
+  assert.equal(flat.proposalId, 'proposal-1');
+  assert.equal(flat.runId, undefined);
+});
+
+test('Lark tool approval actions normalize the durable approval id', () => {
+  const v2 = normalizeLarkCardAction({
+    schema: '2.0',
+    header: { event_type: 'card.action.trigger' },
+    event: {
+      operator: { open_id: 'ou-manager' },
+      action: {
+        tag: 'button',
+        value: {
+          action: 'opentag.tool_approval.approve',
+          approval_id: 'approval-1',
+        },
+      },
+      context: {
+        open_message_id: 'om-tool-card',
+        open_chat_id: 'oc-project',
+      },
+    },
+  });
+  const flat = normalizeFlatLarkCardAction({
+    type: 'card.action.trigger',
+    operator_id: 'ou-manager',
+    message_id: 'om-tool-card',
+    chat_id: 'oc-project',
+    action_value: JSON.stringify({
+      action: 'opentag.tool_approval.reject',
+      approval_id: 'approval-1',
+    }),
+  });
+  assert.equal(v2.approvalId, 'approval-1');
+  assert.equal(v2.proposalId, undefined);
+  assert.equal(flat.approvalId, 'approval-1');
 });
 
 test('Lark card action normalization rejects callbacks without durable routing fields', () => {

@@ -23,6 +23,7 @@ export interface PairingInvitation {
   projectId: string;
   activationMode: PairingActivationMode;
   requireMention: boolean;
+  allowedActorIds?: string[];
   status: PairingInvitationStatus;
   createdBy: string;
   createdAt: string;
@@ -44,6 +45,7 @@ export interface CreatePairingInvitationInput {
   projectId: string;
   activationMode?: PairingActivationMode;
   requireMention?: boolean;
+  allowedActorIds?: string[];
   createdBy?: string;
 }
 
@@ -71,6 +73,7 @@ export type ConsumePairingCodeResult =
         | 'expired_code'
         | 'revoked_code'
         | 'consumed_code'
+        | 'actor_not_allowed'
         | 'platform_mismatch';
       invitation?: PairingInvitation;
     };
@@ -152,6 +155,17 @@ function invitationStatus(
   return invitation.status;
 }
 
+function normalizedActorAllowlist(value: string[] | undefined): string[] | undefined {
+  const allowed = [
+    ...new Set(
+      (value ?? [])
+        .map((actorId) => actorId.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return allowed.length ? allowed : undefined;
+}
+
 export function consumePairingCodeInState(
   state: PairingState,
   input: ConsumePairingCodeInput,
@@ -177,6 +191,12 @@ export function consumePairingCodeInState(
   }
   if (match.status === 'consumed') {
     return { ok: false, reason: 'consumed_code', invitation };
+  }
+  if (
+    match.allowedActorIds?.length &&
+    (!input.actorId || !match.allowedActorIds.includes(input.actorId))
+  ) {
+    return { ok: false, reason: 'actor_not_allowed', invitation };
   }
 
   match.status = 'consumed';
@@ -279,6 +299,7 @@ export class FilePairingStore {
         projectId,
         activationMode: input.activationMode ?? 'mention',
         requireMention: input.requireMention ?? true,
+        allowedActorIds: normalizedActorAllowlist(input.allowedActorIds),
         status: 'pending',
         createdBy: input.createdBy?.trim() || 'admin',
         createdAt,

@@ -3,8 +3,17 @@ import type { SourceThread } from '@opentag/core';
 export interface LarkDeliveryMetadata {
   runId?: string;
   thread?: SourceThread;
-  stage?: 'progress-card' | 'thread-reply' | 'artifact';
+  stage?:
+    | 'progress-card'
+    | 'memory-proposal-card'
+    | 'tool-approval-card'
+    | 'thread-reply'
+    | 'routine-notification'
+    | 'artifact';
   artifactId?: string;
+  proposalId?: string;
+  approvalId?: string;
+  notificationId?: string;
 }
 
 export interface LarkFileInput {
@@ -37,6 +46,7 @@ export interface LarkIncomingEvent {
       message_id?: string;
       root_id?: string;
       parent_id?: string;
+      thread_id?: string;
       chat_id?: string;
       chat_type?: 'p2p' | 'group';
       message_type?: string;
@@ -73,9 +83,62 @@ export interface LarkIncomingEvent {
   };
 }
 
+export interface LarkHistoryMessage {
+  message_id?: string;
+  root_id?: string;
+  parent_id?: string;
+  thread_id?: string;
+  chat_id?: string;
+  msg_type?: string;
+  create_time?: string;
+  deleted?: boolean;
+  sender?: {
+    id?: string;
+    id_type?: string;
+    sender_type?: string;
+    tenant_key?: string;
+  };
+  body?: {
+    content?: string;
+  };
+  mentions?: Array<{
+    id?: string;
+    id_type?: string;
+    name?: string;
+    tenant_key?: string;
+  }>;
+}
+
+export interface LarkMessagePage {
+  items: LarkHistoryMessage[];
+  hasMore: boolean;
+  pageToken?: string;
+}
+
+export interface LarkChatInfo {
+  chatId: string;
+  name?: string;
+  description?: string;
+  chatMode?: 'group' | 'p2p' | 'topic';
+  chatType?: 'private' | 'public';
+  external?: boolean;
+}
+
+export interface LarkListMessagesInput {
+  containerType: 'chat' | 'thread';
+  containerId: string;
+  startTime?: string;
+  endTime?: string;
+  sortType?: 'ByCreateTimeAsc' | 'ByCreateTimeDesc';
+  pageSize?: number;
+  pageToken?: string;
+}
+
 export interface LarkCardAction {
   action: string;
   runId?: string;
+  proposalId?: string;
+  approvalId?: string;
   actorId: string;
   cardMessageId: string;
   chatId: string;
@@ -92,6 +155,13 @@ export interface LarkCardActionResponse {
 }
 
 export interface LarkTransport {
+  readiness?(): Promise<{ ok: boolean }>;
+  getChat(
+    chatId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<LarkChatInfo | undefined>;
+  getMessage(messageId: string): Promise<LarkHistoryMessage | undefined>;
+  listMessages(input: LarkListMessagesInput): Promise<LarkMessagePage>;
   sendText(input: {
     chatId: string;
     text: string;
@@ -117,7 +187,7 @@ export interface LarkTransport {
     rootId?: string;
     replyToMessageId?: string;
     metadata?: LarkDeliveryMetadata;
-  }): Promise<{ messageId: string }>;
+  }): Promise<{ messageId: string; messageType: 'file' | 'image' }>;
   downloadMessageResource(input: {
     messageId: string;
     fileKey: string;

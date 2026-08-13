@@ -10,18 +10,18 @@ function request(method = 'GET', headers = {}) {
   return { method, headers };
 }
 
-test('operator auth signs expiring sessions and validates CSRF separately', () => {
+test('operator auth signs expiring sessions and validates CSRF separately', async () => {
   const token = 'operator-token-that-is-long-enough-1234';
   const auth = new OperatorAuth({ token, sessionTtlSeconds: 600 });
   const issuedAt = new Date('2026-08-12T00:00:00.000Z');
-  const session = auth.createSession(token, issuedAt);
+  const session = await auth.createSession(token, issuedAt);
   assert.ok(session);
   assert.match(session.cookie, /HttpOnly/);
   assert.match(session.cookie, /SameSite=Strict/);
   assert.doesNotMatch(session.cookie, new RegExp(token));
 
   const cookie = session.cookie.split(';', 1)[0];
-  const withoutCsrf = auth.authenticate(
+  const withoutCsrf = await auth.authenticate(
     request('POST', { cookie }),
     new Date('2026-08-12T00:01:00.000Z'),
   );
@@ -29,7 +29,7 @@ test('operator auth signs expiring sessions and validates CSRF separately', () =
   assert.equal(withoutCsrf.method, 'session');
   assert.equal(withoutCsrf.csrfValid, false);
 
-  const withCsrf = auth.authenticate(
+  const withCsrf = await auth.authenticate(
     request('POST', {
       cookie,
       'x-opentag-csrf': session.csrfToken,
@@ -46,7 +46,7 @@ test('operator auth signs expiring sessions and validates CSRF separately', () =
     workspaceIds: ['*'],
   });
 
-  const expired = auth.authenticate(
+  const expired = await auth.authenticate(
     request('GET', { cookie }),
     new Date('2026-08-12T00:11:00.000Z'),
   );
@@ -54,21 +54,21 @@ test('operator auth signs expiring sessions and validates CSRF separately', () =
 
   const tampered = `${cookie.slice(0, -1)}${cookie.endsWith('x') ? 'y' : 'x'}`;
   assert.equal(
-    auth.authenticate(request('GET', { cookie: tampered }), issuedAt)
+    (await auth.authenticate(request('GET', { cookie: tampered }), issuedAt))
       .authenticated,
     false,
   );
 });
 
-test('operator auth supports bearer automation and safe disabled mode', () => {
+test('operator auth supports bearer automation and safe disabled mode', async () => {
   const token = 'operator-token-that-is-long-enough-5678';
   const auth = new OperatorAuth({ token });
   const bearerRequest = request('POST', {
     authorization: `Bearer ${token}`,
   });
-  assert.equal(auth.authenticate(bearerRequest).method, 'bearer');
-  assert.equal(auth.authenticate(bearerRequest).csrfValid, true);
-  assert.equal(auth.authenticate(bearerRequest).principal?.id, 'installation-owner');
+  assert.equal((await auth.authenticate(bearerRequest)).method, 'bearer');
+  assert.equal((await auth.authenticate(bearerRequest)).csrfValid, true);
+  assert.equal((await auth.authenticate(bearerRequest)).principal?.id, 'installation-owner');
   assert.equal(bearerTokenMatches(bearerRequest, token), true);
   assert.equal(
     bearerTokenMatches(
@@ -79,7 +79,7 @@ test('operator auth supports bearer automation and safe disabled mode', () => {
   );
 
   const disabled = new OperatorAuth();
-  assert.deepEqual(disabled.authenticate(request()), {
+  assert.deepEqual(await disabled.authenticate(request()), {
     authenticated: true,
     method: 'disabled',
     csrfValid: true,
@@ -96,7 +96,33 @@ test('operator auth supports bearer automation and safe disabled mode', () => {
   );
 });
 
-test('operator auth maps multiple tokens to named workspace principals', () => {
+test('rotating a static operator token invalidates sessions with a stable signing secret', async () => {
+  const shared = {
+    principal: {
+      id: 'installation-owner',
+      displayName: 'Installation owner',
+      role: 'owner',
+      workspaceIds: ['*'],
+    },
+    sessionSecret: 'stable-session-signing-secret-123456789',
+  };
+  const originalToken = 'original-static-token-that-is-long-enough';
+  const original = new OperatorAuth({ ...shared, token: originalToken });
+  const session = await original.createSession(originalToken);
+  assert.ok(session);
+  const cookie = session.cookie.split(';', 1)[0];
+
+  const rotated = new OperatorAuth({
+    ...shared,
+    token: 'rotated-static-token-that-is-long-enough',
+  });
+  assert.equal(
+    (await rotated.authenticate(request('GET', { cookie }))).authenticated,
+    false,
+  );
+});
+
+test('operator auth maps multiple tokens to named workspace principals', async () => {
   const credentials = parseOperatorCredentials(
     JSON.stringify([
       {
@@ -122,7 +148,7 @@ test('operator auth maps multiple tokens to named workspace principals', () => {
   assert.equal(auth.configured, true);
   assert.equal(auth.principalCount, 2);
 
-  const bearer = auth.authenticate(
+  const bearer = await auth.authenticate(
     request('GET', {
       authorization: 'Bearer audit-viewer-token-that-is-long-enough',
     }),
@@ -136,13 +162,13 @@ test('operator auth maps multiple tokens to named workspace principals', () => {
   assert.equal(Object.hasOwn(bearer.principal, 'token'), false);
 
   const issuedAt = new Date('2026-08-12T01:00:00.000Z');
-  const session = auth.createSession(
+  const session = await auth.createSession(
     'acme-admin-token-that-is-long-enough',
     issuedAt,
   );
   assert.equal(session?.principal.id, 'acme-admin');
   const cookie = session.cookie.split(';', 1)[0];
-  const authenticated = auth.authenticate(
+  const authenticated = await auth.authenticate(
     request('GET', { cookie }),
     new Date('2026-08-12T01:01:00.000Z'),
   );

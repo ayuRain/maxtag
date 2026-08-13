@@ -9,6 +9,7 @@
     { "path": "../core" },
     { "path": "../platform-github" },
     { "path": "../platform-lark" },
+    { "path": "../platform-slack" },
     { "path": "../platform-telegram" }
   ],
   "include": ["src/**/*.ts"]

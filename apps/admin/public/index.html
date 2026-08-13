@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OpenTag Console</title>
+    <title>MaxTag Console</title>
     <link rel="stylesheet" href="/admin.css" />
   </head>
   <body>
@@ -11,7 +11,7 @@
       <form class="auth-panel" id="auth-form">
         <div class="auth-brand">
           <span class="brand-mark" aria-hidden="true">O</span>
-          <strong>OpenTag</strong>
+          <strong>MaxTag</strong>
         </div>
         <div class="auth-heading">
           <span class="eyebrow">Operator access</span>
@@ -37,7 +37,7 @@
       <aside class="sidebar">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">O</span>
-          <strong>OpenTag</strong>
+          <strong>MaxTag</strong>
         </div>
 
         <div class="workspace-switcher">
@@ -54,6 +54,22 @@
             Projects
             <span class="nav-count" id="project-count">0</span>
           </button>
+          <button class="nav-item" data-view="skills" type="button">
+            Skills
+            <span class="nav-count" id="skill-count">0</span>
+          </button>
+          <button class="nav-item" data-view="sources" type="button">
+            Sources
+            <span class="nav-count" id="source-count">0</span>
+          </button>
+          <button class="nav-item" data-view="agents" type="button">
+            Agents
+            <span class="nav-count" id="agent-count">0</span>
+          </button>
+          <button class="nav-item" data-view="spend" type="button">
+            Spend
+            <span class="nav-count" id="spend-alert-count">0</span>
+          </button>
           <button class="nav-item" data-view="access" type="button">
             Access
             <span class="nav-count" id="member-count">0</span>
@@ -61,6 +77,10 @@
           <button class="nav-item" data-view="connectors" type="button">
             Connectors
             <span class="nav-count" id="client-count">0</span>
+          </button>
+          <button class="nav-item" data-view="assistant" type="button">
+            Assistant
+            <span class="nav-count" id="assistant-count">0</span>
           </button>
           <button class="nav-item" data-view="routines" type="button">
             Routines
@@ -73,6 +93,10 @@
           <button class="nav-item" data-view="activity" type="button">
             Activity
             <span class="nav-count" id="active-count">0</span>
+          </button>
+          <button class="nav-item" data-view="audit" type="button">
+            Audit
+            <span class="nav-count" id="audit-count">0</span>
           </button>
           <button class="nav-item" data-view="memory" type="button">
             Memory
@@ -162,6 +186,7 @@
               <label class="field">
                 <span>Executor</span>
                 <select id="workspace-agent-executor"></select>
+                <div class="runner-capabilities" id="workspace-runner-capabilities"></div>
               </label>
               <label class="field">
                 <span>Default project</span>
@@ -194,7 +219,7 @@
               <div class="editor-header">
                 <div>
                   <span class="eyebrow">Project policy</span>
-                  <h2 id="project-editor-title">OpenTag</h2>
+                  <h2 id="project-editor-title">MaxTag</h2>
                 </div>
                 <span class="state-pill ready" id="project-policy-state">Configured</span>
               </div>
@@ -234,6 +259,7 @@
                   <label class="field">
                     <span>Executor</span>
                     <select id="agent-executor"></select>
+                    <div class="runner-capabilities" id="project-runner-capabilities"></div>
                   </label>
                   <label class="field span-two">
                     <span>Instructions</span>
@@ -254,6 +280,80 @@
                     <option value="isolated">Project isolated</option>
                   </select>
                 </label>
+                <div class="memory-retention-policy">
+                  <label class="field">
+                    <span>Default retention</span>
+                    <select id="project-memory-retention-mode">
+                      <option value="inherit">Use workspace default</option>
+                      <option value="keep">Keep indefinitely</option>
+                      <option value="custom">Custom days</option>
+                    </select>
+                  </label>
+                  <label class="field" id="project-memory-retention-days-field" hidden>
+                    <span>Days</span>
+                    <input id="project-memory-retention-days" type="number" min="1" max="3650" step="1" value="90" />
+                  </label>
+                </div>
+                <div class="memory-approval-editor">
+                  <label class="field">
+                    <span>Approval</span>
+                    <select id="project-memory-approval-mode">
+                      <option value="inherit">Use workspace default</option>
+                      <option value="disabled">Direct writes</option>
+                      <option value="require_approval">Require approval</option>
+                    </select>
+                  </label>
+                  <div class="memory-approval-options" id="project-memory-approval-options">
+                    <label class="toggle-field">
+                      <input id="project-memory-approval-remember" type="checkbox" checked />
+                      <span>Remember</span>
+                    </label>
+                    <label class="toggle-field">
+                      <input id="project-memory-approval-forget" type="checkbox" checked />
+                      <span>Forget</span>
+                    </label>
+                    <label class="toggle-field">
+                      <input id="project-memory-approval-workspace" type="checkbox" />
+                      <span>Workspace</span>
+                    </label>
+                    <label class="toggle-field">
+                      <input id="project-memory-approval-project" type="checkbox" checked />
+                      <span>Project</span>
+                    </label>
+                    <label class="toggle-field">
+                      <input id="project-memory-approval-channel" type="checkbox" />
+                      <span>Channel</span>
+                    </label>
+                    <label class="toggle-field">
+                      <input id="project-memory-approval-thread" type="checkbox" />
+                      <span>Thread</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Skills</h3>
+                  <span id="project-skill-summary">Workspace baseline</span>
+                </div>
+                <div class="skill-picker" id="project-skill-picker"></div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Sources</h3>
+                  <span id="project-source-summary">Workspace baseline</span>
+                </div>
+                <div class="skill-picker" id="project-source-picker"></div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Delegated Agents</h3>
+                  <span id="project-agent-summary">Workspace baseline</span>
+                </div>
+                <div class="skill-picker" id="project-agent-picker"></div>
               </div>
 
               <div class="form-section">
@@ -266,6 +366,14 @@
                   <select id="project-capability-mode">
                     <option value="inherit">Use workspace defaults</option>
                     <option value="custom">Custom project policy</option>
+                  </select>
+                </label>
+                <label class="field policy-mode-field">
+                  <span>Write approval</span>
+                  <select id="project-tool-approval-mode">
+                    <option value="inherit">Use workspace default</option>
+                    <option value="require_approval">Require approval</option>
+                    <option value="disabled">Direct writes</option>
                   </select>
                 </label>
                 <div class="tool-grid" id="tool-grid"></div>
@@ -334,6 +442,314 @@
               </div>
             </form>
           </div>
+        </section>
+
+        <section class="view" id="view-skills" data-view-panel="skills" hidden>
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Reusable procedures</span>
+              <h2>Skills</h2>
+            </div>
+            <button class="primary-button" id="new-skill" type="button">New skill</button>
+          </div>
+          <div class="skill-workbench">
+            <aside class="skill-index">
+              <div class="index-heading">
+                <span>Catalog</span>
+                <span id="skill-enabled-summary">0 enabled</span>
+              </div>
+              <div class="skill-list" id="skill-list"></div>
+            </aside>
+            <form class="skill-editor" id="skill-form">
+              <div class="editor-header">
+                <div>
+                  <span class="eyebrow">Agent Skill</span>
+                  <h2 id="skill-editor-title">New skill</h2>
+                </div>
+                <span class="state-pill planned" id="skill-state">Draft</span>
+              </div>
+              <div class="form-section two-column-form">
+                <label class="field">
+                  <span>Name</span>
+                  <input id="skill-name" autocomplete="off" required />
+                </label>
+                <label class="field">
+                  <span>Skill ID</span>
+                  <input id="skill-id" autocomplete="off" spellcheck="false" required />
+                </label>
+                <label class="field span-two">
+                  <span>Description</span>
+                  <input id="skill-description" autocomplete="off" required />
+                </label>
+              </div>
+              <div class="form-section">
+                <label class="field">
+                  <span>Instructions</span>
+                  <textarea id="skill-content" rows="18" spellcheck="true" required></textarea>
+                </label>
+              </div>
+              <div class="editor-actions">
+                <span id="skill-save-state">No unsaved changes</span>
+                <div class="skill-editor-actions">
+                  <button class="danger-text-button" id="toggle-skill" type="button" hidden>Disable</button>
+                  <button class="primary-button" id="save-skill" type="submit">Save skill</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="view" id="view-sources" data-view-panel="sources" hidden>
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Governed context</span>
+              <h2>Sources</h2>
+            </div>
+            <button class="primary-button" id="new-source" type="button">New source</button>
+          </div>
+          <div class="skill-workbench">
+            <aside class="skill-index">
+              <div class="index-heading">
+                <span>Workspace</span>
+                <span id="source-enabled-summary">0 enabled</span>
+              </div>
+              <div class="skill-list" id="source-list"></div>
+            </aside>
+            <form class="skill-editor" id="source-form">
+              <div class="editor-header">
+                <div>
+                  <span class="eyebrow">Knowledge Source</span>
+                  <h2 id="source-editor-title">New source</h2>
+                </div>
+                <span class="state-pill planned" id="source-state">Draft</span>
+              </div>
+              <div class="form-section two-column-form">
+                <label class="field">
+                  <span>Name</span>
+                  <input id="source-name" autocomplete="off" required />
+                </label>
+                <label class="field">
+                  <span>Source ID</span>
+                  <input id="source-id" autocomplete="off" spellcheck="false" required />
+                </label>
+                <label class="field span-two">
+                  <span>Description</span>
+                  <input id="source-description" autocomplete="off" required />
+                </label>
+                <label class="field">
+                  <span>Kind</span>
+                  <select id="source-kind">
+                    <option value="text">Text</option>
+                    <option value="file">File snapshot</option>
+                    <option value="url">URL snapshot</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Media type</span>
+                  <input id="source-media-type" autocomplete="off" spellcheck="false" value="text/markdown" required />
+                </label>
+                <label class="field span-two" id="source-uri-field">
+                  <span>Source URI</span>
+                  <input id="source-uri" autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="field" id="source-refresh-field">
+                  <span>Automatic refresh</span>
+                  <select id="source-refresh-interval">
+                    <option value="0">Off</option>
+                    <option value="3600000">Hourly</option>
+                    <option value="21600000">Every 6 hours</option>
+                    <option value="86400000">Daily</option>
+                    <option value="604800000">Weekly</option>
+                  </select>
+                </label>
+                <label class="field span-two" id="source-file-field">
+                  <span>Import file</span>
+                  <input id="source-file" type="file" accept=".md,.txt,.csv,.json,.yaml,.yml,.html,.htm,.pdf,.docx,text/*,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                </label>
+              </div>
+              <div class="form-section">
+                <label class="field">
+                  <span>Content snapshot</span>
+                  <textarea id="source-content" rows="18" spellcheck="true" required></textarea>
+                </label>
+                <div class="source-version" id="source-version">Unsaved snapshot</div>
+              </div>
+              <div class="editor-actions">
+                <span id="source-save-state">No unsaved changes</span>
+                <div class="skill-editor-actions">
+                  <button class="danger-text-button" id="toggle-source" type="button" hidden>Disable</button>
+                  <button class="secondary-button" id="refresh-source" type="button" hidden>Refresh</button>
+                  <button class="primary-button" id="save-source" type="submit">Save source</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="view" id="view-agents" data-view-panel="agents" hidden>
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Bounded specialists</span>
+              <h2>Agents</h2>
+            </div>
+            <button class="primary-button" id="new-delegated-agent" type="button">New agent</button>
+          </div>
+          <div class="skill-workbench">
+            <aside class="skill-index">
+              <div class="index-heading">
+                <span>Catalog</span>
+                <span id="agent-enabled-summary">0 enabled</span>
+              </div>
+              <div class="skill-list" id="agent-list"></div>
+            </aside>
+            <form class="skill-editor" id="delegated-agent-form">
+              <div class="editor-header">
+                <div>
+                  <span class="eyebrow">Delegated Agent</span>
+                  <h2 id="delegated-agent-editor-title">New agent</h2>
+                </div>
+                <span class="state-pill planned" id="delegated-agent-state">Draft</span>
+              </div>
+              <div class="form-section two-column-form">
+                <label class="field">
+                  <span>Name</span>
+                  <input id="delegated-agent-name" autocomplete="off" required />
+                </label>
+                <label class="field">
+                  <span>Agent ID</span>
+                  <input id="delegated-agent-id" autocomplete="off" spellcheck="false" required />
+                </label>
+                <label class="field span-two">
+                  <span>Description</span>
+                  <input id="delegated-agent-description" autocomplete="off" required />
+                </label>
+                <label class="field">
+                  <span>Executor</span>
+                  <select id="delegated-agent-executor"></select>
+                </label>
+                <label class="field">
+                  <span>Model</span>
+                  <input id="delegated-agent-model" autocomplete="off" spellcheck="false" placeholder="gpt-5.6-luna" />
+                </label>
+                <label class="field">
+                  <span>Max turns</span>
+                  <input id="delegated-agent-max-turns" type="number" min="1" max="30" step="1" value="10" />
+                </label>
+                <label class="field">
+                  <span>Timeout (seconds)</span>
+                  <input id="delegated-agent-timeout" type="number" min="5" max="300" step="5" value="300" />
+                </label>
+              </div>
+              <div class="form-section">
+                <label class="field">
+                  <span>Instructions</span>
+                  <textarea id="delegated-agent-instructions" rows="10" spellcheck="true" required></textarea>
+                </label>
+              </div>
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Skills</h3>
+                  <span>Loaded on invocation</span>
+                </div>
+                <div class="skill-picker" id="delegated-agent-skill-picker"></div>
+              </div>
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Read-only tools</h3>
+                  <span>Intersected with the parent route</span>
+                </div>
+                <div class="skill-picker" id="delegated-agent-grant-picker"></div>
+              </div>
+              <div class="form-section two-column-form">
+                <fieldset class="field span-two compact-fieldset">
+                  <legend>Memory scopes</legend>
+                  <div class="memory-approval-options" id="delegated-agent-memory-scopes">
+                    <label class="toggle-field"><input type="checkbox" value="workspace" /><span>Workspace</span></label>
+                    <label class="toggle-field"><input type="checkbox" value="project" /><span>Project</span></label>
+                    <label class="toggle-field"><input type="checkbox" value="channel" /><span>Channel</span></label>
+                    <label class="toggle-field"><input type="checkbox" value="thread" /><span>Thread</span></label>
+                  </div>
+                </fieldset>
+                <label class="field span-two">
+                  <span>Allowed network hosts</span>
+                  <input id="delegated-agent-network-hosts" autocomplete="off" spellcheck="false" placeholder="docs.example.com, api.example.com" />
+                </label>
+              </div>
+              <div class="editor-actions">
+                <span id="delegated-agent-save-state">No unsaved changes</span>
+                <div class="skill-editor-actions">
+                  <button class="danger-text-button" id="toggle-delegated-agent" type="button" hidden>Disable</button>
+                  <button class="primary-button" id="save-delegated-agent" type="submit">Save agent</button>
+                </div>
+              </div>
+            </form>
+          </div>
+          <section class="agent-task-section">
+            <div class="section-heading compact-heading">
+              <div>
+                <span class="eyebrow">Agent team</span>
+                <h2>Recent tasks</h2>
+              </div>
+              <span class="agent-task-summary" id="agent-task-summary">0 active</span>
+            </div>
+            <div class="agent-task-list" id="agent-task-list"></div>
+          </section>
+        </section>
+
+        <section class="view" id="view-spend" data-view-panel="spend" hidden>
+          <div class="summary-strip" id="spend-summary"></div>
+
+          <section class="spend-policy-band">
+            <div class="section-heading compact-heading">
+              <div>
+                <span class="eyebrow">Hard limits</span>
+                <h2>Workspace controls</h2>
+              </div>
+              <span class="spend-period" id="spend-period">Current month</span>
+            </div>
+            <div class="spend-policy-grid" id="spend-workspace-policies"></div>
+          </section>
+
+          <section class="spend-ledger-section">
+            <div class="section-heading compact-heading">
+              <div>
+                <span class="eyebrow">Model calls</span>
+                <h2>Agent and memory runner</h2>
+              </div>
+            </div>
+            <div class="spend-purpose-list" id="spend-purposes"></div>
+          </section>
+
+          <section class="spend-ledger-section">
+            <div class="section-heading compact-heading">
+              <div>
+                <span class="eyebrow">Aggregate caps</span>
+                <h2>Projects</h2>
+              </div>
+            </div>
+            <div class="spend-ledger" id="spend-projects"></div>
+          </section>
+
+          <section class="spend-ledger-section">
+            <div class="section-heading compact-heading">
+              <div>
+                <span class="eyebrow">Per-client limits</span>
+                <h2>Channels</h2>
+              </div>
+              <span class="spend-period" id="spend-coverage">Usage coverage</span>
+            </div>
+            <div class="spend-ledger" id="spend-channels"></div>
+          </section>
+
+          <section class="spend-ledger-section" id="spend-alerts-section">
+            <div class="section-heading compact-heading">
+              <div>
+                <span class="eyebrow">Threshold notifications</span>
+                <h2>Alerts</h2>
+              </div>
+            </div>
+            <div class="spend-alert-list" id="spend-alerts"></div>
+          </section>
         </section>
 
         <section class="view" id="view-access" data-view-panel="access" hidden>
@@ -422,10 +838,98 @@
               <div class="access-list" id="access-project-member-list"></div>
             </section>
           </div>
+
+          <section class="operator-credentials" id="operator-credentials" hidden>
+            <div class="section-heading compact-heading">
+              <div>
+                <span class="eyebrow">Installation control plane</span>
+                <h2>Operator credentials</h2>
+              </div>
+              <span class="state-pill planned" id="operator-credential-count">0 active</span>
+            </div>
+            <form class="operator-credential-form" id="operator-credential-form">
+              <label class="field">
+                <span>Name</span>
+                <input id="operator-credential-name" autocomplete="off" required />
+              </label>
+              <label class="field">
+                <span>Credential ID</span>
+                <input id="operator-credential-id" autocomplete="off" spellcheck="false" placeholder="ops-admin" required />
+              </label>
+              <label class="field">
+                <span>Role</span>
+                <select id="operator-credential-role">
+                  <option value="admin">Admin</option>
+                  <option value="viewer">Viewer</option>
+                  <option value="owner">Owner</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Workspace IDs</span>
+                <input id="operator-credential-workspaces" autocomplete="off" spellcheck="false" placeholder="dev-workspace" required />
+              </label>
+              <button class="primary-button" id="create-operator-credential" type="submit">Create credential</button>
+            </form>
+            <div class="access-list" id="operator-credential-list"></div>
+          </section>
         </section>
 
         <section class="view" id="view-connectors" data-view-panel="connectors" hidden>
           <div class="connector-summary" id="connector-summary"></div>
+
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Lark agent</span>
+              <h2>Agent identities</h2>
+            </div>
+          </div>
+          <form class="tool-identity-editor" id="tool-identity-form">
+            <label class="field">
+              <span>Identity ID</span>
+              <input id="tool-identity-id" autocomplete="off" spellcheck="false" placeholder="lark-operations" required />
+            </label>
+            <label class="field">
+              <span>Name</span>
+              <input id="tool-identity-name" autocomplete="off" placeholder="Operations bot" required />
+            </label>
+            <label class="field">
+              <span>Provider</span>
+              <select id="tool-identity-provider">
+                <option value="lark">Lark</option>
+                <option value="github">GitHub</option>
+              </select>
+            </label>
+            <label class="field tool-identity-lark-ref">
+              <span>App ID env</span>
+              <input id="tool-identity-app-id-ref" autocomplete="off" spellcheck="false" placeholder="LARK_OPS_APP_ID" />
+            </label>
+            <label class="field tool-identity-lark-ref">
+              <span>App secret env</span>
+              <input id="tool-identity-app-secret-ref" autocomplete="off" spellcheck="false" placeholder="LARK_OPS_APP_SECRET" />
+            </label>
+            <label class="field tool-identity-github-ref" hidden>
+              <span>Token env</span>
+              <input id="tool-identity-token-ref" autocomplete="off" spellcheck="false" placeholder="GITHUB_OPENTAG_TOKEN" />
+            </label>
+            <label class="field">
+              <span>External actor</span>
+              <input id="tool-identity-external-actor" autocomplete="off" placeholder="MaxTag bot" />
+            </label>
+            <label class="field">
+              <span>API base URL</span>
+              <input id="tool-identity-base-url" type="url" autocomplete="off" spellcheck="false" placeholder="https://open.feishu.cn" />
+            </label>
+            <button class="primary-button" id="save-tool-identity" type="submit">Save identity</button>
+          </form>
+          <div class="mcp-connector-list" id="tool-identity-list"></div>
+
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Agent tools</span>
+              <h2>MCP connectors</h2>
+            </div>
+          </div>
+          <div class="mcp-connector-list" id="mcp-connector-list"></div>
 
           <div class="section-heading">
             <div>
@@ -440,6 +944,7 @@
                 <option value="lark">Lark</option>
                 <option value="telegram">Telegram</option>
                 <option value="github">GitHub</option>
+                <option value="slack">Slack</option>
               </select>
             </label>
             <label class="field pairing-project-field">
@@ -553,9 +1058,14 @@
                   <label class="field">
                     <span>Frequency</span>
                     <select id="routine-schedule-kind">
+                      <option value="once">Once</option>
                       <option value="interval">Interval</option>
                       <option value="daily">Daily</option>
                     </select>
+                  </label>
+                  <label class="field" id="routine-once-at-field" hidden>
+                    <span>Run at</span>
+                    <input id="routine-once-at" type="datetime-local" />
                   </label>
                   <label class="field" id="routine-interval-field">
                     <span>Every (minutes)</span>
@@ -584,7 +1094,7 @@
                       <option value="lark">Lark / Feishu</option>
                       <option value="telegram">Telegram</option>
                       <option value="github">GitHub issue / PR</option>
-                      <option value="slack" disabled>Slack (planned)</option>
+                      <option value="slack">Slack</option>
                     </select>
                   </label>
                   <label class="field">
@@ -602,6 +1112,31 @@
                   <label class="field">
                     <span>Thread ID (optional)</span>
                     <input id="routine-thread-id" spellcheck="false" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
+                  <h3>Notifications</h3>
+                  <span>Per routine</span>
+                </div>
+                <div class="routine-notification-grid">
+                  <label class="field">
+                    <span>Send</span>
+                    <select id="routine-notification-mode">
+                      <option value="every_result">Every result</option>
+                      <option value="failures_only">Failures only</option>
+                      <option value="silent">Silent</option>
+                    </select>
+                  </label>
+                  <label class="field" id="routine-failure-threshold-field" hidden>
+                    <span>Alert after failures</span>
+                    <input id="routine-failure-threshold" type="number" min="1" max="10" value="1" />
+                  </label>
+                  <label class="toggle-field" id="routine-recovery-field" hidden>
+                    <input id="routine-recovery" type="checkbox" checked />
+                    <span>Notify when recovered</span>
                   </label>
                 </div>
               </div>
@@ -637,6 +1172,47 @@
             </div>
             <button class="secondary-button" id="tick-workflows" type="button">Tick now</button>
           </div>
+
+          <section class="workflow-producers" aria-labelledby="workflow-producers-title">
+            <div class="workflow-producer-heading">
+              <div>
+                <span class="eyebrow">Native producers</span>
+                <h2 id="workflow-producers-title">Event sources</h2>
+              </div>
+              <span class="state-pill planned" id="workflow-producer-state">Unknown</span>
+            </div>
+            <form class="workflow-producer-form" id="workflow-producer-form">
+              <label class="field">
+                <span>Source</span>
+                <select id="workflow-producer-kind">
+                  <option value="alertmanager">Alertmanager</option>
+                  <option value="lark-document">Lark document</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Name</span>
+                <input id="workflow-producer-name" autocomplete="off" placeholder="Production alerts" required />
+              </label>
+              <label class="field">
+                <span>Project</span>
+                <select id="workflow-producer-project" required></select>
+              </label>
+              <label class="field workflow-producer-document-field" hidden>
+                <span>Document ID</span>
+                <input id="workflow-producer-document-id" autocomplete="off" placeholder="doxcn..." />
+              </label>
+              <label class="field workflow-producer-document-field" hidden>
+                <span>Poll interval</span>
+                <input id="workflow-producer-poll-interval" type="number" min="30" max="86400" step="1" value="60" />
+              </label>
+              <label class="toggle-field workflow-producer-enabled">
+                <input id="workflow-producer-enabled" type="checkbox" checked />
+                <span>Enabled</span>
+              </label>
+              <button class="secondary-button" id="save-workflow-producer" type="submit">Add route</button>
+            </form>
+            <div class="workflow-producer-routes" id="workflow-producer-routes"></div>
+          </section>
 
           <div class="project-workbench workflow-workbench">
             <aside class="project-index">
@@ -687,8 +1263,13 @@
                   </div>
                   <label class="field" id="workflow-event-type-field" hidden>
                     <span>Event type</span>
-                    <input id="workflow-event-type" placeholder="issue.ready" autocomplete="off" spellcheck="false" />
+                    <input id="workflow-event-type" list="workflow-event-catalog" placeholder="github.workflow_run.failure" autocomplete="off" spellcheck="false" />
+                    <datalist id="workflow-event-catalog"></datalist>
                   </label>
+                </div>
+                <div class="workflow-producer-hint" id="workflow-producer-hint" hidden>
+                  <strong>Native producer</strong>
+                  <span id="workflow-producer-hint-copy">This event uses a configured native producer route for this project.</span>
                 </div>
               </div>
 
@@ -713,7 +1294,7 @@
                       <option value="lark">Lark / Feishu</option>
                       <option value="telegram">Telegram</option>
                       <option value="github">GitHub issue / PR</option>
-                      <option value="slack" disabled>Slack (planned)</option>
+                      <option value="slack">Slack</option>
                     </select>
                   </label>
                   <label class="field">
@@ -755,13 +1336,67 @@
           </div>
         </section>
 
+        <section class="view" id="view-assistant" data-view-panel="assistant" hidden>
+          <div class="assistant-layout">
+            <aside class="assistant-sidebar">
+              <div class="assistant-sidebar-head">
+                <div>
+                  <span class="eyebrow">Web client</span>
+                  <strong>Conversations</strong>
+                </div>
+                <button class="square-button" id="new-assistant-session" type="button" title="New conversation" aria-label="New conversation">+</button>
+              </div>
+              <label class="field assistant-project-picker">
+                <span>Project</span>
+                <select id="assistant-project"></select>
+              </label>
+              <div class="assistant-session-list" id="assistant-session-list"></div>
+            </aside>
+            <section class="assistant-conversation">
+              <header class="assistant-conversation-head">
+                <div>
+                  <span class="eyebrow" id="assistant-route">Workspace assistant</span>
+                  <strong id="assistant-title">Select a conversation</strong>
+                </div>
+                <span class="state-pill" id="assistant-state">Idle</span>
+              </header>
+              <div class="assistant-live-trace" id="assistant-live-trace" hidden></div>
+              <div class="assistant-messages" id="assistant-messages">
+                <div class="assistant-empty">Start a project conversation</div>
+              </div>
+              <form class="assistant-composer" id="assistant-form">
+                <div class="assistant-attachment-list" id="assistant-attachment-list"></div>
+                <textarea id="assistant-prompt" rows="3" maxlength="20000" placeholder="Message the project agent"></textarea>
+                <div class="assistant-composer-actions">
+                  <span id="assistant-composer-state">Durable workspace thread</span>
+                  <input id="assistant-files" type="file" multiple hidden />
+                  <button class="secondary-button" id="assistant-attach" type="button">Attach</button>
+                  <button class="secondary-button" id="assistant-stop" type="button" hidden>Stop</button>
+                  <button class="primary-button" id="assistant-send" type="submit">Send</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        </section>
+
         <section class="view" id="view-activity" data-view-panel="activity" hidden>
           <div class="activity-toolbar">
             <div class="activity-filter-group">
+              <form class="activity-search" id="activity-search-form" role="search">
+                <label class="field">
+                  <span>Search activity</span>
+                  <input id="activity-query" type="search" maxlength="200" autocomplete="off" placeholder="Request, result, error, thread..." />
+                </label>
+                <span id="activity-search-meta">Recent 50 runs</span>
+              </form>
+              <label class="field compact-select activity-project-filter">
+                <span>Project</span>
+                <select id="activity-project"></select>
+              </label>
               <div class="segmented" id="run-filter" role="group" aria-label="Run status">
                 <button class="active" type="button" data-status="">All</button>
-                <button type="button" data-status="running">Running</button>
-                <button type="button" data-status="completed">Completed</button>
+                <button type="button" data-status="live">Live</button>
+                <button type="button" data-status="completed">Done</button>
                 <button type="button" data-status="failed">Failed</button>
               </div>
               <span class="activity-status" id="steering-count">0 follow-ups waiting</span>
@@ -773,8 +1408,37 @@
             </div>
           </div>
 
+          <section class="tool-approval-band" aria-labelledby="tool-approval-heading">
+            <div class="tool-approval-heading">
+              <div>
+                <span class="eyebrow">Guarded writes</span>
+                <strong id="tool-approval-heading">Tool approvals</strong>
+              </div>
+              <span id="tool-approval-count">0 pending</span>
+            </div>
+            <div class="tool-approval-list" id="tool-approval-list"></div>
+          </section>
+
           <div class="activity-layout">
-            <div class="run-table" id="run-table"></div>
+            <aside class="thread-index">
+              <div class="activity-pane-heading">
+                <div>
+                  <span class="eyebrow">Workspace threads</span>
+                  <strong id="thread-count">0 threads</strong>
+                </div>
+              </div>
+              <div class="thread-list" id="thread-list"></div>
+            </aside>
+            <div class="run-feed">
+              <div class="activity-pane-heading thread-heading">
+                <div>
+                  <span class="eyebrow" id="thread-context">Thread</span>
+                  <strong id="thread-title">Select a thread</strong>
+                  <small id="thread-meta"></small>
+                </div>
+              </div>
+              <div id="run-table"></div>
+            </div>
             <aside class="run-detail" id="run-detail">
               <div class="empty-state">Select a run</div>
             </aside>
@@ -800,6 +1464,81 @@
           </div>
         </section>
 
+        <section class="view" id="view-audit" data-view-panel="audit" hidden>
+          <div class="data-lifecycle-bar">
+            <div>
+              <span class="eyebrow">Data lifecycle</span>
+              <strong id="data-lifecycle-status">No preview</strong>
+              <small id="data-lifecycle-summary">90 days / 20 per thread</small>
+            </div>
+            <label class="field compact-number">
+              <span>Retain days</span>
+              <input id="data-lifecycle-days" type="number" min="1" max="3650" value="90" />
+            </label>
+            <label class="field compact-number">
+              <span>Keep / thread</span>
+              <input id="data-lifecycle-keep" type="number" min="1" max="500" value="20" />
+            </label>
+            <button class="secondary-button" id="preview-data-lifecycle" type="button">Preview</button>
+            <button class="danger-button" id="apply-data-lifecycle" type="button">Apply</button>
+          </div>
+          <form class="audit-toolbar" id="audit-filter-form">
+            <label class="field compact-select">
+              <span>Project</span>
+              <select id="audit-project"></select>
+            </label>
+            <label class="field compact-select">
+              <span>Category</span>
+              <select id="audit-category">
+                <option value="">All</option>
+                <option value="task">Tasks</option>
+                <option value="agent">Agents</option>
+                <option value="tool">Tool calls</option>
+                <option value="policy">Policy</option>
+                <option value="knowledge">Knowledge</option>
+                <option value="access">Access</option>
+                <option value="binding">Bindings</option>
+                <option value="routine">Routines</option>
+                <option value="workflow">Workflows</option>
+              </select>
+            </label>
+            <label class="field compact-select">
+              <span>Outcome</span>
+              <select id="audit-outcome">
+                <option value="">All</option>
+                <option value="started">Started</option>
+                <option value="succeeded">Succeeded</option>
+                <option value="failed">Failed</option>
+                <option value="denied">Denied</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="changed">Changed</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Actor</span>
+              <input id="audit-actor" type="search" autocomplete="off" placeholder="operator or client ID" />
+            </label>
+            <label class="field">
+              <span>Action</span>
+              <input id="audit-action" type="search" autocomplete="off" placeholder="tool, task, policy..." />
+            </label>
+            <label class="field">
+              <span>Destination</span>
+              <input id="audit-destination" type="search" autocomplete="off" placeholder="https://api.github.com" />
+            </label>
+            <button class="secondary-button" type="submit">Apply</button>
+            <button class="secondary-button" id="export-audit" type="button">Export CSV</button>
+          </form>
+
+          <div class="audit-summary" id="audit-summary"></div>
+          <div class="audit-layout">
+            <section class="audit-list" id="audit-list"></section>
+            <aside class="audit-detail" id="audit-detail">
+              <div class="empty-state">Select an audit entry</div>
+            </aside>
+          </div>
+        </section>
+
         <section class="view" id="view-memory" data-view-panel="memory" hidden>
           <div class="memory-toolbar">
             <label class="field compact-select">
@@ -810,8 +1549,30 @@
               <button type="button" data-scope="global">Installation</button>
               <button type="button" data-scope="workspace">Workspace</button>
               <button class="active" type="button" data-scope="project">Project</button>
+              <button type="button" data-scope="channel">Channel</button>
               <button type="button" data-scope="thread">Thread</button>
             </div>
+          </div>
+
+          <form class="memory-search" id="memory-search-form">
+            <label class="field">
+              <span>Search approved memory</span>
+              <input id="memory-search-query" type="search" maxlength="200" autocomplete="off" placeholder="Decision, owner, convention..." />
+            </label>
+            <button class="secondary-button" id="search-memory" type="submit">Search</button>
+            <button class="secondary-button" id="query-memory" type="button">Analyze</button>
+            <span id="memory-search-meta">Current scope</span>
+          </form>
+          <div class="memory-search-results" id="memory-search-results" hidden></div>
+
+          <div class="memory-analysis-bar">
+            <div>
+              <strong id="memory-analysis-runner">Memory runner</strong>
+              <span id="memory-analysis-status">Loading</span>
+              <span id="memory-retrieval-status">Per-turn retrieval loading</span>
+              <span id="memory-wrapup-status">Automatic wrapup loading</span>
+            </div>
+            <button class="secondary-button" id="analyze-thread-memory" type="button">Synthesize thread</button>
           </div>
 
           <div class="memory-layout">
@@ -833,6 +1594,30 @@
                 <span>Memory note</span>
                 <textarea id="memory-text" rows="8" spellcheck="true"></textarea>
               </label>
+              <div class="memory-retention">
+                <label class="field">
+                  <span>Retention</span>
+                  <select id="memory-retention">
+                    <option value="policy">Use route default</option>
+                    <option value="keep">Keep indefinitely</option>
+                    <option value="30">30 days</option>
+                    <option value="90">90 days</option>
+                    <option value="365">1 year</option>
+                    <option value="custom">Custom date</option>
+                  </select>
+                </label>
+                <label class="field" id="memory-expiry-custom" hidden>
+                  <span>Expires</span>
+                  <input id="memory-expiry-date" type="datetime-local" />
+                </label>
+              </div>
+              <div class="memory-expiry-bar">
+                <span id="memory-expiry-meta">No timed memory</span>
+                <div>
+                  <button class="text-button" id="clear-memory-expiry" type="button">Clear expiry</button>
+                  <button class="secondary-button" id="set-memory-expiry" type="button">Set on matching</button>
+                </div>
+              </div>
               <div class="memory-actions">
                 <button class="danger-text-button" id="forget-memory" type="button">Forget matching</button>
                 <button class="primary-button" id="save-memory" type="submit">Remember</button>
@@ -852,10 +1637,42 @@
             </div>
           </section>
 
+          <section class="memory-proposals">
+            <div class="section-heading compact-heading">
+              <div>
+                <span class="eyebrow" id="memory-proposal-meta">Pending</span>
+                <h2>Proposals</h2>
+              </div>
+              <div class="memory-proposal-toolbar">
+                <button class="secondary-button" id="approve-memory-proposals" type="button" disabled>Approve</button>
+                <button class="danger-text-button" id="reject-memory-proposals" type="button" disabled>Reject</button>
+                <button class="text-button" id="reload-memory-proposals" type="button">Reload</button>
+              </div>
+            </div>
+            <div class="memory-proposal-list" id="memory-proposal-list">
+              <div class="empty-state">No pending proposals.</div>
+            </div>
+          </section>
+
           <div class="scope-map" id="scope-map"></div>
         </section>
       </main>
     </div>
+
+    <dialog class="test-dialog credential-secret-dialog" id="operator-credential-secret-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="eyebrow">Shown once</span>
+          <h2>Operator token</h2>
+        </div>
+        <button class="square-button" id="close-operator-credential-secret" type="button" title="Close" aria-label="Close">×</button>
+      </div>
+      <div class="credential-secret-body">
+        <p>This token cannot be recovered after you close this dialog.</p>
+        <code id="operator-credential-secret"></code>
+        <button class="secondary-button" id="copy-operator-credential-secret" type="button">Copy token</button>
+      </div>
+    </dialog>
 
     <dialog class="test-dialog capability-dialog" id="workspace-capability-dialog">
       <form class="dialog-shell" id="workspace-capability-form">
@@ -867,6 +1684,34 @@
           <button class="square-button" id="close-workspace-capabilities" type="button" aria-label="Close">x</button>
         </div>
         <div class="tool-grid" id="workspace-tool-grid"></div>
+        <div class="capability-network-fields">
+          <div class="form-section-title">
+            <h3>Workspace Skills</h3>
+            <span>Baseline for every project</span>
+          </div>
+          <div class="skill-picker" id="workspace-skill-picker"></div>
+        </div>
+        <div class="capability-network-fields">
+          <div class="form-section-title">
+            <h3>Workspace Sources</h3>
+            <span>Available to every project</span>
+          </div>
+          <div class="skill-picker" id="workspace-source-picker"></div>
+        </div>
+        <div class="capability-network-fields">
+          <div class="form-section-title">
+            <h3>Workspace Agents</h3>
+            <span>Available to every project</span>
+          </div>
+          <div class="skill-picker" id="workspace-agent-picker"></div>
+        </div>
+        <label class="field policy-mode-field">
+          <span>External write approval</span>
+          <select id="workspace-tool-approval-mode">
+            <option value="require_approval">Require approval</option>
+            <option value="disabled">Direct writes</option>
+          </select>
+        </label>
         <div class="two-column-form capability-network-fields">
           <label class="field">
             <span>Network policy</span>
@@ -881,9 +1726,157 @@
             <input id="workspace-allowed-hosts" placeholder="github.com, open.feishu.cn" spellcheck="false" />
           </label>
         </div>
+        <div class="memory-approval-editor workspace-memory-approval-editor">
+          <div class="memory-retention-policy">
+            <label class="field">
+              <span>Default memory retention</span>
+              <select id="workspace-memory-retention-mode">
+                <option value="keep">Keep indefinitely</option>
+                <option value="custom">Custom days</option>
+              </select>
+            </label>
+            <label class="field" id="workspace-memory-retention-days-field" hidden>
+              <span>Days</span>
+              <input id="workspace-memory-retention-days" type="number" min="1" max="3650" step="1" value="90" />
+            </label>
+          </div>
+          <label class="field">
+            <span>Memory approval</span>
+            <select id="workspace-memory-approval-mode">
+              <option value="disabled">Direct writes</option>
+              <option value="require_approval">Require approval</option>
+            </select>
+          </label>
+          <div class="memory-approval-options" id="workspace-memory-approval-options">
+            <label class="toggle-field">
+              <input id="workspace-memory-approval-remember" type="checkbox" checked />
+              <span>Remember</span>
+            </label>
+            <label class="toggle-field">
+              <input id="workspace-memory-approval-forget" type="checkbox" checked />
+              <span>Forget</span>
+            </label>
+            <label class="toggle-field">
+              <input id="workspace-memory-approval-workspace" type="checkbox" checked />
+              <span>Workspace</span>
+            </label>
+            <label class="toggle-field">
+              <input id="workspace-memory-approval-project" type="checkbox" checked />
+              <span>Project</span>
+            </label>
+            <label class="toggle-field">
+              <input id="workspace-memory-approval-channel" type="checkbox" />
+              <span>Channel</span>
+            </label>
+            <label class="toggle-field">
+              <input id="workspace-memory-approval-thread" type="checkbox" />
+              <span>Thread</span>
+            </label>
+          </div>
+        </div>
         <div class="dialog-actions">
           <span>Inherited by projects using workspace defaults</span>
           <button class="primary-button" id="save-workspace-capabilities" type="submit">Save defaults</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="test-dialog capability-dialog" id="channel-policy-dialog">
+      <form class="dialog-shell" id="channel-policy-form">
+        <div class="dialog-header">
+          <div>
+            <span class="eyebrow" id="channel-policy-route">Channel policy</span>
+            <h2 id="channel-policy-title">Channel policy</h2>
+          </div>
+          <button class="square-button" id="close-channel-policy" type="button" aria-label="Close">x</button>
+        </div>
+        <div class="two-column-form">
+          <label class="field">
+            <span>Instructions</span>
+            <select id="channel-instruction-mode">
+              <option value="inherit">Use project instructions</option>
+              <option value="append">Append for this channel</option>
+              <option value="replace">Replace for this channel</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Tools</span>
+            <select id="channel-capability-mode">
+              <option value="inherit">Use project tools</option>
+              <option value="extend">Add channel tools</option>
+              <option value="custom">Custom channel tools</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Write approval</span>
+            <select id="channel-tool-approval-mode">
+              <option value="inherit">Use project policy</option>
+              <option value="require_approval">Require approval</option>
+              <option value="disabled">Direct writes</option>
+            </select>
+          </label>
+          <label class="field span-two">
+            <span>Channel instructions</span>
+            <textarea id="channel-instructions" rows="4" spellcheck="true"></textarea>
+          </label>
+        </div>
+        <div class="tool-grid" id="channel-tool-grid"></div>
+        <div class="capability-network-fields">
+          <div class="form-section-title">
+            <h3>Channel Skills</h3>
+            <span id="channel-skill-summary">Added to workspace and project</span>
+          </div>
+          <div class="skill-picker" id="channel-skill-picker"></div>
+        </div>
+        <div class="capability-network-fields">
+          <div class="form-section-title">
+            <h3>Channel Sources</h3>
+            <span id="channel-source-summary">Added to workspace and project</span>
+          </div>
+          <div class="skill-picker" id="channel-source-picker"></div>
+        </div>
+        <div class="capability-network-fields">
+          <div class="form-section-title">
+            <h3>Channel Agents</h3>
+            <span id="channel-agent-summary">Added to workspace and project</span>
+          </div>
+          <div class="skill-picker" id="channel-agent-picker"></div>
+        </div>
+        <div class="two-column-form capability-network-fields" id="channel-network-fields">
+          <label class="field">
+            <span>Network policy</span>
+            <select id="channel-network-mode">
+              <option value="deny-by-default">Deny by default</option>
+              <option value="restricted">Restricted</option>
+              <option value="allow-all">Allow all</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Allowed hosts</span>
+            <input id="channel-allowed-hosts" placeholder="github.com, open.feishu.cn" spellcheck="false" />
+          </label>
+        </div>
+        <div class="channel-budget-editor">
+          <label class="field">
+            <span>Monthly budget</span>
+            <select id="channel-budget-mode">
+              <option value="inherit">Use default channel limit</option>
+              <option value="custom">Custom channel budget</option>
+              <option value="disabled">No channel limit</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Max runs</span>
+            <input id="channel-budget-runs" type="number" min="0" step="1" placeholder="Unlimited" />
+          </label>
+          <label class="field">
+            <span>Max cost (USD)</span>
+            <input id="channel-budget-cost" type="number" min="0" step="0.01" placeholder="Unlimited" />
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button class="danger-text-button" id="remove-channel-policy" type="button">Use project defaults</button>
+          <button class="primary-button" id="save-channel-policy" type="submit">Save channel</button>
         </div>
       </form>
     </dialog>
@@ -904,6 +1897,7 @@
               <option value="lark">Lark / Feishu</option>
               <option value="telegram">Telegram</option>
               <option value="github">GitHub comments</option>
+              <option value="slack">Slack</option>
             </select>
           </label>
           <label class="field compact-select">
@@ -913,7 +1907,7 @@
         </div>
         <label class="field">
           <span>Message</span>
-          <textarea id="test-prompt" rows="5">@OpenTag summarize the current project status</textarea>
+          <textarea id="test-prompt" rows="5">@MaxTag summarize the current project status</textarea>
         </label>
         <div class="dialog-actions">
           <span id="test-route">Ready</span>

@@ -583,6 +583,8 @@ export class SqliteOpenTagStore {
           title: input.title,
           activationMode: invitation.activationMode,
           requireMention: invitation.requireMention,
+          actor: input.actorId ? `pairing:${input.actorId}` : 'pairing',
+          reason: 'pairing_consumed',
           metadata: {
             pairedAt: invitation.consumedAt,
             pairedBy: input.actorId,

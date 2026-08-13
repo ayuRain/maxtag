@@ -129,3 +129,45 @@ test('new invitations revoke the prior target code and enforce platform and expi
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('actor-restricted pairing invitations reject other users without consuming the code', async () => {
+  const { root, store } = await fixture();
+  try {
+    const created = await store.createInvitation(
+      invitationInput({
+        allowedActorIds: ['allowed-user', 'allowed-user', '  '],
+      }),
+      new Date('2026-08-11T10:00:00.000Z'),
+    );
+    assert.deepEqual(created.invitation.allowedActorIds, ['allowed-user']);
+
+    const rejected = await store.consumeCode(
+      {
+        platform: 'telegram',
+        code: created.code,
+        channelId: 'chat-1',
+        threadExternalId: 'chat-1',
+        actorId: 'other-user',
+      },
+      new Date('2026-08-11T10:00:05.000Z'),
+    );
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.reason, 'actor_not_allowed');
+    assert.equal(rejected.invitation.status, 'pending');
+
+    const consumed = await store.consumeCode(
+      {
+        platform: 'telegram',
+        code: created.code,
+        channelId: 'chat-2',
+        threadExternalId: 'chat-2',
+        actorId: 'allowed-user',
+      },
+      new Date('2026-08-11T10:00:06.000Z'),
+    );
+    assert.equal(consumed.ok, true);
+    assert.equal(consumed.invitation.consumedBy.actorId, 'allowed-user');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

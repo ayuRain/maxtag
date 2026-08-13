@@ -69,7 +69,8 @@ export interface TelegramUpdate {
 export interface TelegramDeliveryMetadata {
   runId?: string;
   thread?: SourceThread;
-  stage?: 'progress' | 'thread-reply' | 'artifact';
+  stage?: 'progress' | 'thread-reply' | 'routine-notification' | 'artifact';
+  notificationId?: string;
 }
 
 export interface TelegramDocumentInput {

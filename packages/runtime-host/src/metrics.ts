@@ -17,6 +17,12 @@ import type {
   FileWorkflowStore,
   WorkflowSummary,
 } from '@opentag/workflows';
+import type {
+  DelegatedAgentTaskSummary,
+  FileDelegatedAgentTaskStore,
+  FileKnowledgeSourceRefreshStore,
+  KnowledgeSourceRefreshSummary,
+} from '@opentag/config';
 
 export interface OpenTagRuntimeLoopMetrics {
   name: string;
@@ -42,6 +48,8 @@ export interface OpenTagMetricsSnapshot {
   delivery?: DeliverySummary;
   routines?: RoutineSummary;
   workflows?: WorkflowSummary;
+  delegatedAgentTasks?: DelegatedAgentTaskSummary;
+  knowledgeSourceRefreshes?: KnowledgeSourceRefreshSummary;
 }
 
 export async function collectOpenTagMetricsSnapshot(input: {
@@ -49,17 +57,23 @@ export async function collectOpenTagMetricsSnapshot(input: {
   deliveryStore: Pick<DeliveryStore, 'summarize'>;
   routineStore: Pick<FileRoutineStore, 'summarize'>;
   workflowStore: Pick<FileWorkflowStore, 'summarize'>;
+  delegatedAgentTaskStore?: Pick<FileDelegatedAgentTaskStore, 'summarize'>;
+  knowledgeSourceRefreshStore?: Pick<FileKnowledgeSourceRefreshStore, 'summarize'>;
 }): Promise<OpenTagMetricsSnapshot> {
-  const [delivery, routines, workflows] = await Promise.all([
+  const [delivery, routines, workflows, delegatedAgentTasks, knowledgeSourceRefreshes] = await Promise.all([
     input.deliveryStore.summarize(),
     input.routineStore.summarize(),
     input.workflowStore.summarize(),
+    input.delegatedAgentTaskStore?.summarize(),
+    input.knowledgeSourceRefreshStore?.summarize(),
   ]);
   return {
     process: input.process,
     delivery,
     routines,
     workflows,
+    delegatedAgentTasks,
+    knowledgeSourceRefreshes,
   };
 }
 
@@ -162,19 +176,19 @@ export function renderOpenTagPrometheusMetrics(
   const metrics = new PrometheusText();
   const service = snapshot.process.service;
   const startedAt = timestampSeconds(snapshot.process.startedAt);
-  metrics.family('opentag_process_up', 'Whether the OpenTag process is running.', 'gauge', [
+  metrics.family('opentag_process_up', 'Whether the MaxTag process is running.', 'gauge', [
     { labels: { service }, value: 1 },
   ]);
   if (startedAt !== undefined) {
     metrics.family(
       'opentag_process_start_time_seconds',
-      'Unix timestamp when the OpenTag process started.',
+      'Unix timestamp when the MaxTag process started.',
       'gauge',
       [{ labels: { service }, value: startedAt }],
     );
     metrics.family(
       'opentag_process_uptime_seconds',
-      'OpenTag process uptime in seconds.',
+      'MaxTag process uptime in seconds.',
       'gauge',
       [
         {
@@ -195,7 +209,7 @@ export function renderOpenTagPrometheusMetrics(
   if (snapshot.process.storage) {
     metrics.family(
       'opentag_storage_info',
-      'OpenTag storage backend information.',
+      'MaxTag storage backend information.',
       'gauge',
       [
         {
@@ -213,7 +227,7 @@ export function renderOpenTagPrometheusMetrics(
   const loops = snapshot.process.loops ?? [];
   metrics.family(
     'opentag_runtime_loop_running',
-    'Whether an OpenTag background loop is currently executing a pass.',
+    'Whether an MaxTag background loop is currently executing a pass.',
     'gauge',
     loops.map((loop) => ({
       labels: { service, loop: loop.name },
@@ -222,7 +236,7 @@ export function renderOpenTagPrometheusMetrics(
   );
   metrics.family(
     'opentag_runtime_loop_last_run_timestamp_seconds',
-    'Unix timestamp of the last completed OpenTag background-loop pass.',
+    'Unix timestamp of the last completed MaxTag background-loop pass.',
     'gauge',
     loops.flatMap((loop) => {
       const value = timestampSeconds(loop.lastRunAt);
@@ -233,7 +247,7 @@ export function renderOpenTagPrometheusMetrics(
   );
   metrics.family(
     'opentag_runtime_loop_iterations_total',
-    'Completed OpenTag background-loop passes since process start.',
+    'Completed MaxTag background-loop passes since process start.',
     'counter',
     loops.flatMap((loop) =>
       loop.iterations === undefined
@@ -248,7 +262,7 @@ export function renderOpenTagPrometheusMetrics(
   );
   metrics.family(
     'opentag_runtime_loop_last_items',
-    'Items observed in the last completed OpenTag background-loop pass.',
+    'Items observed in the last completed MaxTag background-loop pass.',
     'gauge',
     loops.flatMap((loop) =>
       Object.entries(loop.lastItems ?? {}).map(([result, value]) => ({
@@ -311,6 +325,12 @@ export function renderOpenTagPrometheusMetrics(
       [{ labels: { service }, value: delivery.inboundEvents.duplicates }],
     );
     metrics.family(
+      'opentag_workflow_producer_events',
+      'Durable native workflow producer events by result.',
+      'gauge',
+      countSamples(delivery.workflowProducers ?? {}, 'result', { service }),
+    );
+    metrics.family(
       'opentag_delivery_inbound_oldest_age_seconds',
       'Age of the oldest durable inbound callback by status.',
       'gauge',
@@ -355,6 +375,22 @@ export function renderOpenTagPrometheusMetrics(
       countSamples(delivery.sessions, 'status', { service }),
     );
     metrics.family(
+      'opentag_tool_approvals',
+      'Durable brokered write approvals by status.',
+      'gauge',
+      countSamples(delivery.toolApprovals ?? {}, 'status', { service }),
+    );
+    metrics.family(
+      'opentag_tool_approval_oldest_age_seconds',
+      'Age of the oldest durable brokered write approval by status.',
+      'gauge',
+      ageSamples(
+        delivery.oldestStatusUpdatedAt.toolApprovals ?? {},
+        now.getTime(),
+        { service },
+      ),
+    );
+    metrics.family(
       'opentag_agent_session_oldest_age_seconds',
       'Age of the oldest durable provider session by status.',
       'gauge',
@@ -385,6 +421,12 @@ export function renderOpenTagPrometheusMetrics(
       countSamples(routines.executions, 'status', { service }),
     );
     metrics.family(
+      'opentag_routine_notifications',
+      'Routine incident and recovery notifications by status.',
+      'gauge',
+      countSamples(routines.notifications, 'status', { service }),
+    );
+    metrics.family(
       'opentag_routine_execution_oldest_age_seconds',
       'Age of the oldest routine execution by status.',
       'gauge',
@@ -401,8 +443,54 @@ export function renderOpenTagPrometheusMetrics(
     }
   }
 
+  const delegatedAgentTasks = snapshot.delegatedAgentTasks;
+  if (delegatedAgentTasks) {
+    metrics.family(
+      'opentag_delegated_agent_tasks',
+      'Durable asynchronous delegated Agent tasks by status.',
+      'gauge',
+      countSamples(delegatedAgentTasks.tasks, 'status', { service }),
+    );
+    metrics.family(
+      'opentag_delegated_agent_task_oldest_age_seconds',
+      'Age of the oldest durable asynchronous delegated Agent task by status.',
+      'gauge',
+      ageSamples(
+        delegatedAgentTasks.oldestStatusUpdatedAt,
+        now.getTime(),
+        { service },
+      ),
+    );
+  }
+
+  const knowledgeSourceRefreshes = snapshot.knowledgeSourceRefreshes;
+  if (knowledgeSourceRefreshes) {
+    metrics.family(
+      'opentag_knowledge_source_refresh_jobs',
+      'Durable remote Knowledge Source refresh jobs by status.',
+      'gauge',
+      countSamples(knowledgeSourceRefreshes.jobs, 'status', { service }),
+    );
+    metrics.family(
+      'opentag_knowledge_source_refresh_oldest_age_seconds',
+      'Age of the oldest durable remote Knowledge Source refresh job by status.',
+      'gauge',
+      ageSamples(
+        knowledgeSourceRefreshes.oldestStatusUpdatedAt,
+        now.getTime(),
+        { service },
+      ),
+    );
+  }
+
   const workflows = snapshot.workflows;
   if (workflows) {
+    metrics.family(
+      'opentag_workflow_producer_routes',
+      'Configured native workflow producer routes by enabled state.',
+      'gauge',
+      countSamples(workflows.producerRoutes, 'state', { service }),
+    );
     metrics.family(
       'opentag_workflows',
       'Workflow definitions by enabled state.',
@@ -503,7 +591,7 @@ export async function startOpenTagObservabilityServer(
         if (token && (!provided || !safeTokenEqual(provided, token))) {
           response.writeHead(401, {
             'content-type': 'text/plain; charset=utf-8',
-            'www-authenticate': 'Bearer realm="OpenTag metrics"',
+            'www-authenticate': 'Bearer realm="MaxTag metrics"',
             'cache-control': 'no-store',
           });
           response.end('metrics_auth_required\n');

@@ -54,8 +54,12 @@ function tickSummary(result: RoutineTickResult): Record<string, unknown> {
     queued: result.queued,
     failed: result.failed,
     reconciled: result.reconciled,
+    notificationsClaimed: result.notificationsClaimed,
+    notificationsDelivered: result.notificationsDelivered,
+    notificationsFailed: result.notificationsFailed,
     executionIds: result.executionIds,
     runIds: result.runIds,
+    notificationIds: result.notificationIds,
   };
 }
 
@@ -71,6 +75,22 @@ function workflowTickSummary(
     executionIds: result.executionIds,
     nodeExecutionIds: result.nodeExecutionIds,
     runIds: result.runIds,
+  };
+}
+
+function documentWatcherTickSummary(
+  result: Awaited<ReturnType<ReturnType<typeof createOpenTagWorkerHost>['runLarkDocumentWatcherTick']>>,
+): Record<string, unknown> {
+  return {
+    tickAt: result.at,
+    claimed: result.claimed,
+    baseline: result.baseline,
+    changed: result.changed,
+    unchanged: result.unchanged,
+    staged: result.staged,
+    duplicates: result.duplicates,
+    failed: result.failed,
+    routeIds: result.routeIds,
   };
 }
 
@@ -96,6 +116,14 @@ async function main(): Promise<void> {
   const workflowIntervalMs = numberEnv(
     'OPENTAG_WORKFLOW_TICK_INTERVAL_MS',
     2_000,
+  );
+  const documentWatcherIntervalMs = numberEnv(
+    'OPENTAG_LARK_DOCUMENT_WATCHER_TICK_INTERVAL_MS',
+    5_000,
+  );
+  const documentWatcherEnabled = workflowsEnabled && booleanEnv(
+    'OPENTAG_LARK_DOCUMENT_WATCHER_ENABLED',
+    true,
   );
   const claimStaleMs = numberEnv(
     'OPENTAG_ROUTINE_CLAIM_STALE_MS',
@@ -131,6 +159,12 @@ async function main(): Promise<void> {
       botToken: process.env.OPENTAG_TELEGRAM_BOT_TOKEN,
       baseUrl: process.env.OPENTAG_TELEGRAM_BASE_URL,
     },
+    slack: {
+      transportMode: process.env.OPENTAG_SLACK_TRANSPORT,
+      botToken: process.env.OPENTAG_SLACK_BOT_TOKEN,
+      baseUrl: process.env.OPENTAG_SLACK_BASE_URL,
+      maxUploadBytes: optionalNumberEnv('OPENTAG_MAX_ARTIFACT_BYTES'),
+    },
     routines: {
       defaultTimeZone:
         process.env.OPENTAG_DEFAULT_TIME_ZONE || 'Asia/Shanghai',
@@ -138,6 +172,15 @@ async function main(): Promise<void> {
     workflows: {
       claimStaleMs: workflowClaimStaleMs,
       batchSize: workflowBatchSize,
+      larkDocumentWatcherEnabled: documentWatcherEnabled,
+      larkDocumentWatcherClaimStaleMs: numberEnv(
+        'OPENTAG_LARK_DOCUMENT_WATCHER_CLAIM_STALE_MS',
+        120_000,
+      ),
+      larkDocumentWatcherBatchSize: Math.min(
+        20,
+        numberEnv('OPENTAG_LARK_DOCUMENT_WATCHER_BATCH_SIZE', 5),
+      ),
     },
     storage: {
       driver: 'sqlite',
@@ -152,6 +195,9 @@ async function main(): Promise<void> {
     if (platform === 'telegram') {
       return `telegram-${host.telegramTransportStatus().mode}`;
     }
+    if (platform === 'slack') {
+      return `slack-${host.slackTransportStatus().mode}`;
+    }
     return 'tracked-text';
   };
   const scheduler = new RoutineSchedulerService({
@@ -163,6 +209,8 @@ async function main(): Promise<void> {
     claimStaleMs,
     batchSize,
     transportModeForPlatform,
+    sendNotification: (thread, notification) =>
+      host.sendRoutineNotification(thread, notification),
   });
 
   let stopping = false;
@@ -199,6 +247,13 @@ async function main(): Promise<void> {
             tickCount: host.workflowCoordinator.tickCount,
             lastTickAt: host.workflowCoordinator.lastTickAt,
           },
+          larkDocumentWatcher: {
+            enabled: host.larkDocumentWatcher.enabled,
+            available: host.larkDocumentWatcher.available,
+            running: host.larkDocumentWatcher.running,
+            tickCount: host.larkDocumentWatcher.tickCount,
+            lastTickAt: host.larkDocumentWatcher.lastTickAt,
+          },
           storage: host.storageStatus(),
         }),
         metrics: () =>
@@ -221,6 +276,12 @@ async function main(): Promise<void> {
                         queued: scheduler.lastTickResult.queued,
                         failed: scheduler.lastTickResult.failed,
                         reconciled: scheduler.lastTickResult.reconciled,
+                        notificationsClaimed:
+                          scheduler.lastTickResult.notificationsClaimed,
+                        notificationsDelivered:
+                          scheduler.lastTickResult.notificationsDelivered,
+                        notificationsFailed:
+                          scheduler.lastTickResult.notificationsFailed,
                       }
                     : undefined,
                 },
@@ -239,11 +300,27 @@ async function main(): Promise<void> {
                       }
                     : undefined,
                 },
+                {
+                  name: 'lark_document_watcher',
+                  running: host.larkDocumentWatcher.running,
+                  lastRunAt: host.larkDocumentWatcher.lastTickAt,
+                  iterations: host.larkDocumentWatcher.tickCount,
+                  lastItems: host.larkDocumentWatcher.lastTickResult
+                    ? {
+                        claimed: host.larkDocumentWatcher.lastTickResult.claimed,
+                        changed: host.larkDocumentWatcher.lastTickResult.changed,
+                        staged: host.larkDocumentWatcher.lastTickResult.staged,
+                        failed: host.larkDocumentWatcher.lastTickResult.failed,
+                      }
+                    : undefined,
+                },
               ],
             },
             deliveryStore: host.deliveryStore,
             routineStore: host.routineStore,
             workflowStore: host.workflowStore,
+            delegatedAgentTaskStore: host.delegatedAgentTaskStore,
+            knowledgeSourceRefreshStore: host.knowledgeSourceRefreshStore,
           }),
         })
       : undefined;
@@ -254,6 +331,8 @@ async function main(): Promise<void> {
         process.env.OPENTAG_SCHEDULER_ID || `opentag-scheduler-${process.pid}`,
       routineIntervalMs,
       workflowIntervalMs,
+      documentWatcherIntervalMs,
+      documentWatcherEnabled,
       claimStaleMs,
       batchSize,
       routinesEnabled,
@@ -269,6 +348,7 @@ async function main(): Promise<void> {
 
     let nextRoutineTickAt = 0;
     let nextWorkflowTickAt = 0;
+    let nextDocumentWatcherTickAt = 0;
     while (!stopping) {
       const now = Date.now();
       if (routinesEnabled && (once || now >= nextRoutineTickAt)) {
@@ -278,7 +358,8 @@ async function main(): Promise<void> {
           once ||
           result.staged > 0 ||
           result.claimed > 0 ||
-          result.reconciled > 0
+          result.reconciled > 0 ||
+          result.notificationsClaimed > 0
         ) {
           log('scheduler_tick', tickSummary(result));
         }
@@ -291,10 +372,24 @@ async function main(): Promise<void> {
           log('workflow_tick', workflowTickSummary(result));
         }
       }
+      if (
+        documentWatcherEnabled &&
+        (once || now >= nextDocumentWatcherTickAt)
+      ) {
+        const result = await host.runLarkDocumentWatcherTick();
+        nextDocumentWatcherTickAt = Date.now() + documentWatcherIntervalMs;
+        if (result.staged > 0) {
+          await host.runWorkflowCoordinatorTick();
+        }
+        if (once || result.claimed > 0 || result.failed > 0) {
+          log('lark_document_watcher_tick', documentWatcherTickSummary(result));
+        }
+      }
       if (once || stopping) break;
       const nextTickAt = Math.min(
         ...(routinesEnabled ? [nextRoutineTickAt] : []),
         ...(workflowsEnabled ? [nextWorkflowTickAt] : []),
+        ...(documentWatcherEnabled ? [nextDocumentWatcherTickAt] : []),
       );
       const waitMs = Math.max(50, nextTickAt - Date.now());
       try {
@@ -309,6 +404,7 @@ async function main(): Promise<void> {
       await Promise.all([
         scheduler.waitForIdle(),
         host.workflowCoordinator.waitForIdle(),
+        host.larkDocumentWatcher.waitForIdle(),
       ]);
     } finally {
       try {

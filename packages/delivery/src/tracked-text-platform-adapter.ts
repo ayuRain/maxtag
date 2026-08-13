@@ -120,7 +120,12 @@ export class TrackedTextPlatformAdapter implements PlatformAdapter {
     thread: SourceThread,
     text: string,
     artifacts?: Artifact[],
-    options?: { runId?: string; replyToMessageId?: string },
+    options?: {
+      runId?: string;
+      replyToMessageId?: string;
+      stage?: 'thread-reply' | 'routine-notification';
+      notificationId?: string;
+    },
   ): Promise<void> {
     const artifactsText = artifactLines(artifacts);
     const envelope = await this.store.enqueue({
@@ -133,9 +138,12 @@ export class TrackedTextPlatformAdapter implements PlatformAdapter {
       },
       payload: {
         text: artifactsText ? `${text}\n\nArtifacts:\n${artifactsText}` : text,
+        stage: options?.stage || 'thread-reply',
+        notificationId: options?.notificationId,
       },
       runId: options?.runId,
       thread,
+      maxAttempts: options?.stage === 'routine-notification' ? 1 : undefined,
     });
     await this.store.markSending(envelope.id);
     await this.store.markDelivered(envelope.id);

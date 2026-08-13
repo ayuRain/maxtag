@@ -257,6 +257,20 @@ test(
     );
     assert.equal(health.workflows.mode, 'external');
 
+    const bindingResponse = await fetch(`${baseUrl}/v1/bindings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        platform: 'lark',
+        externalId: 'external-workflow-chat',
+        workspaceId: 'dev-workspace',
+        projectId: 'opentag',
+        activationMode: 'always',
+        requireMention: false,
+      }),
+    });
+    assert.equal(bindingResponse.status, 200);
+
     const createResponse = await fetch(`${baseUrl}/v1/workflows`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

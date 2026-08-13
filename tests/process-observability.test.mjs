@@ -200,10 +200,11 @@ test(
       { token: metricsToken, text: true },
     );
     assert.match(schedulerMetrics, /opentag_routine_executions/);
+    assert.match(schedulerMetrics, /opentag_routine_notifications/);
 
     const exitCodes = await Promise.all(processes.map(stopProcess));
     assert.deepEqual(exitCodes, [0, 0, 0]);
-    assert.match(processes[0].logs.join(''), /OpenTag server stopped/);
+    assert.match(processes[0].logs.join(''), /MaxTag server stopped/);
     assert.match(processes[1].logs.join(''), /"event":"stopped"/);
     assert.match(processes[2].logs.join(''), /"event":"stopped"/);
   },

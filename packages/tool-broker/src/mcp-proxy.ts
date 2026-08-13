@@ -24,7 +24,7 @@ interface RemoteToolResult {
 const brokerUrl = process.env.OPENTAG_TOOL_BROKER_URL;
 const brokerToken = process.env.OPENTAG_TOOL_BROKER_TOKEN;
 if (!brokerUrl || !brokerToken) {
-  throw new Error('OpenTag MCP proxy requires broker URL and token.');
+  throw new Error('MaxTag MCP proxy requires broker URL and token.');
 }
 
 async function brokerFetch(pathname: string, init?: RequestInit): Promise<JsonObject> {
@@ -48,7 +48,7 @@ async function brokerFetch(pathname: string, init?: RequestInit): Promise<JsonOb
       parsed && typeof parsed === 'object' && !Array.isArray(parsed)
         ? String((parsed as JsonObject).error || '')
         : text;
-    throw new Error(`OpenTag tool broker HTTP ${response.status}: ${detail.slice(0, 300)}`);
+    throw new Error(`MaxTag tool broker HTTP ${response.status}: ${detail.slice(0, 300)}`);
   }
   return parsed as JsonObject;
 }

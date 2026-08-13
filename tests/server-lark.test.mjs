@@ -99,6 +99,7 @@ test(
         OPENTAG_ROUTINES_ENABLED: 'false',
         OPENTAG_WORKFLOWS_ENABLED: 'false',
         OPENTAG_LARK_TRANSPORT: 'memory',
+        OPENTAG_LARK_EVENT_MODE: 'webhook',
         OPENTAG_LARK_BOT_OPEN_ID: 'ou_opentag_bot',
         OPENTAG_LARK_VERIFICATION_TOKEN: verificationToken,
         OPENTAG_LARK_ENCRYPT_KEY: encryptKey,
@@ -138,7 +139,10 @@ test(
     });
     const challenge = await postCallback(baseUrl, {
       rawBody: challengeBody,
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'x-lark-request-timestamp': String(Math.floor(Date.now() / 1000)),
+      },
     });
     assert.equal(challenge.response.status, 200);
     assert.deepEqual(challenge.data, { challenge: 'encrypted-server-challenge' });
@@ -157,10 +161,10 @@ test(
           chat_id: 'encrypted-project',
           chat_type: 'group',
           message_type: 'text',
-          content: JSON.stringify({ text: '@OpenTag inspect encryption' }),
+          content: JSON.stringify({ text: '@MaxTag inspect encryption' }),
           create_time: String(Date.now()),
           mentions: [
-            { id: { open_id: 'ou_opentag_bot' }, name: 'OpenTag' },
+            { id: { open_id: 'ou_opentag_bot' }, name: 'MaxTag' },
           ],
         },
         sender: {

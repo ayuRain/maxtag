@@ -3,7 +3,25 @@ import type {
   PlatformKind,
   SourceMessage,
   SourceThread,
+  ThreadTranscriptCursor,
   ThreadTranscriptSnapshot,
+  ToolApprovalRecord,
+  ToolApprovalStatus,
+  UsageBudgetPolicy,
+} from '@opentag/core';
+
+export type {
+  ClaimToolApprovalInput,
+  CompleteToolApprovalInput,
+  DecideToolApprovalInput,
+  FailToolApprovalInput,
+  MarkToolApprovalContinuationInput,
+  ListToolApprovalsOptions,
+  ProposeToolApprovalInput,
+  RecoverStaleToolApprovalsInput,
+  RecoverStaleToolApprovalsResult,
+  ToolApprovalRecord,
+  ToolApprovalStatus,
 } from '@opentag/core';
 
 export type OutboundStatus =
@@ -25,6 +43,11 @@ export type ThreadActivationMode = 'mention' | 'always';
 export type ThreadBindingScope = 'thread' | 'channel';
 
 export type ThreadBindingSource = 'observed' | 'configured';
+
+export type ThreadBindingAuditAction =
+  | 'binding.created'
+  | 'binding.updated'
+  | 'binding.removed';
 
 export type AgentRunStatus =
   | 'queued'
@@ -50,11 +73,27 @@ export type AgentRunEventType =
   | 'progress'
   | 'text_delta'
   | 'artifact'
+  | 'memory_proposal'
+  | 'memory_retrieval'
+  | 'memory_analysis_started'
+  | 'memory_analysis_completed'
+  | 'memory_analysis_failed'
+  | 'memory_query_started'
+  | 'memory_query_completed'
+  | 'memory_query_failed'
+  | 'memory_wrapup_queued'
+  | 'memory_wrapup_started'
+  | 'memory_wrapup_completed'
+  | 'memory_wrapup_retry'
+  | 'memory_wrapup_failed'
   | 'tool_call'
+  | 'tool_approval'
   | 'tool_result'
+  | 'delegation'
   | 'log'
   | 'completed'
   | 'failed'
+  | 'human_takeover'
   | 'cancel_requested'
   | 'cancelled'
   | 'steering_mode'
@@ -64,6 +103,11 @@ export type AgentRunEventType =
   | 'steering_applied'
   | 'steering_failed'
   | 'steering_cancelled'
+  | 'thread_context_imported'
+  | 'thread_context_import_failed'
+  | 'usage_budget_denied'
+  | 'usage_threshold_alert'
+  | 'usage_recorded'
   | 'transcript_loaded'
   | 'session_started'
   | 'session_resumed'
@@ -186,11 +230,31 @@ export interface AgentRunRecord {
 
 export interface AgentRunTimelineEvent {
   id: string;
+  sequence: number;
   runId: string;
   type: AgentRunEventType;
   at: string;
   message?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface ScopedAgentRunTimelineEvent extends AgentRunTimelineEvent {
+  workspaceId?: string;
+  projectId?: string;
+  channelId?: string;
+  threadId: string;
+  platform: PlatformKind;
+  actorId?: string;
+  runStatus: AgentRunStatus;
+}
+
+export interface ListAgentRunEventsOptions {
+  workspaceId?: string;
+  projectId?: string;
+  threadId?: string;
+  runId?: string;
+  types?: AgentRunEventType[];
+  limit?: number;
 }
 
 export interface CreateAgentRunInput {
@@ -304,9 +368,340 @@ export interface LoadThreadTranscriptOptions {
   excludeRunId?: string;
   maxEntries?: number;
   maxChars?: number;
+  afterCursor?: ThreadTranscriptCursor;
+  order?: 'latest' | 'oldest';
 }
 
 export type LoadedThreadTranscript = ThreadTranscriptSnapshot;
+
+export type MemoryWrapupJobStatus =
+  | 'pending'
+  | 'claimed'
+  | 'completed'
+  | 'failed';
+
+export interface MemoryWrapupCursorRecord extends ThreadTranscriptCursor {
+  id: string;
+  platform: PlatformKind;
+  threadId: string;
+  workspaceId?: string;
+  projectId?: string;
+  sourceRunId: string;
+  updatedAt: string;
+}
+
+export interface MemoryWrapupJobRecord {
+  id: string;
+  status: MemoryWrapupJobStatus;
+  platform: PlatformKind;
+  thread: SourceThread;
+  threadId: string;
+  workspaceId?: string;
+  projectId?: string;
+  sourceRunId: string;
+  attempts: number;
+  maxAttempts: number;
+  availableAt: string;
+  createdAt: string;
+  updatedAt: string;
+  claimedAt?: string;
+  claimedBy?: string;
+  completedAt?: string;
+  failedAt?: string;
+  lastError?: string;
+  cursor?: MemoryWrapupCursorRecord;
+  proposalIds?: string[];
+  transcriptEntries?: number;
+  transcriptOmittedEntries?: number;
+}
+
+export interface EnqueueMemoryWrapupInput {
+  thread: SourceThread;
+  sourceRunId: string;
+  debounceMs?: number;
+  maxAttempts?: number;
+  now?: Date;
+}
+
+export interface ClaimMemoryWrapupsOptions {
+  workerId: string;
+  limit?: number;
+  staleMs?: number;
+  now?: Date;
+}
+
+export interface CompleteMemoryWrapupInput {
+  cursor?: ThreadTranscriptCursor;
+  proposalIds?: string[];
+  transcriptEntries?: number;
+  transcriptOmittedEntries?: number;
+  now?: Date;
+}
+
+export interface RetryMemoryWrapupInput {
+  error: string;
+  retryDelayMs?: number;
+  now?: Date;
+}
+
+export interface ListMemoryWrapupsOptions {
+  status?: MemoryWrapupJobStatus;
+  workspaceId?: string;
+  projectId?: string;
+  threadId?: string;
+  limit?: number;
+}
+
+export interface PruneMemoryWrapupsOptions {
+  terminalOlderThanMs?: number;
+  keepLatestPerThread?: number;
+  now?: Date;
+}
+
+export interface PruneMemoryWrapupsResult {
+  removed: number;
+  retained: number;
+}
+
+export interface WorkspaceDataLifecycleCounts {
+  agentRuns: number;
+  agentRunEvents: number;
+  outbox: number;
+  turnDeliveries: number;
+  steering: number;
+  invalidatedSessions: number;
+  memoryWrapups: number;
+  toolApprovals: number;
+}
+
+export interface WorkspaceDataLifecyclePreserved {
+  activeRuns: number;
+  recentTerminalRuns: number;
+  referencedTerminalRuns: number;
+  inboundEvents: number;
+  usageRecords: number;
+  sourceMessages: number;
+  managedArtifactRuns: number;
+}
+
+export interface WorkspaceDataLifecycleOptions {
+  workspaceId: string;
+  retentionDays?: number;
+  keepLatestPerThread?: number;
+  dryRun?: boolean;
+  actor?: string;
+  now?: Date;
+  protectedRunIds?: string[];
+}
+
+export interface WorkspaceDataLifecycleResult {
+  dryRun: boolean;
+  workspaceId: string;
+  retentionDays: number;
+  cutoff: string;
+  keepLatestPerThread: number;
+  scannedRuns: number;
+  eligibleTerminalRuns: number;
+  removed: WorkspaceDataLifecycleCounts;
+  preserved: WorkspaceDataLifecyclePreserved;
+}
+
+export interface DataLifecycleAuditRecord {
+  id: string;
+  action: 'workspace.data_lifecycle.applied';
+  workspaceId: string;
+  actor: string;
+  at: string;
+  retentionDays: number;
+  cutoff: string;
+  keepLatestPerThread: number;
+  removed: WorkspaceDataLifecycleCounts;
+  preserved: WorkspaceDataLifecyclePreserved;
+}
+
+export interface ListDataLifecycleAuditOptions {
+  workspaceId?: string;
+  limit?: number;
+}
+
+export type SourceThreadMessageOrigin = 'event' | 'history';
+
+export interface SourceThreadMessageRecord {
+  id: string;
+  platform: PlatformKind;
+  threadId: string;
+  threadExternalId: string;
+  workspaceId?: string;
+  projectId?: string;
+  message: SourceMessage;
+  origin: SourceThreadMessageOrigin;
+  firstObservedAt: string;
+  lastObservedAt: string;
+}
+
+export interface UpsertSourceThreadMessagesInput {
+  thread: SourceThread;
+  messages: SourceMessage[];
+  origin: SourceThreadMessageOrigin;
+  observedAt?: Date;
+}
+
+export interface UpsertSourceThreadMessagesResult {
+  inserted: number;
+  updated: number;
+  duplicates: number;
+  records: SourceThreadMessageRecord[];
+}
+
+export type ThreadContextSyncStatus = 'completed' | 'failed';
+
+export interface ThreadContextSyncRecord {
+  id: string;
+  source: string;
+  status: ThreadContextSyncStatus;
+  platform: PlatformKind;
+  threadId: string;
+  threadExternalId: string;
+  workspaceId?: string;
+  projectId?: string;
+  attemptedAt: string;
+  completedAt?: string;
+  importedMessages: number;
+  duplicateMessages: number;
+  truncated: boolean;
+  lastError?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RecordThreadContextSyncInput {
+  thread: SourceThread;
+  source: string;
+  status: ThreadContextSyncStatus;
+  importedMessages?: number;
+  duplicateMessages?: number;
+  truncated?: boolean;
+  error?: string;
+  metadata?: Record<string, unknown>;
+  attemptedAt?: Date;
+}
+
+export interface UsageQuantity {
+  runs: number;
+  costUsd: number;
+}
+
+export type AgentUsagePurpose =
+  | 'agent'
+  | 'delegation'
+  | 'memory_retrieval'
+  | 'memory_query'
+  | 'memory_analysis'
+  | 'memory_wrapup';
+
+export type UsageBudgetScope = 'workspace' | 'project' | 'channel' | 'thread';
+
+export interface UsageBudgetLine extends UsageQuantity {
+  scope: UsageBudgetScope;
+  workspaceId?: string;
+  projectId?: string;
+  channelId?: string;
+  threadId?: string;
+  period: string;
+}
+
+export interface UsageBudgetCheckInput {
+  thread: SourceThread;
+  policy?: UsageBudgetPolicy;
+  policies?: UsageBudgetPolicy[];
+  expected?: Partial<UsageQuantity>;
+  at?: Date;
+}
+
+export interface UsageBudgetCheckResult {
+  allowed: boolean;
+  reason?: 'runs_budget_exceeded' | 'cost_budget_exceeded';
+  period: string;
+  policy?: UsageBudgetPolicy;
+  current: UsageBudgetLine[];
+  projected: UsageBudgetLine[];
+  violated?: UsageBudgetLine;
+}
+
+export interface RecordAgentRunUsageInput {
+  runId: string;
+  recordKey?: string;
+  purpose?: AgentUsagePurpose;
+  thread: SourceThread;
+  quantity?: Partial<UsageQuantity>;
+  source?: string;
+  policies?: UsageBudgetPolicy[];
+  at?: Date;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AgentRunUsageRecord extends UsageQuantity {
+  id: string;
+  runId: string;
+  recordKey?: string;
+  purpose: AgentUsagePurpose;
+  platform: PlatformKind;
+  threadId: string;
+  threadExternalId: string;
+  workspaceId?: string;
+  projectId?: string;
+  channelId?: string;
+  period: string;
+  source: string;
+  recordedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UsagePurposeLine extends UsageQuantity {
+  purpose: AgentUsagePurpose;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  costReportedCalls: number;
+  tokenReportedCalls: number;
+}
+
+export type UsageBudgetAlertMetric = 'runs' | 'cost';
+export type UsageBudgetAlertThreshold = 75 | 95;
+
+export interface UsageBudgetAlert {
+  id: string;
+  runId: string;
+  period: string;
+  metric: UsageBudgetAlertMetric;
+  thresholdPercent: UsageBudgetAlertThreshold;
+  scope: UsageBudgetScope;
+  workspaceId?: string;
+  projectId?: string;
+  channelId?: string;
+  threadId?: string;
+  current: number;
+  limit: number;
+  ratio: number;
+  triggeredAt: string;
+}
+
+export interface UsageSnapshot {
+  period: string;
+  records: AgentRunUsageRecord[];
+  recordCount: number;
+  costReportedRecords: number;
+  tokenReportedRecords: number;
+  totals: UsageBudgetLine[];
+  purposeTotals: UsagePurposeLine[];
+  alerts: UsageBudgetAlert[];
+}
+
+export interface ReconcileUsageBudgetAlertsInput {
+  runId?: string;
+  thread: SourceThread;
+  policies?: UsageBudgetPolicy[];
+  at?: Date;
+}
 
 export interface CancelThreadAgentRunsResult {
   runs: AgentRunRecord[];
@@ -353,6 +748,7 @@ export interface ListAgentRunsOptions {
   workspaceId?: string;
   projectId?: string;
   threadId?: string;
+  query?: string;
   limit?: number;
 }
 
@@ -450,6 +846,41 @@ export interface ConfigureThreadBindingInput {
   activationMode?: ThreadActivationMode;
   requireMention?: boolean;
   metadata?: Record<string, unknown>;
+  actor?: string;
+  reason?: string;
+}
+
+export interface RemoveThreadBindingOptions {
+  cascadeChannel?: boolean;
+  actor?: string;
+  reason?: string;
+}
+
+export interface ThreadBindingAuditRecord {
+  id: string;
+  action: ThreadBindingAuditAction;
+  bindingId: string;
+  platform: PlatformKind;
+  externalId: string;
+  scope?: ThreadBindingScope;
+  source?: ThreadBindingSource;
+  channelId?: string;
+  workspaceId: string;
+  projectId: string;
+  actor?: string;
+  reason?: string;
+  at: string;
+  before?: ThreadBinding;
+  after?: ThreadBinding;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ListThreadBindingAuditOptions {
+  workspaceId?: string;
+  projectId?: string;
+  bindingId?: string;
+  platform?: PlatformKind;
+  limit?: number;
 }
 
 export interface DeliverySummary {
@@ -459,7 +890,21 @@ export interface DeliverySummary {
   agentRuns: Record<AgentRunStatus, number>;
   steering: Record<AgentRunSteeringStatus, number>;
   sessions: Record<AgentThreadSessionStatus, number>;
+  toolApprovals: Record<ToolApprovalStatus, number>;
+  workflowProducers: {
+    received: number;
+    staged: number;
+    unmatched: number;
+    duplicates: number;
+    ignored: number;
+    failed: number;
+  };
   bindings: number;
+  usage: {
+    records: number;
+    currentPeriodRuns: number;
+    currentPeriodCostUsd: number;
+  };
   oldestStatusUpdatedAt: {
     outbox: Partial<Record<OutboundStatus, string>>;
     turnDeliveries: Partial<Record<TurnDeliveryStatus, string>>;
@@ -467,12 +912,14 @@ export interface DeliverySummary {
     agentRuns: Partial<Record<AgentRunStatus, string>>;
     steering: Partial<Record<AgentRunSteeringStatus, string>>;
     sessions: Partial<Record<AgentThreadSessionStatus, string>>;
+    toolApprovals: Partial<Record<ToolApprovalStatus, string>>;
   };
 }
 
 export interface FileDeliveryState {
   nextSequence: number;
   nextSteeringSequence: number;
+  nextAgentRunEventSequence: number;
   outbox: OutboundEnvelope[];
   turnDeliveries: TurnDeliveryRecord[];
   threadBindings: ThreadBinding[];
@@ -481,4 +928,13 @@ export interface FileDeliveryState {
   agentRunEvents: AgentRunTimelineEvent[];
   agentRunSteering: AgentRunSteeringRecord[];
   agentThreadSessions: AgentThreadSessionRecord[];
+  sourceThreadMessages: SourceThreadMessageRecord[];
+  threadContextSyncs: ThreadContextSyncRecord[];
+  usageRecords: AgentRunUsageRecord[];
+  usageAlerts: UsageBudgetAlert[];
+  threadBindingAudit: ThreadBindingAuditRecord[];
+  memoryWrapupJobs: MemoryWrapupJobRecord[];
+  memoryWrapupCursors: MemoryWrapupCursorRecord[];
+  toolApprovals: ToolApprovalRecord[];
+  dataLifecycleAudit: DataLifecycleAuditRecord[];
 }

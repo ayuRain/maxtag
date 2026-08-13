@@ -8,8 +8,55 @@ import {
   HttpLarkTransport,
   LarkPlatformAdapter,
   MemoryLarkTransport,
+  applyLarkChatInfo,
+  applyUnavailableLarkChatInfo,
   normalizeLarkEvent,
+  normalizeLarkHistoryMessage,
 } from '@opentag/platform-lark';
+import { hydrateLarkThreadContext } from '@opentag/runtime-host';
+
+test('Lark chat metadata supplies the real group name and privacy boundary', () => {
+  const thread = applyLarkChatInfo(
+    {
+      id: 'lark:oc_private:root-1',
+      platform: 'lark',
+      externalId: 'oc_private:root-1',
+      workspaceId: 'dev-workspace',
+      projectId: 'opentag',
+      channelId: 'oc_private',
+      rootMessageId: 'root-1',
+      title: 'Lark oc_private',
+      visibility: 'public',
+    },
+    {
+      chatId: 'oc_private',
+      name: 'MaxTag',
+      chatMode: 'group',
+      chatType: 'private',
+      external: false,
+    },
+  );
+
+  assert.equal(thread.title, 'MaxTag');
+  assert.equal(thread.visibility, 'private');
+  assert.equal(thread.metadata.larkChatInfoStatus, 'resolved');
+  assert.equal(thread.metadata.larkChatMode, 'group');
+  assert.equal(thread.metadata.larkChatType, 'private');
+});
+
+test('unavailable Lark group metadata fails closed to private', () => {
+  const thread = applyUnavailableLarkChatInfo({
+    id: 'lark:oc_unknown:root-1',
+    platform: 'lark',
+    externalId: 'oc_unknown:root-1',
+    channelId: 'oc_unknown',
+    rootMessageId: 'root-1',
+    visibility: 'public',
+  });
+
+  assert.equal(thread.visibility, 'private');
+  assert.equal(thread.metadata.larkChatInfoStatus, 'unavailable');
+});
 
 test('Lark file events normalize resource provenance without exposing raw JSON as text', () => {
   const normalized = normalizeLarkEvent(
@@ -27,7 +74,7 @@ test('Lark file events normalize resource provenance without exposing raw JSON a
             file_name: 'evidence.csv',
           }),
           create_time: '1786450000000',
-          mentions: [{ id: { open_id: 'bot-1' }, name: 'OpenTag' }],
+          mentions: [{ id: { open_id: 'bot-1' }, name: 'MaxTag' }],
         },
         sender: {
           sender_id: { open_id: 'user-1' },
@@ -52,12 +99,232 @@ test('Lark file events normalize resource provenance without exposing raw JSON a
   );
 });
 
+test('Lark threaded events use the root message for routing and preserve thread_id for history import', () => {
+  const normalized = normalizeLarkEvent(
+    {
+      event_id: 'event-thread',
+      event: {
+        message: {
+          message_id: 'message-thread',
+          root_id: 'root-message',
+          parent_id: 'parent-message',
+          thread_id: 'thread-container',
+          chat_id: 'chat-thread',
+          chat_type: 'group',
+          message_type: 'text',
+          content: JSON.stringify({ text: 'Follow this existing topic.' }),
+          create_time: '1786450000000',
+          mentions: [{ id: { open_id: 'bot-1' } }],
+        },
+        sender: {
+          sender_id: { open_id: 'user-1' },
+          tenant_key: 'tenant-1',
+        },
+      },
+    },
+    { botOpenId: 'bot-1' },
+  );
+
+  assert.ok(normalized);
+  assert.equal(
+    normalized.thread.externalId,
+    'chat-thread:root-message',
+  );
+  assert.equal(normalized.thread.rootMessageId, 'root-message');
+  assert.equal(normalized.thread.topicId, 'thread-container');
+  assert.equal(normalized.thread.metadata.larkThreadId, 'thread-container');
+  assert.equal(
+    normalized.message.metadata.larkThreadId,
+    'thread-container',
+  );
+
+  const history = normalizeLarkHistoryMessage(
+    {
+      message_id: 'history-1',
+      thread_id: 'thread-container',
+      msg_type: 'text',
+      create_time: '1786450000001',
+      sender: { id: 'user-2', sender_type: 'user' },
+      body: { content: JSON.stringify({ text: 'Earlier point.' }) },
+      mentions: [{ id: 'bot-1' }],
+    },
+    { thread: normalized.thread, botOpenId: 'bot-1' },
+  );
+  assert.equal(history.text, 'Earlier point.');
+  assert.equal(history.mentionsAgent, true);
+  assert.equal(history.metadata.larkThreadId, 'thread-container');
+});
+
+test('Lark topic root and later replies share one canonical MaxTag thread', () => {
+  const event = (message) =>
+    normalizeLarkEvent({
+      event: {
+        message: {
+          chat_id: 'chat-topic',
+          chat_type: 'group',
+          message_type: 'text',
+          content: JSON.stringify({ text: '@MaxTag continue' }),
+          ...message,
+        },
+        sender: { sender_id: { open_id: 'user-1' } },
+      },
+    });
+  const root = event({ message_id: 'om_root' });
+  const reply = event({
+    message_id: 'om_reply',
+    root_id: 'om_root',
+    parent_id: 'om_root',
+    thread_id: 'omt_topic',
+  });
+
+  assert.ok(root);
+  assert.ok(reply);
+  assert.equal(root.thread.id, 'lark:chat-topic:om_root');
+  assert.equal(reply.thread.id, root.thread.id);
+  assert.equal(reply.thread.rootMessageId, 'om_root');
+  assert.equal(reply.thread.topicId, 'omt_topic');
+});
+
+test('Lark p2p events share one stable chat thread across messages', () => {
+  const event = (messageId) =>
+    normalizeLarkEvent(
+      {
+        event_id: `event-${messageId}`,
+        event: {
+          message: {
+            message_id: messageId,
+            chat_id: 'chat-direct',
+            chat_type: 'p2p',
+            message_type: 'text',
+            content: JSON.stringify({ text: `Message ${messageId}` }),
+            create_time: '1786450000000',
+          },
+          sender: {
+            sender_id: { open_id: 'user-1' },
+            tenant_key: 'tenant-1',
+          },
+        },
+      },
+      { botOpenId: 'bot-1' },
+    );
+
+  const first = event('message-direct-1');
+  const second = event('message-direct-2');
+  assert.ok(first);
+  assert.ok(second);
+  assert.equal(first.thread.id, 'lark:chat-direct');
+  assert.equal(second.thread.id, first.thread.id);
+  assert.equal(first.thread.externalId, 'chat-direct');
+  assert.equal(first.thread.rootMessageId, undefined);
+  assert.equal(first.thread.topicId, undefined);
+  assert.equal(first.message.mentionsAgent, true);
+});
+
+test('Lark thread history hydration imports prior messages without failing the run', async (context) => {
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'opentag-lark-context-'),
+  );
+  try {
+    const store = new FileDeliveryStore(root);
+    const memory = new MemoryLarkTransport();
+    memory.historyMessages.push(
+      {
+        message_id: 'history-1',
+        thread_id: 'thread-import',
+        chat_id: 'chat-1',
+        msg_type: 'text',
+        create_time: '1786450000000',
+        sender: { id: 'user-1', sender_type: 'user' },
+        body: { content: JSON.stringify({ text: 'First context.' }) },
+      },
+      {
+        message_id: 'history-bot',
+        thread_id: 'thread-import',
+        chat_id: 'chat-1',
+        msg_type: 'text',
+        create_time: '1786450001000',
+        sender: { id: 'app-1', sender_type: 'app' },
+        body: { content: JSON.stringify({ text: 'Ignore bot echo.' }) },
+      },
+      {
+        message_id: 'current-message',
+        thread_id: 'thread-import',
+        chat_id: 'chat-1',
+        msg_type: 'text',
+        create_time: '1786450002000',
+        sender: { id: 'user-2', sender_type: 'user' },
+        body: { content: JSON.stringify({ text: 'Current request.' }) },
+      },
+    );
+    const thread = {
+      id: 'lark:chat-1:thread-import',
+      platform: 'lark',
+      externalId: 'chat-1:thread-import',
+      workspaceId: 'tenant-1',
+      projectId: 'chat-1',
+      channelId: 'chat-1',
+      rootMessageId: 'root-1',
+      topicId: 'thread-import',
+      visibility: 'public',
+      metadata: { larkThreadId: 'thread-import' },
+    };
+    const current = await store.createAgentRunOrSteer({
+      runId: 'lark-import-run',
+      thread,
+      message: {
+        id: 'current-message',
+        threadId: thread.id,
+        platform: 'lark',
+        text: 'Current request.',
+        actor: { id: 'user-2' },
+        createdAt: new Date('2026-01-01T00:00:02.000Z').toISOString(),
+        mentionsAgent: true,
+        metadata: { larkThreadId: 'thread-import' },
+      },
+    });
+
+    const result = await hydrateLarkThreadContext({
+      deliveryStore: store,
+      run: current.run,
+      transport: memory,
+      maxMessages: 50,
+    });
+    assert.equal(result.attempted, true);
+    assert.equal(result.importedMessages, 2);
+    assert.equal(result.duplicateMessages, 0);
+
+    const transcript = await store.loadThreadTranscript({
+      thread,
+      excludeRunId: current.run.id,
+    });
+    assert.deepEqual(
+      transcript.entries.map((entry) => [entry.source, entry.text]),
+      [['source_message', 'First context.']],
+    );
+    assert.ok(
+      (await store.listAgentRunEvents(current.run.id)).some(
+        (event) => event.type === 'thread_context_imported',
+      ),
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('HTTP Lark transport uploads files, replies with a file key, and downloads resources', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-http-'));
   const localFile = path.join(root, 'report.csv');
+  const localImage = path.join(root, 'preview.png');
   const requests = [];
   try {
     await fs.writeFile(localFile, 'a,b\n1,2\n');
+    await fs.writeFile(
+      localImage,
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+cv6WAAAAAElFTkSuQmCC',
+        'base64',
+      ),
+    );
     const transport = new HttpLarkTransport({
       appId: 'app-id',
       appSecret: 'app-secret',
@@ -74,6 +341,21 @@ test('HTTP Lark transport uploads files, replies with a file key, and downloads 
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
+        if (url.includes('/open-apis/im/v1/chats/chat-1')) {
+          return new Response(
+            JSON.stringify({
+              code: 0,
+              data: {
+                chat_id: 'chat-1',
+                name: 'Release Room',
+                chat_mode: 'group',
+                chat_type: 'private',
+                external: false,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
         if (url.endsWith('/im/v1/files')) {
           assert.ok(options.body instanceof FormData);
           assert.equal(options.body.get('file_type'), 'stream');
@@ -81,6 +363,15 @@ test('HTTP Lark transport uploads files, replies with a file key, and downloads 
           assert.ok(options.body.get('file') instanceof Blob);
           return new Response(
             JSON.stringify({ code: 0, data: { file_key: 'uploaded-file-key' } }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.endsWith('/im/v1/images')) {
+          assert.ok(options.body instanceof FormData);
+          assert.equal(options.body.get('image_type'), 'message');
+          assert.ok(options.body.get('image') instanceof Blob);
+          return new Response(
+            JSON.stringify({ code: 0, data: { image_key: 'uploaded-image-key' } }),
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
@@ -95,6 +386,17 @@ test('HTTP Lark transport uploads files, replies with a file key, and downloads 
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
+        if (url.endsWith('/messages/root-2/reply')) {
+          const body = JSON.parse(options.body);
+          assert.equal(body.msg_type, 'image');
+          assert.deepEqual(JSON.parse(body.content), {
+            image_key: 'uploaded-image-key',
+          });
+          return new Response(
+            JSON.stringify({ code: 0, data: { message_id: 'sent-image-message' } }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
         if (url.includes('/messages/message-1/resources/file-key-1?type=file')) {
           assert.equal(options.headers.authorization, 'Bearer tenant-token');
           return new Response(new TextEncoder().encode('downloaded'), {
@@ -106,10 +408,42 @@ test('HTTP Lark transport uploads files, replies with a file key, and downloads 
             },
           });
         }
+        if (url.includes('/open-apis/im/v1/messages?')) {
+          const parsed = new URL(url);
+          assert.equal(parsed.searchParams.get('container_id_type'), 'thread');
+          assert.equal(parsed.searchParams.get('container_id'), 'thread-1');
+          assert.equal(
+            parsed.searchParams.get('sort_type'),
+            'ByCreateTimeAsc',
+          );
+          assert.equal(parsed.searchParams.get('page_size'), '50');
+          return new Response(
+            JSON.stringify({
+              code: 0,
+              data: {
+                items: [{ message_id: 'history-1', thread_id: 'thread-1' }],
+                has_more: true,
+                page_token: 'next-page',
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
         throw new Error(`Unexpected request: ${url}`);
       },
     });
 
+    assert.deepEqual(
+      await transport.getChat('chat-1'),
+      {
+        chatId: 'chat-1',
+        name: 'Release Room',
+        description: undefined,
+        chatMode: 'group',
+        chatType: 'private',
+        external: false,
+      },
+    );
     assert.deepEqual(
       await transport.sendFile({
         chatId: 'chat-1',
@@ -117,7 +451,20 @@ test('HTTP Lark transport uploads files, replies with a file key, and downloads 
         file: { path: localFile, mimeType: 'text/csv' },
         metadata: { runId: 'run-1', artifactId: 'artifact-1' },
       }),
-      { messageId: 'sent-file-message' },
+      { messageId: 'sent-file-message', messageType: 'file' },
+    );
+    assert.deepEqual(
+      await transport.sendFile({
+        chatId: 'chat-1',
+        rootId: 'root-2',
+        file: {
+          path: localImage,
+          name: 'preview.png',
+          mimeType: 'image/png',
+        },
+        metadata: { runId: 'run-2', artifactId: 'artifact-image' },
+      }),
+      { messageId: 'sent-image-message', messageType: 'image' },
     );
     const downloaded = await transport.downloadMessageResource({
       messageId: 'message-1',
@@ -128,6 +475,32 @@ test('HTTP Lark transport uploads files, replies with a file key, and downloads 
     assert.equal(new TextDecoder().decode(downloaded.bytes), 'downloaded');
     assert.equal(downloaded.name, 'evidence.csv');
     assert.equal(downloaded.mimeType, 'text/csv');
+    assert.deepEqual(
+      await transport.listMessages({
+        containerType: 'thread',
+        containerId: 'thread-1',
+        startTime: '1786400000',
+        endTime: '1786500000',
+        sortType: 'ByCreateTimeAsc',
+        pageSize: 500,
+      }),
+      {
+        items: [{ message_id: 'history-1', thread_id: 'thread-1' }],
+        hasMore: true,
+        pageToken: 'next-page',
+      },
+    );
+    const historyRequest = requests.find((request) =>
+      request.url.includes('/open-apis/im/v1/messages?'),
+    );
+    assert.equal(
+      new URL(historyRequest.url).searchParams.get('start_time'),
+      '1786400000',
+    );
+    assert.equal(
+      new URL(historyRequest.url).searchParams.get('end_time'),
+      '1786500000',
+    );
     assert.equal(
       requests.filter((request) => request.url.endsWith('/tenant_access_token/internal')).length,
       1,

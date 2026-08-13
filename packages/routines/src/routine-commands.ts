@@ -1,6 +1,10 @@
 import type { SourceThread } from '@opentag/core';
 import { FileRoutineStore } from './file-routine-store.js';
-import type { Routine, RoutineSchedule } from './types.js';
+import type {
+  Routine,
+  RoutineExecutionDigest,
+  RoutineSchedule,
+} from './types.js';
 
 export type RoutineCommandKind =
   | 'list'
@@ -28,13 +32,14 @@ export interface RoutineCommandResult {
   summary: string;
   routine?: Routine;
   routines?: Routine[];
+  recentExecutions?: Record<string, RoutineExecutionDigest[]>;
 }
 
 function stripAddressing(text: string): string {
   return text
     .trim()
     .replace(/^(@\S+\s*)+/u, '')
-    .replace(/^\/(?:opentag|tag)(?:@[a-z0-9_]+)?(?:\s+|$)/iu, '')
+    .replace(/^\/(?:maxtag|opentag|tag)(?:@[a-z0-9_]+)?(?:\s+|$)/iu, '')
     .replace(/^\//u, '')
     .trim();
 }
@@ -54,6 +59,32 @@ function parseCreate(
   text: string,
   defaultTimeZone: string,
 ): ParsedRoutineCommand | null {
+  const once = /^(?:(?:schedule|add)\s+)?(?:once|at)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))\b([\s\S]+)$/iu.exec(
+    text,
+  );
+  if (once) {
+    const instructions = promptValue(once[2]);
+    if (!instructions) return null;
+    return {
+      kind: 'create',
+      instructions,
+      schedule: { kind: 'once', at: once[1] },
+    };
+  }
+
+  const onceZh = /^(?:(?:安排|创建|设置)\s*)?(?:一次|在)\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))\b([\s\S]+)$/iu.exec(
+    text,
+  );
+  if (onceZh) {
+    const instructions = promptValue(onceZh[2]);
+    if (!instructions) return null;
+    return {
+      kind: 'create',
+      instructions,
+      schedule: { kind: 'once', at: onceZh[1] },
+    };
+  }
+
   const interval = /^(?:(?:schedule|add)\s+)?every\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours)\b([\s\S]+)$/iu.exec(
     text,
   );
@@ -167,6 +198,7 @@ export function parseRoutineCommand(
 }
 
 export function formatRoutineSchedule(schedule: RoutineSchedule): string {
+  if (schedule.kind === 'once') return `Once at ${schedule.at}`;
   if (schedule.kind === 'daily') {
     return `Daily at ${schedule.time} (${schedule.timeZone})`;
   }
@@ -182,9 +214,27 @@ function routineId(routine: Routine): string {
   return routine.id.slice(0, 8);
 }
 
+function latestExecutionLabel(
+  execution: RoutineExecutionDigest | undefined,
+): string {
+  if (!execution) return 'last never';
+  const detail = execution.error || execution.summary;
+  return `last ${execution.status} ${execution.completedAt || execution.updatedAt}${
+    detail ? ` - ${detail}` : ''
+  }`;
+}
+
+function notificationLabel(routine: Routine): string {
+  const policy = routine.notifications;
+  if (policy.mode === 'silent') return 'notify silent';
+  if (policy.mode === 'every_result') return 'notify every result';
+  return `notify after ${policy.failureThreshold} failure${policy.failureThreshold === 1 ? '' : 's'}${policy.recovery ? ' + recovery' : ''}`;
+}
+
 function helpText(): string {
   return [
     'Standing work commands:',
+    '- schedule once 2026-08-14T09:00:00+08:00: Check release status',
     '- schedule every 30m: Check CI failures',
     '- schedule daily 09:00 Asia/Shanghai: Summarize open work',
     '- routines',
@@ -204,6 +254,12 @@ function serviceError(error: unknown): string {
   }
   if (message.includes('routine_daily_time_must_be')) {
     return 'Daily time must use 24-hour HH:mm format.';
+  }
+  if (message.includes('routine_once_at_must_be_iso_timestamp')) {
+    return 'One-time schedules require an ISO timestamp with an explicit offset.';
+  }
+  if (message.includes('routine_once_at_must_be_in_future')) {
+    return 'The one-time schedule must be in the future.';
   }
   return `Could not update standing work: ${message}`;
 }
@@ -237,10 +293,15 @@ export class RoutineCommandService {
           routines,
         };
       }
-      const lines = routines.slice(0, 20).map((routine) => {
+      const visible = routines.slice(0, 20);
+      const recentExecutions = await this.store.listRecentExecutionDigests({
+        routines: visible,
+        limitPerRoutine: 1,
+      });
+      const lines = visible.map((routine) => {
         const state = routine.enabled ? 'on' : 'paused';
         const next = routine.nextRunAt ? `, next ${routine.nextRunAt}` : '';
-        return `- ${routineId(routine)} [${state}] ${formatRoutineSchedule(routine.schedule)} - ${routine.name}${next}`;
+        return `- ${routineId(routine)} [${state}] ${formatRoutineSchedule(routine.schedule)} - ${routine.name}${next}; ${notificationLabel(routine)}; ${latestExecutionLabel(recentExecutions[routine.id]?.[0])}`;
       });
       if (routines.length > lines.length) {
         lines.push(`- ...and ${routines.length - lines.length} more`);
@@ -249,6 +310,7 @@ export class RoutineCommandService {
         action: command.kind,
         summary: `Standing work in this thread:\n${lines.join('\n')}`,
         routines,
+        recentExecutions,
       };
     }
     if (command.kind === 'create') {
@@ -259,6 +321,11 @@ export class RoutineCommandService {
           name: routineName(command.instructions),
           instructions: command.instructions,
           schedule: command.schedule,
+          notifications: {
+            mode: 'every_result',
+            failureThreshold: 1,
+            recovery: true,
+          },
           destination: {
             platform: thread.platform,
             externalId: thread.externalId,

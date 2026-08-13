@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenTag routine and workflow scheduler
+Description=MaxTag routine and workflow scheduler
 Documentation=file:/opt/opentag/deploy/README.md
 Wants=network-online.target opentag-server.service
 After=network-online.target opentag-server.service

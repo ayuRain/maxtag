@@ -24,10 +24,19 @@
     "@opentag/memory": "0.1.0",
     "@opentag/platform-github": "0.1.0",
     "@opentag/platform-lark": "0.1.0",
+    "@opentag/platform-slack": "0.1.0",
     "@opentag/platform-telegram": "0.1.0",
     "@opentag/routines": "0.1.0",
     "@opentag/storage-sqlite": "0.1.0",
     "@opentag/tool-broker": "0.1.0",
-    "@opentag/workflows": "0.1.0"
+    "@opentag/workflows": "0.1.0",
+    "html-to-text": "^10.0.0",
+    "jszip": "^3.10.1",
+    "mammoth": "^1.12.1",
+    "pdf-parse": "^2.4.5"
+  },
+  "devDependencies": {
+    "@types/html-to-text": "^9.0.4",
+    "pdf-lib": "^1.17.1"
   }
 }

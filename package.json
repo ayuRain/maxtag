@@ -1,15 +1,21 @@
 {
-  "name": "opentag",
+  "name": "maxtag",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Open agent mentions for work threads. Lark first, not Lark only.",
+  "description": "A Lark workspace agent with scoped memory, durable runs, and human control.",
   "scripts": {
     "build": "tsc -b",
     "clean": "tsc -b --clean",
     "dev": "node --watch apps/server/dist/index.js",
     "test": "npm run build && node --test tests/*.test.mjs",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
     "typecheck": "tsc -b --pretty false",
+    "smoke:lark": "npm run build && node scripts/lark-smoke.mjs",
+    "smoke:lark-routine": "npm run build && node scripts/lark-routine-smoke.mjs",
+    "smoke:lark-stop": "npm run build && node scripts/lark-stop-smoke.mjs",
+    "smoke:lark-takeover": "npm run build && node scripts/lark-takeover-smoke.mjs",
+    "bridge:lark": "npm run build && node scripts/lark-long-connection-bridge.mjs",
     "scheduler": "node apps/scheduler/dist/index.js",
     "worker": "node apps/worker/dist/index.js"
   },

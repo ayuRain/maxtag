@@ -69,6 +69,7 @@ function clientEvent(eventId, actorId, text, projectId = 'opentag') {
 function larkEvent(eventId, messageId, actorId, text) {
   return {
     event_id: eventId,
+    token: 'access-lark-token',
     event: {
       message: {
         message_id: messageId,
@@ -118,8 +119,11 @@ test(
         OPENTAG_AGENT_WORKER: 'manual',
         OPENTAG_ROUTINES_ENABLED: 'false',
         OPENTAG_LARK_TRANSPORT: 'memory',
+        OPENTAG_LARK_EVENT_MODE: 'webhook',
+        OPENTAG_LARK_VERIFICATION_TOKEN: 'access-lark-token',
+        OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS: '0',
         OPENTAG_TELEGRAM_TRANSPORT: 'memory',
-        OPENTAG_TELEGRAM_BOT_USERNAME: 'OpenTagBot',
+        OPENTAG_TELEGRAM_BOT_USERNAME: 'MaxTagBot',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -172,6 +176,31 @@ test(
     });
     assert.equal(isolatedProject.response.status, 200);
 
+    const reviewedProject = await postJson(baseUrl, '/v1/projects', {
+      workspaceId: 'dev-workspace',
+      projectId: 'reviewed',
+      name: 'Reviewed Memory',
+      agentMode: 'inherit',
+      capabilityMode: 'inherit',
+      memoryMode: 'workspace',
+      memoryApprovalPolicy: {
+        mode: 'require_approval',
+        scopes: ['project'],
+        actions: ['remember', 'forget'],
+      },
+      memoryRetentionPolicy: { mode: 'custom', days: 14 },
+    });
+    assert.equal(reviewedProject.response.status, 200);
+    assert.deepEqual(reviewedProject.data.project.memoryApprovalPolicy, {
+      mode: 'require_approval',
+      scopes: ['project'],
+      actions: ['remember', 'forget'],
+    });
+    assert.deepEqual(reviewedProject.data.project.memoryRetentionPolicy, {
+      mode: 'custom',
+      days: 14,
+    });
+
     const viewerResult = await postJson(baseUrl, '/v1/access/members', {
       workspaceId: 'dev-workspace',
       displayName: 'Viewer',
@@ -222,6 +251,28 @@ test(
     );
     assert.equal(isolatedAssignment.response.status, 200);
 
+    const reviewedPolicy = await postJson(
+      baseUrl,
+      '/v1/access/project-policy',
+      {
+        workspaceId: 'dev-workspace',
+        projectId: 'reviewed',
+        mode: 'members',
+      },
+    );
+    assert.equal(reviewedPolicy.response.status, 200);
+    const reviewedAssignment = await postJson(
+      baseUrl,
+      '/v1/access/project-memberships',
+      {
+        workspaceId: 'dev-workspace',
+        projectId: 'reviewed',
+        memberId: contributor.id,
+        role: 'contributor',
+      },
+    );
+    assert.equal(reviewedAssignment.response.status, 200);
+
     const larkBinding = await postJson(baseUrl, '/v1/bindings', {
       platform: 'lark',
       externalId: 'oc_access_native',
@@ -242,10 +293,117 @@ test(
     });
     assert.equal(telegramBinding.response.status, 200);
 
+    const bindingAudit = await fetch(
+      `${baseUrl}/v1/binding-audit?workspaceId=dev-workspace&limit=10`,
+    ).then((response) => response.json());
+    assert.equal(bindingAudit.audit.length, 2);
+    assert.ok(
+      bindingAudit.audit.every(
+        (record) =>
+          record.action === 'binding.created' &&
+          record.actor === 'operator:local-development' &&
+          record.after.projectId === 'opentag',
+      ),
+    );
+    const larkAudit = await fetch(
+      `${baseUrl}/v1/binding-audit?workspaceId=dev-workspace&platform=lark`,
+    ).then((response) => response.json());
+    assert.equal(larkAudit.audit.length, 1);
+    assert.equal(larkAudit.audit[0].bindingId, larkBinding.data.binding.id);
+
+    const bindingExportResponse = await fetch(
+      `${baseUrl}/v1/binding-export?workspaceId=dev-workspace`,
+    );
+    assert.equal(bindingExportResponse.status, 200);
+    const bindingExport = await bindingExportResponse.json();
+    assert.equal(bindingExport.schemaVersion, 1);
+    assert.equal(bindingExport.workspaceId, 'dev-workspace');
+    assert.equal(bindingExport.count, 2);
+    assert.ok(
+      bindingExport.bindings.every(
+        (binding) =>
+          binding.projectId === 'opentag' &&
+          binding.workspaceId === 'dev-workspace' &&
+          !Object.hasOwn(binding, 'metadata'),
+      ),
+    );
+
+    const bindingImportDryRun = await postJson(baseUrl, '/v1/binding-import', {
+      workspaceId: 'dev-workspace',
+      bindings: [
+        {
+          platform: 'lark',
+          externalId: 'oc_legal_imported',
+          projectId: 'legal',
+          title: 'Legal imported group',
+          activationMode: 'always',
+          requireMention: false,
+        },
+      ],
+    });
+    assert.equal(bindingImportDryRun.response.status, 200);
+    assert.equal(bindingImportDryRun.data.dryRun, true);
+    assert.equal(bindingImportDryRun.data.imported, 0);
+    assert.equal(bindingImportDryRun.data.preview.length, 1);
+    assert.equal(bindingImportDryRun.data.preview[0].projectId, 'legal');
+
+    const afterDryRunExport = await fetch(
+      `${baseUrl}/v1/binding-export?workspaceId=dev-workspace`,
+    ).then((response) => response.json());
+    assert.equal(afterDryRunExport.count, 2);
+    assert.equal(
+      afterDryRunExport.bindings.some(
+        (binding) => binding.externalId === 'oc_legal_imported',
+      ),
+      false,
+    );
+
+    const invalidImport = await postJson(baseUrl, '/v1/binding-import', {
+      workspaceId: 'dev-workspace',
+      apply: true,
+      bindings: [
+        {
+          platform: 'lark',
+          externalId: 'oc_missing_project',
+          projectId: 'missing',
+        },
+      ],
+    });
+    assert.equal(invalidImport.response.status, 400);
+    assert.equal(invalidImport.data.errors[0].error, 'binding_project_not_found');
+    assert.equal(invalidImport.data.imported, 0);
+
+    const bindingImportApply = await postJson(baseUrl, '/v1/binding-import', {
+      workspaceId: 'dev-workspace',
+      apply: true,
+      bindings: [
+        {
+          platform: 'lark',
+          externalId: 'oc_legal_imported',
+          projectId: 'legal',
+          title: 'Legal imported group',
+          activationMode: 'always',
+          requireMention: false,
+        },
+      ],
+    });
+    assert.equal(bindingImportApply.response.status, 200);
+    assert.equal(bindingImportApply.data.imported, 1);
+    assert.equal(bindingImportApply.data.bindings[0].projectId, 'legal');
+    assert.equal(
+      bindingImportApply.data.bindings[0].metadata.configuredVia,
+      'binding-import',
+    );
+    const importedAudit = await fetch(
+      `${baseUrl}/v1/binding-audit?workspaceId=dev-workspace&bindingId=${bindingImportApply.data.bindings[0].id}`,
+    ).then((response) => response.json());
+    assert.equal(importedAudit.audit[0].reason, 'binding_import');
+    assert.equal(importedAudit.audit[0].actor, 'operator:local-development');
+
     const unknown = await postJson(
       baseUrl,
       '/v1/client/events',
-      clientEvent('access-unknown', 'ou-unknown', '@OpenTag status'),
+      clientEvent('access-unknown', 'ou-unknown', '@MaxTag status'),
     );
     assert.equal(unknown.response.status, 202);
     assert.equal(unknown.data.accepted, false);
@@ -255,7 +413,7 @@ test(
     const viewer = await postJson(
       baseUrl,
       '/v1/client/events',
-      clientEvent('access-viewer', 'ou-viewer', '@OpenTag status'),
+      clientEvent('access-viewer', 'ou-viewer', '@MaxTag status'),
     );
     assert.equal(viewer.data.accepted, false);
     assert.equal(viewer.data.authorization.reason, 'project_member_required');
@@ -294,7 +452,7 @@ test(
     const contributorRun = await postJson(
       baseUrl,
       '/v1/client/events',
-      clientEvent('access-contributor', 'ou-contributor', '@OpenTag status'),
+      clientEvent('access-contributor', 'ou-contributor', '@MaxTag status'),
     );
     assert.equal(contributorRun.response.status, 202);
     assert.equal(contributorRun.data.accepted, true);
@@ -366,6 +524,99 @@ test(
     );
     assert.equal(isolatedProjectMemory.data.accepted, true);
 
+    const reviewedProjectMemory = await postJson(
+      baseUrl,
+      '/v1/client/events',
+      clientEvent(
+        'access-reviewed-project-memory',
+        'ou-contributor',
+        'remember project reviewed fact',
+        'reviewed',
+      ),
+    );
+    assert.equal(reviewedProjectMemory.data.accepted, true);
+    const reviewedWorker = await postJson(baseUrl, '/v1/runs/worker-pass', {
+      limit: 20,
+    });
+    assert.equal(reviewedWorker.response.status, 200);
+    assert.ok(reviewedWorker.data.result.completed >= 1);
+    const reviewedRun = reviewedWorker.data.result.runs.find(
+      (run) => run.id === reviewedProjectMemory.data.run.id,
+    );
+    assert.ok(reviewedRun);
+    assert.match(reviewedRun.summary, /Queued remember/);
+    const reviewedProposals = await fetch(
+      `${baseUrl}/v1/memory-proposals?workspaceId=dev-workspace&projectId=reviewed&status=pending`,
+    ).then((response) => response.json());
+    assert.equal(reviewedProposals.proposals.length, 1);
+    assert.equal(reviewedProposals.proposals[0].action, 'remember');
+    assert.equal(reviewedProposals.proposals[0].value, 'reviewed fact');
+    assert.equal(reviewedProposals.proposals[0].retentionDays, 14);
+    const reviewedEvents = await fetch(
+      `${baseUrl}/v1/runs/${encodeURIComponent(reviewedRun.id)}/events`,
+    ).then((response) => response.json());
+    const reviewedMemoryEvent = reviewedEvents.events.find(
+      (event) => event.type === 'memory_command',
+    );
+    assert.equal(reviewedMemoryEvent.metadata.action, 'proposed');
+    assert.equal(
+      reviewedMemoryEvent.metadata.proposalId,
+      reviewedProposals.proposals[0].id,
+    );
+    const reviewedMemoryBeforeApproval = await postJson(baseUrl, '/v1/memory', {
+      action: 'show',
+      workspaceId: 'dev-workspace',
+      projectId: 'reviewed',
+      externalId: 'oc_access_reviewed:root',
+      channelId: 'oc_access_reviewed',
+      scope: 'project',
+    });
+    assert.equal(reviewedMemoryBeforeApproval.response.status, 200);
+    assert.equal(reviewedMemoryBeforeApproval.data.memoryCommand.content, '');
+    const approveReviewedMemory = await postJson(
+      baseUrl,
+      `/v1/memory-proposals/${reviewedProposals.proposals[0].id}/approve`,
+      { reason: 'test approval' },
+    );
+    assert.equal(approveReviewedMemory.response.status, 200);
+    assert.equal(approveReviewedMemory.data.proposal.status, 'approved');
+    const reviewedMemoryAfterApproval = await postJson(baseUrl, '/v1/memory', {
+      action: 'show',
+      workspaceId: 'dev-workspace',
+      projectId: 'reviewed',
+      externalId: 'oc_access_reviewed:root',
+      channelId: 'oc_access_reviewed',
+      scope: 'project',
+    });
+    assert.match(
+      reviewedMemoryAfterApproval.data.memoryCommand.content,
+      /reviewed fact/,
+    );
+    const reviewedMemorySnapshot = await fetch(
+      `${baseUrl}/v1/memory?workspaceId=dev-workspace&projectId=reviewed&externalId=oc_access_reviewed%3Aroot&channelId=oc_access_reviewed&scope=project`,
+    ).then((response) => response.json());
+    assert.equal(reviewedMemorySnapshot.expiry.entries.length, 1);
+    assert.equal(
+      reviewedMemorySnapshot.expiry.entries[0].source,
+      'memory-retention-policy',
+    );
+    assert.ok(
+      Date.parse(reviewedMemorySnapshot.expiry.entries[0].expiresAt) >=
+        Date.now() + 13 * 24 * 60 * 60 * 1_000,
+    );
+    const reviewedSearch = await fetch(
+      `${baseUrl}/v1/memory-search?workspaceId=dev-workspace&projectId=reviewed&externalId=oc_access_reviewed%3Aroot&channelId=oc_access_reviewed&scope=project&q=reviewed%20fact`,
+    ).then((response) => response.json());
+    assert.equal(reviewedSearch.scope, 'project');
+    assert.equal(reviewedSearch.hits.length, 1);
+    assert.match(reviewedSearch.hits[0].line, /reviewed fact/u);
+    assert.match(reviewedSearch.hits[0].documentKey, /reviewed/u);
+
+    const isolatedSearch = await fetch(
+      `${baseUrl}/v1/memory-search?workspaceId=dev-workspace&projectId=legal&externalId=oc_access_legal%3Aroot&channelId=oc_access_legal&scope=project&q=reviewed%20fact`,
+    ).then((response) => response.json());
+    assert.deepEqual(isolatedSearch.hits, []);
+
     const ownerGlobalMemory = await postJson(
       baseUrl,
       '/v1/client/events',
@@ -411,7 +662,12 @@ test(
         .mode,
       'members',
     );
-    assert.equal(access.projectMemberships.length, 2);
+    assert.equal(access.projectMemberships.length, 3);
+    assert.ok(
+      access.projectMemberships.some(
+        (membership) => membership.projectId === 'reviewed',
+      ),
+    );
 
     const ignored = await fetch(`${baseUrl}/v1/deliveries?limit=20`).then(
       (response) => response.json(),

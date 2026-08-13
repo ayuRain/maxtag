@@ -9,3 +9,5 @@ data/
 .opentag-preview/
 coverage/
 *.tsbuildinfo
+artifacts/
+docs/parity-audit-*.md

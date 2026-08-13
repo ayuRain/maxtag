@@ -143,6 +143,10 @@ test(
     assert.ok(
       detail.events.some((item) => item.type === 'steering_scheduled'),
     );
+    assert.ok(detail.threadRuns.some((run) => run.id === first.data.run.id));
+    assert.ok(Array.isArray(detail.deliveries.outbox));
+    assert.ok(Array.isArray(detail.deliveries.turns));
+    assert.equal(detail.usage.runId, first.data.run.id);
 
     const secondPass = await postJson(`${baseUrl}/v1/runs/worker-pass`, {
       limit: 1,

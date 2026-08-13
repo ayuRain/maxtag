@@ -16,3 +16,6 @@ scrape_configs:
       - targets: ["127.0.0.1:3079"]
         labels:
           component: scheduler
+      - targets: ["127.0.0.1:3080"]
+        labels:
+          component: lark-bridge

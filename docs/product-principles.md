@@ -7,7 +7,7 @@
 4. Memory is scoped and correctable.
 5. Artifacts are first-class: PRs, files, reports, charts, and links should have
    durable records.
-6. Lark is the first surface, but OpenTag is not a Lark-only runtime.
+6. Lark is the first surface, but MaxTag is not a Lark-only runtime.
 7. The default posture is least privilege: deny tools and network paths until a
    grant exists.
 

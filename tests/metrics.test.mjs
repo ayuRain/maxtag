@@ -27,6 +27,14 @@ function deliverySummary() {
       rejected: 0,
       duplicates: 2,
     },
+    workflowProducers: {
+      received: 3,
+      staged: 2,
+      unmatched: 1,
+      duplicates: 1,
+      ignored: 0,
+      failed: 0,
+    },
     agentRuns: {
       queued: 2,
       running: 1,
@@ -94,12 +102,20 @@ function snapshot(service = 'opentag-server') {
         failed: 0,
         cancelled: 0,
       },
+      notifications: {
+        pending: 1,
+        claimed: 0,
+        delivered: 2,
+        failed: 0,
+        cancelled: 0,
+      },
       oldestExecutionUpdatedAt: {
         pending: '2026-08-12T00:00:35.000Z',
       },
       nextRunAt: '2026-08-12T00:05:00.000Z',
     },
     workflows: {
+      producerRoutes: { enabled: 2, disabled: 1 },
       workflows: { active: 1, archived: 0 },
       executions: {
         pending: 0,
@@ -123,6 +139,27 @@ function snapshot(service = 'opentag-server') {
       },
       oldestNodeUpdatedAt: {
         claimed: '2026-08-12T00:00:15.000Z',
+      },
+    },
+    delegatedAgentTasks: {
+      tasks: {
+        queued: 1,
+        claimed: 1,
+        completed: 2,
+        failed: 0,
+        cancelled: 0,
+        stale: 0,
+      },
+      oldestStatusUpdatedAt: {
+        queued: '2026-08-12T00:00:05.000Z',
+        claimed: '2026-08-12T00:00:30.000Z',
+      },
+    },
+    knowledgeSourceRefreshes: {
+      jobs: { pending: 1, claimed: 1, completed: 3, failed: 0, stale: 0 },
+      oldestStatusUpdatedAt: {
+        pending: '2026-08-12T00:00:10.000Z',
+        claimed: '2026-08-12T00:00:40.000Z',
       },
     },
   };
@@ -161,6 +198,34 @@ test('Prometheus renderer emits unique, low-cardinality metric samples', () => {
   assert.match(
     rendered,
     /opentag_workflow_node_oldest_age_seconds\{service="opentag-server",status="claimed"\} 45/,
+  );
+  assert.match(
+    rendered,
+    /opentag_workflow_producer_routes\{service="opentag-server",state="enabled"\} 2/,
+  );
+  assert.match(
+    rendered,
+    /opentag_routine_notifications\{service="opentag-server",status="pending"\} 1/,
+  );
+  assert.match(
+    rendered,
+    /opentag_workflow_producer_events\{result="staged",service="opentag-server"\} 2/,
+  );
+  assert.match(
+    rendered,
+    /opentag_delegated_agent_tasks\{service="opentag-server",status="queued"\} 1/,
+  );
+  assert.match(
+    rendered,
+    /opentag_delegated_agent_task_oldest_age_seconds\{service="opentag-server",status="claimed"\} 30/,
+  );
+  assert.match(
+    rendered,
+    /opentag_knowledge_source_refresh_jobs\{service="opentag-server",status="pending"\} 1/,
+  );
+  assert.match(
+    rendered,
+    /opentag_knowledge_source_refresh_oldest_age_seconds\{service="opentag-server",status="claimed"\} 20/,
   );
   assert.doesNotMatch(rendered, /workspaceId|projectId|threadId|runId/);
 

@@ -2,6 +2,10 @@ import type { PlatformKind, ThreadVisibility } from '@opentag/core';
 
 export type RoutineSchedule =
   | {
+      kind: 'once';
+      at: string;
+    }
+  | {
       kind: 'interval';
       everyMinutes: number;
     }
@@ -22,6 +26,17 @@ export interface RoutineDestination {
   title?: string;
 }
 
+export type RoutineNotificationMode =
+  | 'every_result'
+  | 'failures_only'
+  | 'silent';
+
+export interface RoutineNotificationPolicy {
+  mode: RoutineNotificationMode;
+  failureThreshold: number;
+  recovery: boolean;
+}
+
 export interface Routine {
   id: string;
   workspaceId: string;
@@ -30,6 +45,7 @@ export interface Routine {
   instructions: string;
   enabled: boolean;
   schedule: RoutineSchedule;
+  notifications: RoutineNotificationPolicy;
   destination: RoutineDestination;
   nextRunAt?: string;
   lastScheduledAt?: string;
@@ -70,6 +86,48 @@ export interface RoutineExecution {
   completedAt?: string;
 }
 
+export interface RoutineExecutionDigest {
+  id: string;
+  status: RoutineExecutionStatus;
+  trigger: RoutineExecutionTrigger;
+  scheduledFor: string;
+  attempts: number;
+  runId?: string;
+  summary?: string;
+  error?: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export type RoutineNotificationKind = 'failure' | 'recovery';
+
+export type RoutineNotificationStatus =
+  | 'pending'
+  | 'claimed'
+  | 'delivered'
+  | 'failed'
+  | 'cancelled';
+
+export interface RoutineNotification {
+  id: string;
+  routineId: string;
+  executionId: string;
+  routine: Routine;
+  runId?: string;
+  kind: RoutineNotificationKind;
+  status: RoutineNotificationStatus;
+  consecutiveFailures: number;
+  message: string;
+  attempts: number;
+  nextAttemptAt: string;
+  claimerId?: string;
+  claimedAt?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+  deliveredAt?: string;
+}
+
 export interface RoutineAuditRecord {
   id: string;
   action:
@@ -89,6 +147,7 @@ export interface RoutineState {
   version: 1;
   routines: Routine[];
   executions: RoutineExecution[];
+  notifications: RoutineNotification[];
   audit: RoutineAuditRecord[];
 }
 
@@ -100,6 +159,7 @@ export interface UpsertRoutineInput {
   instructions: string;
   enabled?: boolean;
   schedule: RoutineSchedule;
+  notifications?: Partial<RoutineNotificationPolicy>;
   destination: RoutineDestination;
   actor?: string;
 }
@@ -118,10 +178,27 @@ export interface RoutineExecutionFilter {
   limit?: number;
 }
 
+export interface RoutineExecutionDigestInput {
+  routines: Routine[];
+  limitPerRoutine?: number;
+}
+
 export interface RoutineAuditFilter {
   workspaceId?: string;
   projectId?: string;
   limit?: number;
+}
+
+export interface RoutineNotificationFilter {
+  routineId?: string;
+  workspaceId?: string;
+  projectId?: string;
+  status?: RoutineNotificationStatus;
+  limit?: number;
+}
+
+export interface RoutineNotificationClaim {
+  notification: RoutineNotification;
 }
 
 export interface RoutineClaim {
@@ -135,6 +212,7 @@ export interface RoutineSummary {
     disabled: number;
   };
   executions: Record<RoutineExecutionStatus, number>;
+  notifications: Record<RoutineNotificationStatus, number>;
   oldestExecutionUpdatedAt: Partial<Record<RoutineExecutionStatus, string>>;
   nextRunAt?: string;
 }

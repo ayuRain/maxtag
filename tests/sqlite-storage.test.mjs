@@ -270,6 +270,7 @@ test(
       platform: 'telegram',
       workspaceId: 'workspace-race',
       projectId: 'project-race',
+      allowedActorIds: ['actor-a'],
     });
 
     const pairResults = await runContendingWorkers(databasePath, 'pair', [
@@ -294,7 +295,9 @@ test(
     );
     assert.equal(
       pairResults.filter(
-        (result) => !result.consumed.ok && result.consumed.reason === 'consumed_code',
+        (result) =>
+          !result.consumed.ok &&
+          ['actor_not_allowed', 'consumed_code'].includes(result.consumed.reason),
       ).length,
       1,
     );
@@ -460,3 +463,43 @@ test(
     );
   },
 );
+
+test('SQLite atomic pairing preserves actor restrictions before binding', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-sqlite-restricted-pairing-'));
+  const databasePath = path.join(root, 'opentag.sqlite');
+  const store = new SqliteOpenTagStore({
+    databasePath,
+    pairingTtlMs: 600_000,
+  });
+  context.after(async () => {
+    store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const invitation = await store.pairingStore.createInvitation({
+    platform: 'lark',
+    workspaceId: 'workspace-restricted',
+    projectId: 'project-restricted',
+    allowedActorIds: ['ou-allowed'],
+  });
+
+  const rejected = await store.consumePairingAndConfigureBinding({
+    platform: 'lark',
+    code: invitation.code,
+    channelId: 'oc_restricted',
+    threadExternalId: 'oc_restricted:root',
+    actorId: 'ou-other',
+  });
+  assert.equal(rejected.consumed.ok, false);
+  assert.equal(rejected.consumed.reason, 'actor_not_allowed');
+  assert.equal((await store.deliveryStore.listThreadBindings()).length, 0);
+
+  const accepted = await store.consumePairingAndConfigureBinding({
+    platform: 'lark',
+    code: invitation.code,
+    channelId: 'oc_restricted',
+    threadExternalId: 'oc_restricted:root',
+    actorId: 'ou-allowed',
+  });
+  assert.equal(accepted.consumed.ok, true);
+  assert.equal(accepted.binding.projectId, 'project-restricted');
+});

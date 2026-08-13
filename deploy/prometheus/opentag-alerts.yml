@@ -8,7 +8,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "OpenTag {{ $labels.component }} is unavailable"
+          summary: "MaxTag {{ $labels.component }} is unavailable"
           description: "Prometheus has failed to scrape {{ $labels.instance }} for one minute."
 
       - alert: OpenTagWorkerLoopStale
@@ -17,7 +17,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "OpenTag worker loop is stale"
+          summary: "MaxTag worker loop is stale"
           description: "The durable worker has not completed a pass for more than 60 seconds."
 
       - alert: OpenTagSchedulerLoopStale
@@ -26,8 +26,35 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "OpenTag workflow scheduler loop is stale"
+          summary: "MaxTag workflow scheduler loop is stale"
           description: "The workflow coordinator has not completed a pass for more than 30 seconds."
+
+      - alert: OpenTagLarkBridgeEventKeyDown
+        expr: opentag_lark_bridge_event_key_running{service="opentag-lark-bridge"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MaxTag Lark bridge consumer is down"
+          description: "The {{ $labels.event_key }} long-connection consumer is not running."
+
+      - alert: OpenTagLarkBridgeEventKeyNotReady
+        expr: opentag_lark_bridge_event_key_ready{service="opentag-lark-bridge"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MaxTag Lark bridge consumer is not ready"
+          description: "The {{ $labels.event_key }} consumer has not reached the lark-cli ready marker."
+
+      - alert: OpenTagLarkBridgeBackfillFailure
+        expr: increase(opentag_lark_bridge_backfill_failed_total{service="opentag-lark-bridge"}[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MaxTag Lark message recovery did not complete"
+          description: "The bridge retained its prior checkpoint because startup backfill failed or reached its safety limit."
 
       - alert: OpenTagQueuedRunStale
         expr: opentag_agent_run_oldest_age_seconds{service="opentag-worker",status="queued"} > 300 and on(service) opentag_agent_runs{service="opentag-worker",status="queued"} > 0
@@ -35,7 +62,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "OpenTag agent run has waited more than five minutes"
+          summary: "MaxTag agent run has waited more than five minutes"
           description: "At least one durable run remains queued while the worker is expected to claim it."
 
       - alert: OpenTagRunLeaseStale
@@ -44,8 +71,44 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "OpenTag running lease is stale"
+          summary: "MaxTag running lease is stale"
           description: "A running agent lease has not received its expected heartbeat."
+
+      - alert: OpenTagDelegatedAgentTaskQueued
+        expr: opentag_delegated_agent_task_oldest_age_seconds{service="opentag-worker",status="queued"} > 300 and on(service) opentag_delegated_agent_tasks{service="opentag-worker",status="queued"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MaxTag delegated Agent task has waited more than five minutes"
+          description: "At least one approved asynchronous Agent task remains queued while the worker is expected to claim it."
+
+      - alert: OpenTagDelegatedAgentTaskClaimStale
+        expr: opentag_delegated_agent_task_oldest_age_seconds{service="opentag-worker",status="claimed"} > 180 and on(service) opentag_delegated_agent_tasks{service="opentag-worker",status="claimed"} > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MaxTag delegated Agent task claim is stale"
+          description: "An asynchronous Agent task has remained claimed past the normal execution lease."
+
+      - alert: OpenTagKnowledgeSourceRefreshQueued
+        expr: opentag_knowledge_source_refresh_oldest_age_seconds{service="opentag-worker",status="pending"} > 300 and on(service) opentag_knowledge_source_refresh_jobs{service="opentag-worker",status="pending"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MaxTag Knowledge Source refresh has waited more than five minutes"
+          description: "At least one approved remote Source refresh remains pending while the worker is expected to claim it."
+
+      - alert: OpenTagKnowledgeSourceRefreshClaimStale
+        expr: opentag_knowledge_source_refresh_oldest_age_seconds{service="opentag-worker",status="claimed"} > 180 and on(service) opentag_knowledge_source_refresh_jobs{service="opentag-worker",status="claimed"} > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MaxTag Knowledge Source refresh claim is stale"
+          description: "A remote Source refresh has remained claimed past the normal fetch lease."
 
       - alert: OpenTagOutboxStale
         expr: opentag_delivery_outbox_oldest_age_seconds{service="opentag-server",status=~"pending|sending"} > 120
@@ -53,7 +116,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "OpenTag outbound delivery is stuck"
+          summary: "MaxTag outbound delivery is stuck"
           description: "The oldest {{ $labels.status }} outbox record is more than two minutes old."
 
       - alert: OpenTagRoutineClaimStale
@@ -62,7 +125,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "OpenTag routine claim is stale"
+          summary: "MaxTag routine claim is stale"
           description: "A routine execution has remained claimed past the normal lease window."
 
       - alert: OpenTagWorkflowClaimStale
@@ -71,5 +134,5 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "OpenTag workflow node claim is stale"
+          summary: "MaxTag workflow node claim is stale"
           description: "A workflow node has remained claimed past the normal lease window."

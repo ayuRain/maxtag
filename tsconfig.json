@@ -8,6 +8,7 @@
     { "path": "packages/memory" },
     { "path": "packages/platform-lark" },
     { "path": "packages/platform-telegram" },
+    { "path": "packages/platform-slack" },
     { "path": "packages/platform-github" },
     { "path": "packages/executor-cli" },
     { "path": "packages/executor-codex" },

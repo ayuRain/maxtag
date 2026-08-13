@@ -13,6 +13,7 @@ import type {
   FileRoutineStore,
   Routine,
   RoutineClaim,
+  RoutineNotification,
 } from '@opentag/routines';
 
 export interface RoutineTickResult {
@@ -22,8 +23,12 @@ export interface RoutineTickResult {
   queued: number;
   failed: number;
   reconciled: number;
+  notificationsClaimed: number;
+  notificationsDelivered: number;
+  notificationsFailed: number;
   executionIds: string[];
   runIds: string[];
+  notificationIds: string[];
 }
 
 export interface RoutineSchedulerServiceOptions {
@@ -35,6 +40,10 @@ export interface RoutineSchedulerServiceOptions {
   batchSize?: number;
   transportModeForPlatform?: (platform: PlatformKind) => string;
   onRunQueued?: (run: AgentRunRecord) => void | Promise<void>;
+  sendNotification?: (
+    thread: SourceThread,
+    notification: RoutineNotification,
+  ) => void | Promise<void>;
 }
 
 export interface RoutineSchedulerTickOptions {
@@ -73,6 +82,7 @@ export class RoutineSchedulerService {
   private readonly batchSize: number;
   private readonly transportModeForPlatform: (platform: PlatformKind) => string;
   private readonly onRunQueued?: (run: AgentRunRecord) => void | Promise<void>;
+  private readonly sendNotification?: RoutineSchedulerServiceOptions['sendNotification'];
   private tickPass: Promise<RoutineTickResult> | undefined;
   private _lastTickAt: string | undefined;
   private _lastTickResult: RoutineTickResult | undefined;
@@ -88,6 +98,7 @@ export class RoutineSchedulerService {
     this.transportModeForPlatform =
       options.transportModeForPlatform ?? defaultTransportMode;
     this.onRunQueued = options.onRunQueued;
+    this.sendNotification = options.sendNotification;
   }
 
   get running(): boolean {
@@ -112,7 +123,7 @@ export class RoutineSchedulerService {
     await this.tickPass;
   }
 
-  async reconcileExecutions(): Promise<number> {
+  async reconcileExecutions(at = new Date()): Promise<number> {
     const executions = await this.routineStore.listExecutions({ limit: 500 });
     let reconciled = 0;
     for (const execution of executions) {
@@ -131,10 +142,77 @@ export class RoutineSchedulerService {
         status: run.status === 'cancel_requested' ? 'running' : run.status,
         summary: run.summary,
         error: run.lastError,
+        at,
       });
       reconciled += 1;
     }
     return reconciled;
+  }
+
+  async dispatchNotifications(at = new Date()): Promise<{
+    claimed: number;
+    delivered: number;
+    failed: number;
+    ids: string[];
+  }> {
+    if (!this.sendNotification) {
+      return { claimed: 0, delivered: 0, failed: 0, ids: [] };
+    }
+    const claims = await this.routineStore.claimNotifications({
+      claimerId: this.schedulerId,
+      limit: this.batchSize,
+      staleAfterMs: this.claimStaleMs,
+      at,
+    });
+    const result = {
+      claimed: claims.length,
+      delivered: 0,
+      failed: 0,
+      ids: claims.map((claim) => claim.notification.id),
+    };
+    for (const claim of claims) {
+      try {
+        const priorDelivery = (
+          await this.deliveryStore.listOutbox({
+            runId: claim.notification.runId,
+            workspaceId: claim.notification.runId
+              ? undefined
+              : claim.notification.routine.workspaceId,
+            limit: 500,
+          })
+        ).find(
+          (outbound) =>
+            outbound.status === 'delivered' &&
+            outbound.payload.stage === 'routine-notification' &&
+            outbound.payload.notificationId === claim.notification.id,
+        );
+        if (priorDelivery) {
+          await this.routineStore.markNotificationDelivered(
+            claim.notification.id,
+            at,
+          );
+          result.delivered += 1;
+          continue;
+        }
+        await this.sendNotification(
+          this.notificationThread(claim.notification),
+          claim.notification,
+        );
+        await this.routineStore.markNotificationDelivered(
+          claim.notification.id,
+          at,
+        );
+        result.delivered += 1;
+      } catch (error) {
+        await this.routineStore.retryNotification(
+          claim.notification.id,
+          error instanceof Error ? error.message : String(error),
+          { at },
+        );
+        result.failed += 1;
+      }
+    }
+    return result;
   }
 
   async tick(
@@ -153,7 +231,8 @@ export class RoutineSchedulerService {
     options: RoutineSchedulerTickOptions,
   ): Promise<RoutineTickResult> {
     const at = options.at ?? new Date();
-    const reconciledBefore = await this.reconcileExecutions();
+    const reconciledBefore = await this.reconcileExecutions(at);
+    const notificationsBefore = await this.dispatchNotifications(at);
     const staged =
       options.stageDue === false
         ? []
@@ -171,8 +250,12 @@ export class RoutineSchedulerService {
       queued: 0,
       failed: 0,
       reconciled: reconciledBefore,
+      notificationsClaimed: notificationsBefore.claimed,
+      notificationsDelivered: notificationsBefore.delivered,
+      notificationsFailed: notificationsBefore.failed,
       executionIds: claims.map((claim) => claim.execution.id),
       runIds: [],
+      notificationIds: [...notificationsBefore.ids],
     };
     for (const claim of claims) {
       try {
@@ -188,7 +271,12 @@ export class RoutineSchedulerService {
         );
       }
     }
-    result.reconciled += await this.reconcileExecutions();
+    result.reconciled += await this.reconcileExecutions(at);
+    const notificationsAfter = await this.dispatchNotifications(at);
+    result.notificationsClaimed += notificationsAfter.claimed;
+    result.notificationsDelivered += notificationsAfter.delivered;
+    result.notificationsFailed += notificationsAfter.failed;
+    result.notificationIds.push(...notificationsAfter.ids);
     this._lastTickAt = result.at;
     this._lastTickResult = structuredClone(result);
     this._tickCount += 1;
@@ -202,6 +290,31 @@ export class RoutineSchedulerService {
       workspaces.find((item) => item.workspace.id === routine.workspaceId)
         ?.workspace.defaultProjectId || 'opentag'
     );
+  }
+
+  private notificationThread(notification: RoutineNotification): SourceThread {
+    const routine = notification.routine;
+    const destination = routine.destination;
+    return {
+      id:
+        destination.threadId ||
+        `${destination.platform}:${destination.externalId}:routine:${routine.id}`,
+      platform: destination.platform,
+      externalId: destination.externalId,
+      workspaceId: routine.workspaceId,
+      projectId: routine.projectId,
+      channelId: destination.channelId || destination.externalId,
+      rootMessageId: destination.rootMessageId,
+      topicId: destination.topicId,
+      title: destination.title || routine.name,
+      visibility: destination.visibility,
+      metadata: {
+        routineId: routine.id,
+        routineExecutionId: notification.executionId,
+        routineNotificationId: notification.id,
+        routineNotificationKind: notification.kind,
+      },
+    };
   }
 
   private async runInput(
@@ -229,6 +342,9 @@ export class RoutineSchedulerService {
         routineId: routine.id,
         routineExecutionId: claim.execution.id,
         routineTrigger: claim.execution.trigger,
+        routineNotificationMode: routine.notifications.mode,
+        routineFailureThreshold: routine.notifications.failureThreshold,
+        routineRecoveryNotification: routine.notifications.recovery,
       },
     };
     return {

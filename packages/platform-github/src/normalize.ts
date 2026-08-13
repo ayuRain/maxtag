@@ -22,11 +22,11 @@ function userIsBot(user: GitHubUser | undefined, botLogin?: string): boolean {
 }
 
 function mentionsAgent(text: string, botLogin?: string): boolean {
-  const login = normalizedLogin(botLogin) || 'opentag';
+  const login = normalizedLogin(botLogin) || 'maxtag';
   const lower = text.toLowerCase();
   return (
     lower.includes(`@${login}`) ||
-    /^\s*\/opentag(?:\s|$)/iu.test(text)
+    /^\s*\/(?:maxtag|opentag)(?:\s|$)/iu.test(text)
   );
 }
 

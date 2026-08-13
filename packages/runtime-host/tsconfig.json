@@ -15,6 +15,7 @@
     { "path": "../memory" },
     { "path": "../platform-github" },
     { "path": "../platform-lark" },
+    { "path": "../platform-slack" },
     { "path": "../platform-telegram" },
     { "path": "../routines" },
     { "path": "../storage-sqlite" },

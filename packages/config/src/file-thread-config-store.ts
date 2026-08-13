@@ -4,28 +4,37 @@ import path from 'node:path';
 import type {
   AccessBundle,
   AgentIdentity,
+  MemoryApprovalPolicy,
+  MemoryRetentionPolicy,
   Project,
+  MemoryApprovalAction,
+  MemoryScopeKind,
   SourceThread,
   ThreadConfigContext,
   ThreadConfigStore,
+  ToolApprovalPolicy,
   ToolGrant,
   Workspace,
 } from '@opentag/core';
 import type {
   ConfigAuditRecord,
+  ChannelAgentPolicy,
+  ChannelCapabilityMode,
+  ChannelInstructionMode,
   FileConfigState,
   ProjectAgentMode,
   ProjectAgentPolicy,
   ProjectCapabilityMode,
   ProjectMemoryMode,
   ResolvedThreadPolicy,
+  UpsertChannelAgentPolicyInput,
   UpsertProjectAgentPolicyInput,
   UpsertWorkspaceAgentPolicyInput,
   WorkspaceAgentPolicy,
 } from './types.js';
 
 const DEFAULT_INSTRUCTIONS =
-  'You are OpenTag in a shared work thread. Keep progress visible and publish durable artifacts.';
+  'You are MaxTag in a shared work thread. Keep progress visible and publish durable artifacts.';
 
 function now(): string {
   return new Date().toISOString();
@@ -34,6 +43,19 @@ function now(): string {
 function safeKey(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9_.-]/g, '_') || 'general';
 }
+
+function normalizedSkillIds(values: string[] | undefined): string[] {
+  return [
+    ...new Set(
+      (values ?? [])
+        .map((value) => value.trim().toLowerCase())
+        .filter((value) => /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u.test(value)),
+    ),
+  ];
+}
+
+const normalizedAgentIds = normalizedSkillIds;
+const normalizedKnowledgeSourceIds = normalizedSkillIds;
 
 function projectKey(workspaceId: string, value: string): string {
   const prefix = `${workspaceId}:`;
@@ -44,10 +66,18 @@ function policyId(workspaceId: string, projectId: string): string {
   return `${safeKey(workspaceId)}:${safeKey(projectId)}`;
 }
 
+function channelPolicyId(
+  workspaceId: string,
+  platform: string,
+  channelId: string,
+): string {
+  return `${safeKey(workspaceId)}:${safeKey(platform)}:${safeKey(channelId)}`;
+}
+
 function defaultIdentity(): AgentIdentity {
   return {
     id: 'opentag',
-    displayName: 'OpenTag',
+    displayName: 'MaxTag',
     description: 'Open agent for shared work threads.',
     instructions: DEFAULT_INSTRUCTIONS,
     defaultExecutorId: 'codex',
@@ -84,8 +114,16 @@ function createDefaultState(input?: {
       {
         workspace,
         identity,
+        skillIds: [],
+        agentIds: [],
+        knowledgeSourceIds: [],
         grants: [],
         networkPolicy: defaultNetworkPolicy(),
+        budgetPolicy: { mode: 'disabled' },
+        defaultChannelBudgetPolicy: { mode: 'disabled' },
+        memoryApprovalPolicy: { mode: 'disabled' },
+        memoryRetentionPolicy: { mode: 'keep' },
+        toolApprovalPolicy: { mode: 'require_approval', risks: ['write'] },
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -95,18 +133,27 @@ function createDefaultState(input?: {
         id: policyId(workspace.id, projectId),
         workspaceId: workspace.id,
         projectId,
-        name: projectId === 'opentag' ? 'OpenTag' : projectId,
+        name: projectId === 'opentag' ? 'MaxTag' : projectId,
         description: 'Default project for this workspace bot.',
         identity: { ...identity },
         agentMode: 'inherit',
         capabilityMode: 'inherit',
+        skillIds: [],
+        agentIds: [],
+        knowledgeSourceIds: [],
         grants: [],
         networkPolicy: defaultNetworkPolicy(),
         memoryMode: 'workspace',
+        budgetPolicy: { mode: 'inherit' },
+        defaultChannelBudgetPolicy: { mode: 'inherit' },
+        memoryApprovalPolicy: { mode: 'inherit' },
+        memoryRetentionPolicy: { mode: 'inherit' },
+        toolApprovalPolicy: { mode: 'inherit' },
         createdAt: timestamp,
         updatedAt: timestamp,
       },
     ],
+    channels: [],
     audit: [],
   };
 }
@@ -122,8 +169,46 @@ function cloneGrant(grant: ToolGrant): ToolGrant {
   };
 }
 
-function cloneWorkspacePolicy(policy: WorkspaceAgentPolicy): WorkspaceAgentPolicy {
+function cloneBudgetPolicy<T extends { budgetPolicy?: WorkspaceAgentPolicy['budgetPolicy'] }>(
+  value: T,
+): T {
   return {
+    ...value,
+    budgetPolicy: value.budgetPolicy ? { ...value.budgetPolicy } : undefined,
+  };
+}
+
+function cloneMemoryApprovalPolicy(
+  policy: MemoryApprovalPolicy | undefined,
+): MemoryApprovalPolicy | undefined {
+  return policy
+    ? {
+        ...policy,
+        scopes: policy.scopes ? [...policy.scopes] : undefined,
+        actions: policy.actions ? [...policy.actions] : undefined,
+      }
+    : undefined;
+}
+
+function cloneMemoryRetentionPolicy(
+  policy: MemoryRetentionPolicy | undefined,
+): MemoryRetentionPolicy | undefined {
+  return policy ? { ...policy } : undefined;
+}
+
+function cloneToolApprovalPolicy(
+  policy: ToolApprovalPolicy | undefined,
+): ToolApprovalPolicy | undefined {
+  return policy
+    ? {
+        ...policy,
+        risks: policy.risks ? [...policy.risks] : undefined,
+      }
+    : undefined;
+}
+
+function cloneWorkspacePolicy(policy: WorkspaceAgentPolicy): WorkspaceAgentPolicy {
+  const cloned = cloneBudgetPolicy({
     ...policy,
     workspace: {
       ...policy.workspace,
@@ -135,27 +220,79 @@ function cloneWorkspacePolicy(policy: WorkspaceAgentPolicy): WorkspaceAgentPolic
         : undefined,
     },
     identity: cloneIdentity(policy.identity),
+    skillIds: normalizedSkillIds(policy.skillIds),
+    agentIds: normalizedAgentIds(policy.agentIds),
+    knowledgeSourceIds: normalizedKnowledgeSourceIds(policy.knowledgeSourceIds),
     grants: policy.grants.map(cloneGrant),
     networkPolicy: {
       ...policy.networkPolicy,
       allowedHosts: [...policy.networkPolicy.allowedHosts],
     },
+    memoryApprovalPolicy: cloneMemoryApprovalPolicy(
+      policy.memoryApprovalPolicy,
+    ),
+    memoryRetentionPolicy: cloneMemoryRetentionPolicy(
+      policy.memoryRetentionPolicy,
+    ),
+    toolApprovalPolicy: cloneToolApprovalPolicy(policy.toolApprovalPolicy),
+  });
+  return {
+    ...cloned,
+    defaultChannelBudgetPolicy: policy.defaultChannelBudgetPolicy
+      ? { ...policy.defaultChannelBudgetPolicy }
+      : undefined,
   };
 }
 
 function cloneProjectPolicy(policy: ProjectAgentPolicy): ProjectAgentPolicy {
-  return {
+  const cloned = cloneBudgetPolicy({
     ...policy,
     identity: cloneIdentity(policy.identity),
     agentMode: policy.agentMode ?? 'custom',
     capabilityMode: policy.capabilityMode ?? 'custom',
+    skillIds: normalizedSkillIds(policy.skillIds),
+    agentIds: normalizedAgentIds(policy.agentIds),
+    knowledgeSourceIds: normalizedKnowledgeSourceIds(policy.knowledgeSourceIds),
     grants: policy.grants.map(cloneGrant),
     networkPolicy: {
       ...policy.networkPolicy,
       allowedHosts: [...policy.networkPolicy.allowedHosts],
     },
     memoryMode: policy.memoryMode ?? 'workspace',
+    memoryApprovalPolicy: cloneMemoryApprovalPolicy(
+      policy.memoryApprovalPolicy,
+    ),
+    memoryRetentionPolicy: cloneMemoryRetentionPolicy(
+      policy.memoryRetentionPolicy,
+    ),
+    toolApprovalPolicy: cloneToolApprovalPolicy(policy.toolApprovalPolicy),
+  });
+  return {
+    ...cloned,
+    defaultChannelBudgetPolicy: policy.defaultChannelBudgetPolicy
+      ? { ...policy.defaultChannelBudgetPolicy }
+      : undefined,
   };
+}
+
+function cloneChannelPolicy(policy: ChannelAgentPolicy): ChannelAgentPolicy {
+  return cloneBudgetPolicy({
+    ...policy,
+    instructionMode: policy.instructionMode ?? 'inherit',
+    capabilityMode: policy.capabilityMode ?? 'inherit',
+    skillIds: normalizedSkillIds(policy.skillIds),
+    agentIds: normalizedAgentIds(policy.agentIds),
+    knowledgeSourceIds: normalizedKnowledgeSourceIds(policy.knowledgeSourceIds),
+    grants: (policy.grants ?? []).map(cloneGrant),
+    networkPolicy: {
+      ...(policy.networkPolicy ?? defaultNetworkPolicy()),
+      allowedHosts: [...(policy.networkPolicy?.allowedHosts ?? [])],
+    },
+    memoryApprovalPolicy: cloneMemoryApprovalPolicy(
+      policy.memoryApprovalPolicy,
+    ),
+    toolApprovalPolicy: cloneToolApprovalPolicy(policy.toolApprovalPolicy),
+  });
 }
 
 function memoryGrants(input: {
@@ -190,6 +327,13 @@ function memoryGrants(input: {
             label: 'Project memory',
             constraints: { permissions: ['read', 'write'] },
           },
+          {
+            id: `memory:channel:${input.thread.platform}:${input.thread.channelId || input.thread.externalId}`,
+            kind: 'memory',
+            scope: 'channel' as const,
+            label: 'Channel memory',
+            constraints: { permissions: ['read', 'write'] },
+          },
         ]
       : []),
     {
@@ -203,10 +347,184 @@ function memoryGrants(input: {
   return grants;
 }
 
+function resolvedBudgetPolicy(input: {
+  workspace: WorkspaceAgentPolicy;
+  project?: ProjectAgentPolicy;
+  channel?: ChannelAgentPolicy;
+}): WorkspaceAgentPolicy['budgetPolicy'] {
+  const channelPolicy = input.channel?.budgetPolicy;
+  if (channelPolicy?.mode === 'custom') {
+    return { ...channelPolicy, scope: channelPolicy.scope ?? 'channel' };
+  }
+  if (channelPolicy?.mode === 'disabled') return { mode: 'disabled' };
+  const projectPolicy = input.project?.budgetPolicy;
+  if (projectPolicy?.mode === 'custom') {
+    return { ...projectPolicy, scope: projectPolicy.scope ?? 'project' };
+  }
+  if (projectPolicy?.mode === 'disabled') return { mode: 'disabled' };
+  return input.workspace.budgetPolicy
+    ? {
+        ...input.workspace.budgetPolicy,
+        scope: input.workspace.budgetPolicy.scope ?? 'workspace',
+      }
+    : { mode: 'disabled' };
+}
+
+function resolvedBudgetPolicies(input: {
+  workspace: WorkspaceAgentPolicy;
+  project?: ProjectAgentPolicy;
+  channel?: ChannelAgentPolicy;
+}): NonNullable<AccessBundle['budgetPolicies']> {
+  const policies: NonNullable<AccessBundle['budgetPolicies']> = [];
+  if (input.workspace.budgetPolicy?.mode === 'custom') {
+    policies.push({ ...input.workspace.budgetPolicy, scope: 'workspace' });
+  }
+  if (input.project?.budgetPolicy?.mode === 'custom') {
+    policies.push({ ...input.project.budgetPolicy, scope: 'project' });
+  }
+  if (input.channel?.budgetPolicy?.mode === 'custom') {
+    policies.push({ ...input.channel.budgetPolicy, scope: 'channel' });
+  } else if (input.channel?.budgetPolicy?.mode !== 'disabled') {
+    const projectDefault = input.project?.defaultChannelBudgetPolicy;
+    const workspaceDefault = input.workspace.defaultChannelBudgetPolicy;
+    if (projectDefault?.mode === 'custom') {
+      policies.push({ ...projectDefault, scope: 'channel' });
+    } else if (
+      projectDefault?.mode !== 'disabled' &&
+      workspaceDefault?.mode === 'custom'
+    ) {
+      policies.push({ ...workspaceDefault, scope: 'channel' });
+    }
+  }
+  return policies;
+}
+
+function resolvedMemoryApprovalPolicy(input: {
+  workspace: WorkspaceAgentPolicy;
+  project?: ProjectAgentPolicy;
+  channel?: ChannelAgentPolicy;
+}): MemoryApprovalPolicy {
+  const channelPolicy = input.channel?.memoryApprovalPolicy;
+  if (channelPolicy?.mode && channelPolicy.mode !== 'inherit') {
+    return normalizeMemoryApprovalPolicy(channelPolicy, channelPolicy.mode);
+  }
+  const projectPolicy = input.project?.memoryApprovalPolicy;
+  if (projectPolicy?.mode && projectPolicy.mode !== 'inherit') {
+    return normalizeMemoryApprovalPolicy(projectPolicy, projectPolicy.mode);
+  }
+  return normalizeMemoryApprovalPolicy(
+    input.workspace.memoryApprovalPolicy,
+    input.workspace.memoryApprovalPolicy?.mode ?? 'disabled',
+  );
+}
+
+function normalizeToolApprovalPolicy(
+  policy: ToolApprovalPolicy | undefined,
+  mode: NonNullable<ToolApprovalPolicy['mode']>,
+): ToolApprovalPolicy {
+  if (mode === 'disabled' || mode === 'inherit') return { mode };
+  const risks = policy?.risks?.filter((risk) => risk === 'write') ?? [];
+  return { mode: 'require_approval', risks: risks.length ? risks : ['write'] };
+}
+
+function resolvedToolApprovalPolicy(input: {
+  workspace: WorkspaceAgentPolicy;
+  project?: ProjectAgentPolicy;
+  channel?: ChannelAgentPolicy;
+}): ToolApprovalPolicy {
+  const channelPolicy = input.channel?.toolApprovalPolicy;
+  if (channelPolicy?.mode && channelPolicy.mode !== 'inherit') {
+    return normalizeToolApprovalPolicy(channelPolicy, channelPolicy.mode);
+  }
+  const projectPolicy = input.project?.toolApprovalPolicy;
+  if (projectPolicy?.mode && projectPolicy.mode !== 'inherit') {
+    return normalizeToolApprovalPolicy(projectPolicy, projectPolicy.mode);
+  }
+  return normalizeToolApprovalPolicy(
+    input.workspace.toolApprovalPolicy,
+    input.workspace.toolApprovalPolicy?.mode ?? 'require_approval',
+  );
+}
+
+function retentionDays(
+  policy: MemoryRetentionPolicy | undefined,
+): number | undefined {
+  if (policy?.mode !== 'custom') return undefined;
+  const days = Math.floor(policy.days ?? 0);
+  return days >= 1 && days <= 3_650 ? days : undefined;
+}
+
+function resolvedMemoryRetentionDays(input: {
+  workspace: WorkspaceAgentPolicy;
+  project?: ProjectAgentPolicy;
+}): NonNullable<AccessBundle['memoryRetentionDays']> {
+  const workspaceDays = retentionDays(input.workspace.memoryRetentionPolicy);
+  const projectPolicy = input.project?.memoryRetentionPolicy;
+  const projectDays =
+    projectPolicy?.mode === 'keep'
+      ? undefined
+      : retentionDays(projectPolicy) ?? workspaceDays;
+  return {
+    ...(workspaceDays ? { workspace: workspaceDays } : {}),
+    ...(projectDays
+      ? {
+          project: projectDays,
+          channel: projectDays,
+          thread: projectDays,
+        }
+      : {}),
+  };
+}
+
+function normalizeMemoryApprovalPolicy(
+  policy: MemoryApprovalPolicy | undefined,
+  mode: NonNullable<MemoryApprovalPolicy['mode']>,
+): MemoryApprovalPolicy {
+  if (mode === 'disabled' || mode === 'inherit') return { mode };
+  return {
+    mode: 'require_approval',
+    scopes: normalizeMemoryApprovalScopes(policy?.scopes),
+    actions: normalizeMemoryApprovalActions(policy?.actions),
+  };
+}
+
+function normalizeMemoryApprovalScopes(
+  scopes: MemoryScopeKind[] | undefined,
+): MemoryScopeKind[] {
+  const values = scopes?.filter((scope) => scope !== 'global') ?? [];
+  const defaults: MemoryScopeKind[] = ['workspace', 'project'];
+  return [...new Set(values.length ? values : defaults)];
+}
+
+function normalizeMemoryApprovalActions(
+  actions: MemoryApprovalAction[] | undefined,
+): MemoryApprovalAction[] {
+  const values = actions ?? [];
+  const defaults: MemoryApprovalAction[] = ['remember', 'forget'];
+  return [...new Set(values.length ? values : defaults)];
+}
+
 function dedupeGrants(grants: ToolGrant[]): ToolGrant[] {
   const deduped = new Map<string, ToolGrant>();
   for (const grant of grants) deduped.set(grant.id, cloneGrant(grant));
   return [...deduped.values()];
+}
+
+function extendedNetworkPolicy(
+  base: AccessBundle['networkPolicy'],
+  channel: AccessBundle['networkPolicy'],
+): AccessBundle['networkPolicy'] {
+  const allowedHosts = [...new Set([
+    ...base.allowedHosts,
+    ...channel.allowedHosts,
+  ])];
+  const mode =
+    base.mode === 'allow-all' || channel.mode === 'allow-all'
+      ? 'allow-all'
+      : allowedHosts.length
+        ? 'restricted'
+        : 'deny-by-default';
+  return { mode, allowedHosts };
 }
 
 export class FileThreadConfigStore implements ThreadConfigStore {
@@ -236,6 +554,9 @@ export class FileThreadConfigStore implements ThreadConfigStore {
         projects: (parsed.projects ?? this.fallback.projects).map(
           cloneProjectPolicy,
         ),
+        channels: (parsed.channels ?? this.fallback.channels).map(
+          cloneChannelPolicy,
+        ),
         audit: parsed.audit ?? [],
       };
     } catch (error) {
@@ -244,6 +565,7 @@ export class FileThreadConfigStore implements ThreadConfigStore {
           version: 1,
           workspaces: this.fallback.workspaces.map(cloneWorkspacePolicy),
           projects: this.fallback.projects.map(cloneProjectPolicy),
+          channels: this.fallback.channels.map(cloneChannelPolicy),
           audit: [],
         };
       }
@@ -296,6 +618,24 @@ export class FileThreadConfigStore implements ThreadConfigStore {
     const key = projectKey(workspaceId, projectId);
     return state.projects.find(
       (item) => item.workspaceId === workspaceId && item.projectId === key,
+    );
+  }
+
+  private channelPolicyFor(
+    state: FileConfigState,
+    thread: SourceThread,
+    workspaceId: string,
+    projectId: string,
+  ): ChannelAgentPolicy | undefined {
+    if (thread.visibility === 'direct') return undefined;
+    const channelId = thread.channelId || thread.externalId;
+    const project = projectKey(workspaceId, projectId);
+    return state.channels.find(
+      (item) =>
+        item.workspaceId === workspaceId &&
+        item.projectId === project &&
+        item.platform === thread.platform &&
+        item.channelId === channelId,
     );
   }
 
@@ -367,9 +707,19 @@ export class FileThreadConfigStore implements ThreadConfigStore {
     const workspacePolicy = this.workspacePolicyFor(state, workspace.id);
     const key = this.projectKeyForThread(thread, workspace);
     const policy = this.projectPolicyFor(state, workspace.id, key);
-    return cloneIdentity(
+    const channel = this.channelPolicyFor(state, thread, workspace.id, key);
+    const base = cloneIdentity(
       policy?.agentMode === 'custom' ? policy.identity : workspacePolicy.identity,
     );
+    const instructions = channel?.instructions?.trim();
+    if (!instructions || channel?.instructionMode === 'inherit') return base;
+    return {
+      ...base,
+      instructions:
+        channel?.instructionMode === 'replace'
+          ? instructions
+          : `${base.instructions.trim()}\n\nChannel instructions:\n${instructions}`,
+    };
   }
 
   async getAccessBundle(
@@ -381,18 +731,54 @@ export class FileThreadConfigStore implements ThreadConfigStore {
     const state = await this.readState();
     const workspacePolicy = this.workspacePolicyFor(state, workspace.id);
     const policy = this.projectPolicyFor(state, workspace.id, project.key);
+    const channel = this.channelPolicyFor(
+      state,
+      thread,
+      workspace.id,
+      project.key,
+    );
     const inheritsCapabilities = !policy || policy.capabilityMode === 'inherit';
-    const capabilityGrants = inheritsCapabilities
+    const projectGrants = inheritsCapabilities
       ? workspacePolicy.grants
       : policy.grants;
-    const networkPolicy = inheritsCapabilities
+    const projectNetworkPolicy = inheritsCapabilities
       ? workspacePolicy.networkPolicy
       : policy.networkPolicy;
+    const capabilityGrants =
+      channel?.capabilityMode === 'custom'
+        ? channel.grants
+        : channel?.capabilityMode === 'extend'
+          ? [...projectGrants, ...channel.grants]
+          : projectGrants;
+    const networkPolicy =
+      channel?.capabilityMode === 'custom'
+        ? channel.networkPolicy
+        : channel?.capabilityMode === 'extend'
+          ? extendedNetworkPolicy(
+              projectNetworkPolicy,
+              channel.networkPolicy,
+            )
+          : projectNetworkPolicy;
     return {
       id: `access:${thread.id}`,
       threadId: thread.id,
       workspaceId: workspace.id,
       projectId: project.id,
+      skillIds: normalizedSkillIds([
+        ...workspacePolicy.skillIds,
+        ...(policy?.skillIds ?? []),
+        ...(channel?.skillIds ?? []),
+      ]),
+      agentIds: normalizedAgentIds([
+        ...workspacePolicy.agentIds,
+        ...(policy?.agentIds ?? []),
+        ...(channel?.agentIds ?? []),
+      ]),
+      knowledgeSourceIds: normalizedKnowledgeSourceIds([
+        ...workspacePolicy.knowledgeSourceIds,
+        ...(policy?.knowledgeSourceIds ?? []),
+        ...(channel?.knowledgeSourceIds ?? []),
+      ]),
       grants: dedupeGrants([
         ...memoryGrants({
           thread,
@@ -406,6 +792,30 @@ export class FileThreadConfigStore implements ThreadConfigStore {
         ...networkPolicy,
         allowedHosts: [...networkPolicy.allowedHosts],
       },
+      budgetPolicy: resolvedBudgetPolicy({
+        workspace: workspacePolicy,
+        project: policy,
+        channel,
+      }),
+      budgetPolicies: resolvedBudgetPolicies({
+        workspace: workspacePolicy,
+        project: policy,
+        channel,
+      }),
+      memoryApprovalPolicy: resolvedMemoryApprovalPolicy({
+        workspace: workspacePolicy,
+        project: policy,
+        channel,
+      }),
+      memoryRetentionDays: resolvedMemoryRetentionDays({
+        workspace: workspacePolicy,
+        project: policy,
+      }),
+      toolApprovalPolicy: resolvedToolApprovalPolicy({
+        workspace: workspacePolicy,
+        project: policy,
+        channel,
+      }),
     };
   }
 
@@ -421,6 +831,12 @@ export class FileThreadConfigStore implements ThreadConfigStore {
       project,
       identity,
       access,
+      channelPolicy: this.channelPolicyFor(
+        await this.readState(),
+        thread,
+        workspace.id,
+        project.key,
+      ),
       configured: Boolean(project.metadata?.configured),
     };
   }
@@ -436,6 +852,25 @@ export class FileThreadConfigStore implements ThreadConfigStore {
       .filter((item) => !workspaceId || item.workspaceId === workspaceId)
       .sort((a, b) => a.name.localeCompare(b.name))
       .map(cloneProjectPolicy);
+  }
+
+  async listChannelPolicies(
+    workspaceId?: string,
+    projectId?: string,
+  ): Promise<ChannelAgentPolicy[]> {
+    const state = await this.readState();
+    const project = projectId && workspaceId
+      ? projectKey(workspaceId, projectId)
+      : undefined;
+    return state.channels
+      .filter((item) => !workspaceId || item.workspaceId === workspaceId)
+      .filter((item) => !project || item.projectId === project)
+      .sort((a, b) =>
+        `${a.platform}:${a.channelId}`.localeCompare(
+          `${b.platform}:${b.channelId}`,
+        ),
+      )
+      .map(cloneChannelPolicy);
   }
 
   async upsertWorkspacePolicy(
@@ -468,6 +903,11 @@ export class FileThreadConfigStore implements ThreadConfigStore {
             input.identity?.defaultExecutorId?.trim() ||
             existing.identity.defaultExecutorId,
         },
+        skillIds: normalizedSkillIds(input.skillIds ?? existing.skillIds),
+        agentIds: normalizedAgentIds(input.agentIds ?? existing.agentIds),
+        knowledgeSourceIds: normalizedKnowledgeSourceIds(
+          input.knowledgeSourceIds ?? existing.knowledgeSourceIds,
+        ),
         grants: (input.grants ?? existing.grants).map(cloneGrant),
         networkPolicy: {
           mode: input.networkPolicy?.mode ?? networkBase.mode,
@@ -475,6 +915,33 @@ export class FileThreadConfigStore implements ThreadConfigStore {
             ...(input.networkPolicy?.allowedHosts ?? networkBase.allowedHosts),
           ],
         },
+        budgetPolicy:
+          input.budgetPolicy === undefined
+            ? existing.budgetPolicy
+            : { ...input.budgetPolicy },
+        defaultChannelBudgetPolicy:
+          input.defaultChannelBudgetPolicy === undefined
+            ? existing.defaultChannelBudgetPolicy ?? { mode: 'disabled' }
+            : { ...input.defaultChannelBudgetPolicy },
+        memoryApprovalPolicy:
+          input.memoryApprovalPolicy === undefined
+            ? cloneMemoryApprovalPolicy(existing.memoryApprovalPolicy)
+            : cloneMemoryApprovalPolicy(input.memoryApprovalPolicy),
+        memoryRetentionPolicy:
+          input.memoryRetentionPolicy === undefined
+            ? cloneMemoryRetentionPolicy(
+                existing.memoryRetentionPolicy ?? { mode: 'keep' },
+              )
+            : cloneMemoryRetentionPolicy(input.memoryRetentionPolicy),
+        toolApprovalPolicy:
+          input.toolApprovalPolicy === undefined
+            ? cloneToolApprovalPolicy(
+                existing.toolApprovalPolicy ?? {
+                  mode: 'require_approval',
+                  risks: ['write'],
+                },
+              )
+            : cloneToolApprovalPolicy(input.toolApprovalPolicy),
         createdAt: existing.createdAt,
         updatedAt: timestamp,
       };
@@ -539,6 +1006,11 @@ export class FileThreadConfigStore implements ThreadConfigStore {
           (input.grants || input.networkPolicy
             ? 'custom'
             : ('inherit' as ProjectCapabilityMode)),
+        skillIds: normalizedSkillIds(input.skillIds ?? existing?.skillIds),
+        agentIds: normalizedAgentIds(input.agentIds ?? existing?.agentIds),
+        knowledgeSourceIds: normalizedKnowledgeSourceIds(
+          input.knowledgeSourceIds ?? existing?.knowledgeSourceIds,
+        ),
         grants: (input.grants ?? existing?.grants ?? []).map(cloneGrant),
         networkPolicy: {
           mode: input.networkPolicy?.mode ?? networkBase.mode,
@@ -547,6 +1019,32 @@ export class FileThreadConfigStore implements ThreadConfigStore {
           ],
         },
         memoryMode: input.memoryMode ?? existing?.memoryMode ?? 'workspace',
+        budgetPolicy:
+          input.budgetPolicy === undefined
+            ? existing?.budgetPolicy ?? { mode: 'inherit' }
+            : { ...input.budgetPolicy },
+        defaultChannelBudgetPolicy:
+          input.defaultChannelBudgetPolicy === undefined
+            ? existing?.defaultChannelBudgetPolicy ?? { mode: 'inherit' }
+            : { ...input.defaultChannelBudgetPolicy },
+        memoryApprovalPolicy:
+          input.memoryApprovalPolicy === undefined
+            ? cloneMemoryApprovalPolicy(
+                existing?.memoryApprovalPolicy ?? { mode: 'inherit' },
+              )
+            : cloneMemoryApprovalPolicy(input.memoryApprovalPolicy),
+        memoryRetentionPolicy:
+          input.memoryRetentionPolicy === undefined
+            ? cloneMemoryRetentionPolicy(
+                existing?.memoryRetentionPolicy ?? { mode: 'inherit' },
+              )
+            : cloneMemoryRetentionPolicy(input.memoryRetentionPolicy),
+        toolApprovalPolicy:
+          input.toolApprovalPolicy === undefined
+            ? cloneToolApprovalPolicy(
+                existing?.toolApprovalPolicy ?? { mode: 'inherit' },
+              )
+            : cloneToolApprovalPolicy(input.toolApprovalPolicy),
         createdAt: existing?.createdAt ?? timestamp,
         updatedAt: timestamp,
       };
@@ -570,6 +1068,147 @@ export class FileThreadConfigStore implements ThreadConfigStore {
     });
   }
 
+  async upsertChannelPolicy(
+    input: UpsertChannelAgentPolicyInput,
+  ): Promise<ChannelAgentPolicy> {
+    return this.mutate((state) => {
+      const workspaceId = input.workspaceId.trim();
+      const projectId = projectKey(workspaceId, input.projectId);
+      const platform = input.platform.trim();
+      const channelId = input.channelId.trim();
+      if (!workspaceId || !platform || !channelId) {
+        throw new Error('channel_policy_route_required');
+      }
+      if (!this.projectPolicyFor(state, workspaceId, projectId)) {
+        throw new Error('channel_policy_project_not_found');
+      }
+      const existing = state.channels.find(
+        (item) =>
+          item.workspaceId === workspaceId &&
+          item.projectId === projectId &&
+          item.platform === platform &&
+          item.channelId === channelId,
+      );
+      const timestamp = now();
+      const instructionMode =
+        input.instructionMode ?? existing?.instructionMode ?? 'inherit';
+      const capabilityMode =
+        input.capabilityMode ?? existing?.capabilityMode ?? 'inherit';
+      const policy: ChannelAgentPolicy = {
+        id: channelPolicyId(workspaceId, platform, channelId),
+        workspaceId,
+        projectId,
+        platform,
+        channelId,
+        title:
+          input.title === undefined
+            ? existing?.title
+            : input.title.trim() || undefined,
+        instructionMode,
+        instructions:
+          instructionMode === 'inherit'
+            ? undefined
+            : input.instructions === undefined
+              ? existing?.instructions
+              : input.instructions.trim() || undefined,
+        capabilityMode,
+        skillIds: normalizedSkillIds(input.skillIds ?? existing?.skillIds),
+        agentIds: normalizedAgentIds(input.agentIds ?? existing?.agentIds),
+        knowledgeSourceIds: normalizedKnowledgeSourceIds(
+          input.knowledgeSourceIds ?? existing?.knowledgeSourceIds,
+        ),
+        grants:
+          capabilityMode === 'inherit'
+            ? []
+            : (input.grants ?? existing?.grants ?? []).map(cloneGrant),
+        networkPolicy:
+          capabilityMode === 'inherit'
+            ? defaultNetworkPolicy()
+            : {
+                mode:
+                  input.networkPolicy?.mode ??
+                  existing?.networkPolicy.mode ??
+                  'deny-by-default',
+                allowedHosts: [
+                  ...(input.networkPolicy?.allowedHosts ??
+                    existing?.networkPolicy.allowedHosts ??
+                    []),
+                ],
+              },
+        budgetPolicy:
+          input.budgetPolicy === undefined
+            ? existing?.budgetPolicy ?? { mode: 'inherit' }
+            : { ...input.budgetPolicy },
+        memoryApprovalPolicy:
+          input.memoryApprovalPolicy === undefined
+            ? cloneMemoryApprovalPolicy(
+                existing?.memoryApprovalPolicy ?? { mode: 'inherit' },
+              )
+            : cloneMemoryApprovalPolicy(input.memoryApprovalPolicy),
+        toolApprovalPolicy:
+          input.toolApprovalPolicy === undefined
+            ? cloneToolApprovalPolicy(
+                existing?.toolApprovalPolicy ?? { mode: 'inherit' },
+              )
+            : cloneToolApprovalPolicy(input.toolApprovalPolicy),
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+      if (existing) {
+        state.channels.splice(state.channels.indexOf(existing), 1, policy);
+      } else {
+        state.channels.push(policy);
+      }
+      state.audit.push({
+        id: randomUUID(),
+        action: existing ? 'channel.updated' : 'channel.created',
+        actor: input.actor?.trim() || 'admin',
+        workspaceId,
+        projectId,
+        channelId,
+        platform,
+        at: timestamp,
+        snapshot: cloneChannelPolicy(policy),
+      });
+      if (state.audit.length > 500) state.audit.splice(0, state.audit.length - 500);
+      return cloneChannelPolicy(policy);
+    });
+  }
+
+  async removeChannelPolicy(input: {
+    workspaceId: string;
+    projectId: string;
+    platform: string;
+    channelId: string;
+    actor?: string;
+  }): Promise<ChannelAgentPolicy | undefined> {
+    return this.mutate((state) => {
+      const projectId = projectKey(input.workspaceId, input.projectId);
+      const existing = state.channels.find(
+        (item) =>
+          item.workspaceId === input.workspaceId &&
+          item.projectId === projectId &&
+          item.platform === input.platform &&
+          item.channelId === input.channelId,
+      );
+      if (!existing) return undefined;
+      state.channels.splice(state.channels.indexOf(existing), 1);
+      state.audit.push({
+        id: randomUUID(),
+        action: 'channel.removed',
+        actor: input.actor?.trim() || 'admin',
+        workspaceId: input.workspaceId,
+        projectId,
+        channelId: input.channelId,
+        platform: input.platform,
+        at: now(),
+        snapshot: cloneChannelPolicy(existing),
+      });
+      if (state.audit.length > 500) state.audit.splice(0, state.audit.length - 500);
+      return cloneChannelPolicy(existing);
+    });
+  }
+
   async listAudit(
     limit = 50,
     workspaceId?: string,
@@ -584,7 +1223,9 @@ export class FileThreadConfigStore implements ThreadConfigStore {
         snapshot:
           'workspace' in item.snapshot
             ? cloneWorkspacePolicy(item.snapshot)
-            : cloneProjectPolicy(item.snapshot),
+            : 'channelId' in item.snapshot
+              ? cloneChannelPolicy(item.snapshot)
+              : cloneProjectPolicy(item.snapshot),
       }));
   }
 }
