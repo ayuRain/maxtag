@@ -78,21 +78,115 @@ const state = {
 };
 
 const viewCopy = {
-  overview: { eyebrow: 'Workspace', title: 'Overview' },
-  projects: { eyebrow: 'Routing and access', title: 'Projects' },
-  skills: { eyebrow: 'Reusable procedures', title: 'Skills' },
-  sources: { eyebrow: 'Governed context', title: 'Sources' },
-  agents: { eyebrow: 'Bounded specialists', title: 'Agents' },
-  spend: { eyebrow: 'Usage and limits', title: 'Spend' },
-  access: { eyebrow: 'Identity and roles', title: 'Access' },
-  connectors: { eyebrow: 'Multi-client routing', title: 'Connectors' },
-  assistant: { eyebrow: 'Project conversations', title: 'Assistant' },
-  routines: { eyebrow: 'Proactive work', title: 'Routines' },
-  workflows: { eyebrow: 'Event-driven work', title: 'Workflows' },
-  activity: { eyebrow: 'Runs and delivery', title: 'Activity' },
-  audit: { eyebrow: 'Organization evidence', title: 'Audit' },
-  memory: { eyebrow: 'Scoped context', title: 'Memory' },
+  overview: { eyebrow: '工作空间', title: '总览' },
+  projects: { eyebrow: '路由与权限', title: '项目' },
+  skills: { eyebrow: '可复用能力', title: '技能' },
+  sources: { eyebrow: '受控上下文', title: '知识源' },
+  agents: { eyebrow: '有边界的专家', title: '子智能体' },
+  spend: { eyebrow: '用量与限制', title: '预算' },
+  access: { eyebrow: '身份与角色', title: '成员权限' },
+  connectors: { eyebrow: '多端路由', title: '连接器' },
+  assistant: { eyebrow: '项目会话', title: '网页助手' },
+  routines: { eyebrow: '主动执行', title: '定时任务' },
+  workflows: { eyebrow: '事件驱动', title: '工作流' },
+  activity: { eyebrow: '运行与投递', title: '运行记录' },
+  audit: { eyebrow: '组织证据', title: '审计' },
+  memory: { eyebrow: '分域上下文', title: '记忆' },
 };
+
+// Keep the server/API vocabulary stable while presenting a Chinese-first console.
+// Exact-node translation deliberately avoids user-authored text, logs and code.
+const ZH_CN = new Map(Object.entries({
+  'Operator access': '管理员入口', 'Sign in': '登录 MaxTag', 'Access token': '登录令牌',
+  'Continue': '继续', Workspace: '工作空间', Loading: '加载中', Overview: '总览',
+  Projects: '项目', Skills: '技能', Sources: '知识源', Agents: '子智能体',
+  Spend: '预算', Access: '成员权限', Connectors: '连接器', Assistant: '网页助手',
+  Routines: '定时任务', Workflows: '工作流', Activity: '运行记录', Audit: '审计', Memory: '记忆',
+  'Local operator': '本地管理员', 'Owner / installation': '所有者 / 当前安装', Offline: '离线',
+  'Runtime unavailable': '运行时不可用', 'Not synced': '尚未同步', Refresh: '刷新',
+  'Sign out': '退出登录', 'Test agent': '测试智能体', Routing: '路由', Manage: '管理',
+  Surfaces: '接入端', Clients: '客户端', Latest: '最近', Runs: '运行', 'Open log': '查看日志',
+  'Workspace profile': '工作空间配置', 'Workspace agent': '工作空间智能体', Active: '已启用',
+  'Workspace name': '工作空间名称', 'Agent name': '智能体名称', Executor: '执行器',
+  'Default project': '默认项目', Instructions: '指令', 'No unsaved changes': '没有未保存的更改',
+  'Default tools': '默认工具', 'Save workspace': '保存工作空间', 'New project': '新建项目',
+  Project: '项目', Name: '名称', Description: '说明', Status: '状态', Ready: '就绪',
+  Configured: '已配置', Planned: '计划中', Enabled: '已启用', Disabled: '已停用', Unknown: '未知',
+  Save: '保存', Cancel: '取消', Delete: '删除', Create: '创建', Add: '添加', Edit: '编辑',
+  Search: '搜索', Filter: '筛选', Clear: '清除', Close: '关闭', Copy: '复制', Run: '运行',
+  Running: '运行中', Failed: '失败', Completed: '已完成', Queued: '排队中', Pending: '等待中',
+  'Active clients': '已启用客户端', 'Active runs': '正在运行', 'Needs attention': '需要处理',
+  'Multi-client routing': '多端路由', 'Routing and access': '路由与权限',
+  'Project conversations': '项目会话', 'Runs and delivery': '运行与投递',
+  'Usage and limits': '用量与限制', 'Identity and roles': '身份与角色',
+  'Reusable procedures': '可复用能力', 'Governed context': '受控上下文',
+  'Bounded specialists': '有边界的专家', 'Proactive work': '主动执行',
+  'Event-driven work': '事件驱动', 'Organization evidence': '组织证据',
+  'Scoped context': '分域上下文', 'Select a run': '请选择一条运行记录',
+  'No cap': '不限额', 'Operation completed': '操作已完成',
+  'Your operator session expired.': '管理员会话已过期，请重新登录。',
+}));
+
+const ZH_CN_PATTERNS = [
+  [/^(\d+) clients$/, '$1 个客户端'], [/^(\d+) Projects$/, '$1 个项目'],
+  [/^(\d+) bindings$/, '$1 个绑定'], [/^(\d+) active$/, '$1 个运行中'],
+  [/^(\d+) enabled$/, '$1 个已启用'], [/^(\d+) recorded$/, '$1 条记录'],
+  [/^Synced (.+)$/, '同步于 $1'],
+];
+
+function translateText(value) {
+  const raw = String(value || '');
+  const trimmed = raw.trim();
+  if (!trimmed) return raw;
+  let translated = ZH_CN.get(trimmed);
+  if (!translated) {
+    for (const [pattern, replacement] of ZH_CN_PATTERNS) {
+      if (pattern.test(trimmed)) {
+        translated = trimmed.replace(pattern, replacement);
+        break;
+      }
+    }
+  }
+  return translated ? raw.replace(trimmed, translated) : raw;
+}
+
+function translateNode(root) {
+  if (!root) return;
+  const blocked = new Set(['SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA']);
+  const nodes = [];
+  if (root.nodeType === Node.TEXT_NODE) {
+    nodes.push(root);
+  } else {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+  }
+  for (const node of nodes) {
+    if (blocked.has(node.parentElement?.tagName)) continue;
+    const translated = translateText(node.nodeValue);
+    if (translated !== node.nodeValue) node.nodeValue = translated;
+  }
+  if (root.nodeType === Node.ELEMENT_NODE) {
+    for (const elementNode of [root, ...root.querySelectorAll('[placeholder], [title], [aria-label]')]) {
+      for (const attribute of ['placeholder', 'title', 'aria-label']) {
+        if (elementNode.hasAttribute(attribute)) {
+          const original = elementNode.getAttribute(attribute);
+          const translated = translateText(original);
+          if (translated !== original) elementNode.setAttribute(attribute, translated);
+        }
+      }
+    }
+  }
+}
+
+function installChineseInterface() {
+  translateNode(document.body);
+  new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === 'characterData') translateNode(record.target);
+      for (const node of record.addedNodes) translateNode(node);
+    }
+  }).observe(document.body, { childList: true, characterData: true, subtree: true });
+}
 
 let toastTimer;
 let refreshInFlight = false;
@@ -502,6 +596,83 @@ function renderSummary() {
     metric(active, 'Active runs'),
     metric(failures, 'Needs attention'),
   );
+}
+
+const ONBOARDING_DISMISSED_KEY = 'maxtag-onboarding-dismissed-v1';
+
+function onboardingChecks() {
+  const workspace = state.workspace?.workspace;
+  const projects = state.workspace?.projects || [];
+  const executors = state.workspace?.executors || [];
+  const lark = state.capabilities?.larkTransport || {};
+  return [
+    {
+      title: '确认工作空间',
+      description: '工作空间用于隔离成员、预算、知识与运行记录。',
+      complete: Boolean(workspace?.workspace?.id),
+      view: 'projects', action: '检查工作空间',
+    },
+    {
+      title: '创建项目',
+      description: '项目决定智能体指令、执行器和可访问的能力。',
+      complete: projects.length > 0,
+      view: 'projects', action: '配置项目',
+    },
+    {
+      title: '连接飞书应用',
+      description: '由运维写入 Lark App ID / Secret；页面只显示连接状态，不回显密钥。',
+      complete: lark.mode === 'http' && Boolean(lark.hasCredentials),
+      view: 'connectors', action: '查看连接器',
+    },
+    {
+      title: '启用真实执行器',
+      description: '上线前将执行器从 dry-run 切换为可运行状态，并完成一次健康检查。',
+      complete: executors.some((item) => item.status === 'ready' || item.mode === 'local-cli'),
+      view: 'projects', action: '检查执行器',
+    },
+    {
+      title: '绑定飞书群',
+      description: '把群聊路由到指定项目；未绑定的群不会进入智能体。',
+      complete: state.bindings.some((item) => item.platform === 'lark'),
+      view: 'connectors', action: '创建群绑定',
+    },
+    {
+      title: '验证第一条回复',
+      description: '在已绑定群中发送 @MaxTag status，并确认收到完整回复。',
+      complete: state.runs.some((item) => item.platform === 'lark' && item.status === 'completed'),
+      view: 'activity', action: '查看运行记录',
+    },
+  ];
+}
+
+function renderOnboarding() {
+  const panel = $('#onboarding-panel');
+  const reopen = $('#onboarding-reopen');
+  if (!panel || !reopen) return;
+  const dismissed = localStorage.getItem(ONBOARDING_DISMISSED_KEY) === 'true';
+  panel.hidden = dismissed;
+  reopen.hidden = !dismissed;
+  const steps = onboardingChecks();
+  const completed = steps.filter((step) => step.complete).length;
+  const next = steps.find((step) => !step.complete);
+  $('#onboarding-progress-label').textContent = `${completed} / ${steps.length} 已完成`;
+  $('#onboarding-progress-hint').textContent = next ? `下一步：${next.title}` : '接入完成，可以开始使用';
+  $('#onboarding-progress-fill').style.width = `${Math.round((completed / steps.length) * 100)}%`;
+  $('#onboarding-summary').textContent = next
+    ? '按顺序完成配置，预计需要 5–10 分钟。当前安全模式不会向真实飞书群投递消息。'
+    : '第一个飞书群已接入并完成真实回复验证。';
+  $('#onboarding-steps').replaceChildren(...steps.map((step, index) => {
+    const item = element('li', `onboarding-step${step.complete ? ' complete' : step === next ? ' current' : ''}`);
+    const marker = element('span', 'onboarding-step-marker', step.complete ? '✓' : String(index + 1));
+    const copy = element('div', 'onboarding-step-copy');
+    copy.append(element('strong', '', step.title), element('span', '', step.description));
+    const status = element('span', 'onboarding-step-status', step.complete ? '已完成' : step === next ? '当前步骤' : '待完成');
+    item.append(marker, copy, status);
+    return item;
+  }));
+  const action = $('#onboarding-primary-action');
+  action.textContent = next?.action || '打开网页助手';
+  action.dataset.view = next?.view || 'assistant';
 }
 
 function spendMoney(value) {
@@ -7705,6 +7876,7 @@ function renderAll() {
   renderHealth();
   renderWorkspaceHeader();
   renderSummary();
+  renderOnboarding();
   renderOverviewProjects();
   renderSpend();
   renderAudit();
@@ -8225,6 +8397,20 @@ $('#recover-delivery').addEventListener('click', (event) =>
   ),
 );
 
+$('#onboarding-dismiss').addEventListener('click', () => {
+  localStorage.setItem(ONBOARDING_DISMISSED_KEY, 'true');
+  renderOnboarding();
+});
+$('#onboarding-reopen').addEventListener('click', () => {
+  localStorage.removeItem(ONBOARDING_DISMISSED_KEY);
+  renderOnboarding();
+  $('#onboarding-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+$('#onboarding-primary-action').addEventListener('click', (event) => {
+  showView(event.currentTarget.dataset.view || 'projects');
+});
+
+installChineseInterface();
 const initialView = location.hash.slice(1);
 showView(viewCopy[initialView] ? initialView : 'overview', false);
 if (await loadOperatorSession()) await refreshAll();

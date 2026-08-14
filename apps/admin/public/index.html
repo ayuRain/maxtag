@@ -54,6 +54,18 @@
             Projects
             <span class="nav-count" id="project-count">0</span>
           </button>
+          <button class="nav-item" data-view="connectors" type="button">
+            Connectors
+            <span class="nav-count" id="client-count">0</span>
+          </button>
+          <button class="nav-item" data-view="assistant" type="button">
+            Assistant
+            <span class="nav-count" id="assistant-count">0</span>
+          </button>
+          <button class="nav-item" data-view="activity" type="button">
+            Activity
+            <span class="nav-count" id="active-count">0</span>
+          </button>
           <button class="nav-item" data-view="skills" type="button">
             Skills
             <span class="nav-count" id="skill-count">0</span>
@@ -74,14 +86,6 @@
             Access
             <span class="nav-count" id="member-count">0</span>
           </button>
-          <button class="nav-item" data-view="connectors" type="button">
-            Connectors
-            <span class="nav-count" id="client-count">0</span>
-          </button>
-          <button class="nav-item" data-view="assistant" type="button">
-            Assistant
-            <span class="nav-count" id="assistant-count">0</span>
-          </button>
           <button class="nav-item" data-view="routines" type="button">
             Routines
             <span class="nav-count" id="routine-count">0</span>
@@ -89,10 +93,6 @@
           <button class="nav-item" data-view="workflows" type="button">
             Workflows
             <span class="nav-count" id="workflow-count">0</span>
-          </button>
-          <button class="nav-item" data-view="activity" type="button">
-            Activity
-            <span class="nav-count" id="active-count">0</span>
           </button>
           <button class="nav-item" data-view="audit" type="button">
             Audit
@@ -131,6 +131,34 @@
 
         <section class="view" id="view-overview" data-view-panel="overview">
           <div class="summary-strip" id="summary-strip"></div>
+
+          <section class="onboarding-panel" id="onboarding-panel">
+            <div class="onboarding-intro">
+              <div>
+                <span class="eyebrow">首次接入</span>
+                <h2>把第一个飞书群接入 MaxTag</h2>
+                <p id="onboarding-summary">按顺序完成配置，预计需要 5–10 分钟。</p>
+              </div>
+              <button class="text-button" id="onboarding-dismiss" type="button">暂时收起</button>
+            </div>
+            <div class="onboarding-progress" aria-label="接入进度">
+              <div>
+                <strong id="onboarding-progress-label">0 / 6 已完成</strong>
+                <span id="onboarding-progress-hint">下一步：检查工作空间</span>
+              </div>
+              <div class="onboarding-progress-track" aria-hidden="true">
+                <i id="onboarding-progress-fill"></i>
+              </div>
+            </div>
+            <ol class="onboarding-steps" id="onboarding-steps"></ol>
+            <div class="onboarding-actions">
+              <button class="primary-button" id="onboarding-primary-action" type="button">开始配置</button>
+              <span>页面不会回显 Lark App Secret；密钥仍由部署环境托管。</span>
+            </div>
+          </section>
+          <button class="onboarding-reopen text-button" id="onboarding-reopen" type="button" hidden>
+            重新打开接入向导
+          </button>
 
           <div class="section-heading">
             <div>
