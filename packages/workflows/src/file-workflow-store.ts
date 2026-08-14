@@ -1422,6 +1422,38 @@ export class FileWorkflowStore {
         recordOldestStatus(oldestNodeUpdatedAt, node.status, node.updatedAt);
       }
     }
+    const queues = workflows.map((workflow) => {
+      const workflowExecutions = state.executions
+        .filter((execution) => execution.workflowId === workflow.id)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      const active = workflowExecutions.filter(
+        (execution) => execution.status === 'pending' || execution.status === 'running',
+      );
+      const activeNodes = active.flatMap((execution) => execution.nodes);
+      const failed = workflowExecutions.filter((execution) => execution.status === 'failed');
+      const oldestActiveUpdatedAt = active
+        .map((execution) => execution.updatedAt)
+        .sort((left, right) => left.localeCompare(right))[0];
+      return {
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        enabled: workflow.enabled,
+        activeExecutions: active.length,
+        queuedNodes: activeNodes.filter(
+          (node) =>
+            node.status === 'pending' ||
+            node.status === 'claimed' ||
+            node.status === 'queued',
+        ).length,
+        runningNodes: activeNodes.filter((node) => node.status === 'running').length,
+        failedExecutions: failed.length,
+        failedNodes: failed.flatMap((execution) => execution.nodes)
+          .filter((node) => node.status === 'failed').length,
+        oldestActiveUpdatedAt,
+        latestExecutionUpdatedAt: workflowExecutions[0]?.updatedAt,
+        latestExecutionStatus: workflowExecutions[0]?.status,
+      };
+    });
     return {
       producerRoutes: {
         enabled: producerRoutes.filter((route) => route.enabled).length,
@@ -1445,6 +1477,7 @@ export class FileWorkflowStore {
       nodes,
       oldestExecutionUpdatedAt,
       oldestNodeUpdatedAt,
+      queues,
     };
   }
 

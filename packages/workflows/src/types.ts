@@ -335,4 +335,19 @@ export interface WorkflowSummary {
   nodes: Record<WorkflowNodeExecutionStatus, number>;
   oldestExecutionUpdatedAt: Partial<Record<WorkflowExecutionStatus, string>>;
   oldestNodeUpdatedAt: Partial<Record<WorkflowNodeExecutionStatus, string>>;
+  queues: WorkflowQueueHealth[];
+}
+
+export interface WorkflowQueueHealth {
+  workflowId: string;
+  workflowName: string;
+  enabled: boolean;
+  activeExecutions: number;
+  queuedNodes: number;
+  runningNodes: number;
+  failedExecutions: number;
+  failedNodes: number;
+  oldestActiveUpdatedAt?: string;
+  latestExecutionUpdatedAt?: string;
+  latestExecutionStatus?: WorkflowExecutionStatus;
 }

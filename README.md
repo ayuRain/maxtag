@@ -198,8 +198,9 @@ acceptance backlog.
   reliable across multiple hosts.
 - Expand Lark-native event Sources beyond Docx to Sheets, Base, Drive, and
   broader channel activity where product demand justifies it.
-- Improve workflow authoring for branches/parallel paths and expose per-workflow
-  queue health without turning the console into a generic automation product.
+- Improve workflow authoring for branches/parallel paths without turning the
+  console into a generic automation product. Per-workflow queue health is now
+  implemented locally in the workflow snapshot and operator list.
 
 ### P2: Scale And Depth
 

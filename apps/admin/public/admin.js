@@ -5077,8 +5077,17 @@ function renderWorkflowList() {
     root.append(element('div', 'empty-state', 'No workflows configured'));
     return;
   }
+  const queueByWorkflow = new Map(
+    (state.workflows?.summary?.queues || []).map((queue) => [queue.workflowId, queue]),
+  );
   for (const workflow of workflows) {
     const project = projectById(workflow.projectId);
+    const queue = queueByWorkflow.get(workflow.id);
+    const queueParts = [];
+    if (queue?.activeExecutions) queueParts.push(`${queue.activeExecutions} active`);
+    if (queue?.queuedNodes) queueParts.push(`${queue.queuedNodes} queued`);
+    if (queue?.runningNodes) queueParts.push(`${queue.runningNodes} running`);
+    if (queue?.failedExecutions) queueParts.push(`${queue.failedExecutions} failed`);
     const button = element('button', 'project-list-item');
     button.type = 'button';
     button.classList.toggle('active', workflow.id === state.selectedWorkflowId);
@@ -5087,7 +5096,7 @@ function renderWorkflowList() {
       element(
         'span',
         '',
-        `${workflow.enabled ? 'Enabled' : 'Disabled'} / ${project?.name || workflow.projectId} / ${workflowTriggerLabel(workflow.trigger)}`,
+        `${workflow.enabled ? 'Enabled' : 'Disabled'} / ${project?.name || workflow.projectId} / ${workflowTriggerLabel(workflow.trigger)}${queueParts.length ? ` / ${queueParts.join(' / ')}` : ''}`,
       ),
     );
     button.addEventListener('click', () => selectWorkflow(workflow.id));

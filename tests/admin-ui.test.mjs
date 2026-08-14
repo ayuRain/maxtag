@@ -254,6 +254,14 @@ test('admin Workflows view exposes durable execution cancel and failed-node retr
   assert.match(styles, /\.workflow-execution-controls/u);
 });
 
+test('admin Workflows list exposes per-workflow queue health', async () => {
+  const source = await fs.readFile('apps/admin/public/admin.js', 'utf8');
+  assert.match(source, /summary\?\.queues/u);
+  assert.match(source, /activeExecutions/u);
+  assert.match(source, /queuedNodes/u);
+  assert.match(source, /failedExecutions/u);
+});
+
 test('admin Audit view filters and exports organization evidence', async () => {
   const [html, script, styles] = await Promise.all([
     fs.readFile('apps/admin/public/index.html', 'utf8'),

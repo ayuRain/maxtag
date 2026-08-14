@@ -229,6 +229,10 @@
   First-class PR/link declarations, durable evidence, and client-native link
   publishing are implemented locally; dedicated product-specific PR producers
   may be added with the corresponding integration.
+- Per-workflow queue health is exposed in the workflow snapshot and list with
+  active execution, queued/running node, failure, latest-state, and oldest-active
+  evidence. Richer branch construction remains deliberately bounded to the DAG
+  editor instead of becoming a generic automation canvas.
 - Add instruction-level resumable execution checkpoints. Lease heartbeat,
   provider-session/transcript recovery, progress-surface reuse, and restart
   replay are implemented; a replacement may still restart the current provider

@@ -268,6 +268,13 @@ test('event workflows dedupe triggers and advance dependency-ready nodes', async
   assert.equal(duplicate.duplicates[0].id, first.staged[0].id);
   assert.equal(first.staged[0].trigger.producer, 'github-webhook');
   assert.equal(first.staged[0].trigger.sourceExternalId, 'acme/payments');
+  const pendingHealth = (await store.summarize('acme', 'payments')).queues[0];
+  assert.equal(pendingHealth.workflowId, workflow.id);
+  assert.equal(pendingHealth.activeExecutions, 1);
+  assert.equal(pendingHealth.queuedNodes, 3);
+  assert.equal(pendingHealth.runningNodes, 0);
+  assert.equal(pendingHealth.latestExecutionStatus, 'pending');
+  assert.equal(pendingHealth.oldestActiveUpdatedAt, first.staged[0].updatedAt);
   const audit = await store.listAudit({ workspaceId: 'acme' });
   assert.equal(audit[0].action, 'workflow.event.staged');
   assert.equal(audit[0].executionId, first.staged[0].id);
@@ -334,6 +341,19 @@ test('event workflows dedupe triggers and advance dependency-ready nodes', async
   assert.equal(execution.workflowVersion, workflow.version);
   const summary = await store.summarize('acme', 'payments');
   assert.equal(summary.executions.completed, 1);
+  assert.deepEqual(summary.queues[0], {
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    enabled: true,
+    activeExecutions: 0,
+    queuedNodes: 0,
+    runningNodes: 0,
+    failedExecutions: 0,
+    failedNodes: 0,
+    oldestActiveUpdatedAt: undefined,
+    latestExecutionUpdatedAt: execution.updatedAt,
+    latestExecutionStatus: 'completed',
+  });
   assert.equal(summary.oldestExecutionUpdatedAt.completed, execution.updatedAt);
   assert.equal(
     summary.oldestNodeUpdatedAt.completed,
