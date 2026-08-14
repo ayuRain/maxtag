@@ -910,6 +910,64 @@
         </section>
 
         <section class="view" id="view-connectors" data-view-panel="connectors" hidden>
+          <section class="lark-channel-card" id="lark-channel-card">
+            <header class="lark-channel-header">
+              <div class="lark-channel-title">
+                <span class="lark-status-dot" id="lark-status-dot" aria-hidden="true"></span>
+                <div>
+                  <h2>飞书</h2>
+                  <p>管理员配置一次，成员把 MaxTag 添加到群聊后即可使用。</p>
+                </div>
+              </div>
+              <span class="state-pill planned" id="lark-setup-state">正在检测</span>
+            </header>
+
+            <div class="lark-channel-body">
+              <div class="lark-setup-callout" id="lark-setup-callout">
+                <strong>尚未完成飞书接入</strong>
+                <span>完成下面的管理员步骤后，普通成员无需登录本平台。</span>
+              </div>
+
+              <div class="lark-readiness-list" id="lark-readiness-list"></div>
+
+              <details class="lark-guide" id="lark-guide">
+                <summary>飞书开放平台配置指引</summary>
+                <ol>
+                  <li>
+                    <strong>创建企业自建应用</strong>
+                    <span>在飞书开放平台创建应用，并启用机器人能力。</span>
+                  </li>
+                  <li>
+                    <strong>添加事件</strong>
+                    <span>使用长连接接收回调，订阅消息、机器人进群/退群和卡片操作事件。</span>
+                  </li>
+                  <li>
+                    <strong>开通权限并发布</strong>
+                    <span>至少开通发送消息、群聊 @ 消息和私聊消息权限；需要读取普通群消息时再申请敏感权限。</span>
+                  </li>
+                  <li>
+                    <strong>写入部署密钥</strong>
+                    <span>App ID 与 App Secret 由部署环境托管，页面只显示是否已配置，不回显密钥。</span>
+                  </li>
+                </ol>
+                <a class="secondary-button lark-platform-link" href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer">
+                  打开飞书开放平台
+                </a>
+              </details>
+
+              <div class="lark-channel-actions">
+                <button class="primary-button" id="test-lark-connection" type="button">验证连接</button>
+                <span id="lark-test-result">尚未验证</span>
+              </div>
+            </div>
+          </section>
+
+          <details class="connector-advanced" id="connector-advanced">
+            <summary>
+              <strong>高级连接器设置</strong>
+              <span>多项目路由、配对码、智能体身份与 MCP 连接器</span>
+            </summary>
+            <div class="connector-advanced-body">
           <div class="connector-summary" id="connector-summary"></div>
 
           <div class="section-heading">
@@ -1033,6 +1091,8 @@
             </div>
           </div>
           <div class="client-table" id="client-table"></div>
+            </div>
+          </details>
         </section>
 
         <section class="view" id="view-routines" data-view-panel="routines" hidden>

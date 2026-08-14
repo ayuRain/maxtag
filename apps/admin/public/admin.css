@@ -596,6 +596,83 @@ h3 {
 .onboarding-admin-check strong { color: var(--ink); font-size: 11px; }
 .onboarding-admin-check.complete > span:first-child { color: var(--green); font-weight: 800; }
 
+.lark-channel-card {
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.lark-channel-header {
+  min-height: 76px;
+  border-bottom: 1px solid var(--line);
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.lark-channel-title { display: flex; align-items: flex-start; gap: 11px; }
+.lark-channel-title > div { display: grid; gap: 4px; }
+.lark-channel-title p,
+.lark-setup-callout span,
+.lark-guide li span,
+.lark-channel-actions > span { color: var(--muted); font-size: 11px; line-height: 1.55; }
+.lark-status-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+.lark-status-dot.ready { background: var(--green); }
+.lark-channel-body { padding: 20px; display: grid; gap: 16px; }
+.lark-setup-callout {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-subtle);
+  padding: 13px 14px;
+  display: grid;
+  gap: 4px;
+}
+.lark-setup-callout.ready { border-color: #b9dece; background: var(--green-soft); }
+.lark-readiness-list { border-top: 1px solid var(--line); }
+.lark-readiness-row {
+  min-height: 52px;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 22px 150px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.lark-readiness-row > strong { font-size: 12px; }
+.lark-readiness-row > span:nth-child(3),
+.lark-readiness-row > small { color: var(--muted); font-size: 10px; }
+.lark-readiness-icon { color: var(--muted); font-size: 12px; font-weight: 800; }
+.lark-readiness-row.ready .lark-readiness-icon,
+.lark-readiness-row.ready > small { color: var(--green); }
+.lark-guide { border: 1px solid var(--line); border-radius: 7px; padding: 0 14px; }
+.lark-guide summary { padding: 12px 0; cursor: pointer; font-size: 12px; font-weight: 650; }
+.lark-guide ol { margin: 0; padding: 0 0 14px 24px; display: grid; gap: 10px; }
+.lark-guide li { padding-left: 3px; }
+.lark-guide li strong,
+.lark-guide li span { display: block; }
+.lark-guide li strong { margin-bottom: 2px; font-size: 11px; }
+.lark-platform-link { display: inline-flex; margin: 0 0 14px 24px; text-decoration: none; }
+.lark-channel-actions { display: flex; align-items: center; gap: 12px; }
+.connector-advanced { margin-top: 18px; border-top: 1px solid var(--line); }
+.connector-advanced > summary {
+  padding: 16px 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.connector-advanced > summary strong { font-size: 12px; }
+.connector-advanced > summary span { color: var(--muted); font-size: 10px; }
+.connector-advanced-body { padding-top: 4px; }
+
 .client-table,
 .connector-binding-list,
 .pairing-invitation-list,
@@ -4817,6 +4894,14 @@ pre {
   .onboarding-actions { align-items: stretch; flex-direction: column; }
   .onboarding-actions > span { text-align: left; }
   .onboarding-admin-details { padding: 0 16px; }
+  .lark-channel-header { align-items: flex-start; padding: 15px 16px; }
+  .lark-channel-body { padding: 16px; }
+  .lark-readiness-row {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    padding: 10px 0;
+  }
+  .lark-readiness-row > span:nth-child(3) { grid-column: 2 / -1; }
+  .connector-advanced > summary { align-items: flex-start; flex-direction: column; gap: 3px; }
 
   .summary-strip,
   .connector-summary {

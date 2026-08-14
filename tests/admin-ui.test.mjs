@@ -34,6 +34,28 @@ test('admin offers a Chinese-first, add-bot-and-mention Lark onboarding path', a
   assert.match(styles, /scroll-snap-type: x proximity/u);
 });
 
+test('admin presents Lark as a focused channel card with progressive disclosure', async () => {
+  const [html, script, styles, server] = await Promise.all([
+    fs.readFile('apps/admin/public/index.html', 'utf8'),
+    fs.readFile('apps/admin/public/admin.js', 'utf8'),
+    fs.readFile('apps/admin/public/admin.css', 'utf8'),
+    fs.readFile('apps/server/src/index.ts', 'utf8'),
+  ]);
+  assert.match(html, /id="lark-channel-card"/u);
+  assert.match(html, /id="lark-readiness-list"/u);
+  assert.match(html, /id="test-lark-connection"/u);
+  assert.match(html, /id="connector-advanced"/u);
+  assert.match(html, /飞书开放平台配置指引/u);
+  assert.match(html, /https:\/\/open\.feishu\.cn\/app/u);
+  assert.match(script, /function renderLarkSetup/u);
+  assert.match(script, /async function testLarkConnection/u);
+  assert.match(script, /getJson\('\/v1\/lark\/readiness'\)/u);
+  assert.match(styles, /\.lark-channel-card/u);
+  assert.match(styles, /\.connector-advanced/u);
+  assert.match(server, /async function larkReadinessSnapshot/u);
+  assert.match(server, /url\.pathname === '\/v1\/lark\/readiness'/u);
+});
+
 test('admin Connectors and destinations expose native Slack', async () => {
   const [html, script] = await Promise.all([
     fs.readFile('apps/admin/public/index.html', 'utf8'),

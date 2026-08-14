@@ -8,6 +8,7 @@ const state = {
   auth: null,
   health: null,
   capabilities: null,
+  larkReadiness: null,
   mcpConnectors: null,
   toolIdentities: null,
   skills: null,
@@ -2044,6 +2045,79 @@ function renderConnectorConsole() {
       actions,
     );
     bindingList.append(row);
+  }
+}
+
+function renderLarkSetup() {
+  const transport = state.capabilities?.larkTransport || {};
+  const readiness = state.larkReadiness || {};
+  const checks = [
+    {
+      label: '飞书应用凭据',
+      description: transport.hasCredentials
+        ? 'App ID 与 App Secret 已由部署环境安全托管'
+        : '等待管理员写入 App ID 与 App Secret',
+      ready: Boolean(transport.hasCredentials),
+    },
+    {
+      label: '消息连接',
+      description: '消息与卡片事件能够进入 MaxTag',
+      ready: Boolean(readiness.ingressReady),
+    },
+    {
+      label: '真实执行器',
+      description: '至少一个智能体执行器已启用',
+      ready: Boolean(readiness.executorReady),
+    },
+    {
+      label: '入群自动接入',
+      description: '成员添加机器人并 @MaxTag，无需配对码',
+      ready: transport.onboardingMode === 'add-bot-and-mention',
+    },
+  ];
+  const readyCount = checks.filter((item) => item.ready).length;
+  const ready = Boolean(readiness.ready);
+  $('#lark-status-dot').classList.toggle('ready', ready);
+  const stateNode = $('#lark-setup-state');
+  stateNode.className = `state-pill ${ready ? 'ready' : 'planned'}`;
+  stateNode.textContent = ready ? '连接正常' : `${readyCount} / ${checks.length} 已准备`;
+  const callout = $('#lark-setup-callout');
+  callout.classList.toggle('ready', ready);
+  callout.replaceChildren(
+    element('strong', '', ready ? 'MaxTag 已可加入飞书群' : '尚未完成飞书接入'),
+    element(
+      'span',
+      '',
+      ready
+        ? '普通成员只需在群设置中添加 MaxTag，第一条消息 @MaxTag 即可。'
+        : '完成管理员初始化后，普通成员无需登录本平台，也无需理解项目和群绑定。',
+    ),
+  );
+  $('#lark-readiness-list').replaceChildren(...checks.map((item) => {
+    const row = element('div', `lark-readiness-row${item.ready ? ' ready' : ''}`);
+    row.append(
+      element('span', 'lark-readiness-icon', item.ready ? '✓' : '—'),
+      element('strong', '', item.label),
+      element('span', '', item.description),
+      element('small', '', item.ready ? '已就绪' : '待完成'),
+    );
+    return row;
+  }));
+  $('#lark-test-result').textContent = readiness.checkedAt
+    ? `${readiness.message || (ready ? '连接正常' : '仍有未完成项')} · ${formatTime(readiness.checkedAt, true)}`
+    : '尚未验证';
+}
+
+async function testLarkConnection(button = $('#test-lark-connection')) {
+  setButtonBusy(button, true, '检测中', '验证连接');
+  try {
+    state.larkReadiness = await getJson('/v1/lark/readiness');
+    renderLarkSetup();
+    showToast(state.larkReadiness.ready ? '飞书连接正常' : '飞书接入尚未完成');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '检测中', '验证连接');
   }
 }
 
@@ -8009,6 +8083,7 @@ function renderAll() {
   renderAccess();
   fillProjectSelects();
   renderConnectorConsole();
+  renderLarkSetup();
   renderToolIdentities();
   renderOverviewRuns();
   renderProjectList();
@@ -8053,6 +8128,7 @@ async function refreshAll({ quiet = false } = {}) {
       knowledgeSources,
       delegatedAgents,
       operatorCredentials,
+      larkReadiness,
     ] =
       await Promise.all([
         getJson('/health'),
@@ -8076,6 +8152,7 @@ async function refreshAll({ quiet = false } = {}) {
         canManageOperatorCredentials()
           ? getJson('/v1/operator-credentials')
           : Promise.resolve(null),
+        getJson('/v1/lark/readiness'),
       ]);
     state.health = health;
     state.capabilities = capabilities;
@@ -8100,6 +8177,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.knowledgeSources = knowledgeSources;
     state.delegatedAgents = delegatedAgents;
     state.operatorCredentials = operatorCredentials;
+    state.larkReadiness = larkReadiness;
     const fallback = workspace.projects?.[0]?.projectId;
     state.selectedProjectId = projectById(state.selectedProjectId)?.projectId || fallback;
     state.selectedAccessProjectId =
@@ -8537,6 +8615,9 @@ $('#onboarding-primary-action').addEventListener('click', (event) => {
 });
 $('#toggle-admin-mode').addEventListener('click', () => {
   setAdminMode(!$('#app-shell').classList.contains('admin-mode'));
+});
+$('#test-lark-connection').addEventListener('click', (event) => {
+  void testLarkConnection(event.currentTarget);
 });
 
 installChineseInterface();

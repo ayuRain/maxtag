@@ -1668,6 +1668,63 @@ function larkTransportStatus(): Record<string, unknown> {
   };
 }
 
+async function larkReadinessSnapshot(): Promise<Record<string, unknown>> {
+  const transport = larkTransportStatus() as {
+    mode: 'memory' | 'http';
+    hasCredentials: boolean;
+    eventMode: 'webhook' | 'long-connection';
+    verificationTokenConfigured: boolean;
+    encryptionKeyConfigured: boolean;
+    onboardingMode: string;
+  };
+  const executorReady = executorRegistry
+    .list()
+    .some((executor) => executor.status === 'ready' || executor.mode === 'local-cli');
+  let bridgeReady = false;
+  let bridgeStatus: number | undefined;
+  if (transport.eventMode === 'long-connection') {
+    const bridgePort = numberEnvironmentValue(
+      'OPENTAG_LARK_BRIDGE_OBSERVABILITY_PORT',
+      3080,
+    );
+    try {
+      const bridgeResponse = await fetch(`http://127.0.0.1:${bridgePort}/health`, {
+        signal: AbortSignal.timeout(1_500),
+      });
+      bridgeStatus = bridgeResponse.status;
+      const body = bridgeResponse.ok
+        ? (await bridgeResponse.json()) as Record<string, unknown>
+        : {};
+      bridgeReady = bridgeResponse.ok && body.ok !== false;
+    } catch {
+      bridgeReady = false;
+    }
+  }
+  const ingressReady = transport.eventMode === 'long-connection'
+    ? bridgeReady
+    : transport.verificationTokenConfigured || transport.encryptionKeyConfigured;
+  const ready =
+    transport.mode === 'http' &&
+    transport.hasCredentials &&
+    ingressReady &&
+    executorReady &&
+    transport.onboardingMode === 'add-bot-and-mention';
+  return {
+    ready,
+    checkedAt: new Date().toISOString(),
+    message: ready
+      ? '飞书接入已就绪'
+      : '请完成应用凭据、消息连接和真实执行器配置',
+    credentialsReady: transport.hasCredentials && transport.mode === 'http',
+    ingressReady,
+    executorReady,
+    onboardingReady: transport.onboardingMode === 'add-bot-and-mention',
+    eventMode: transport.eventMode,
+    bridgeReady,
+    bridgeStatus,
+  };
+}
+
 function telegramTransportStatus(): {
   requested: string;
   mode: 'memory' | 'http';
@@ -9617,6 +9674,11 @@ const server = createServer(async (request, response) => {
           migration: sqliteStorage?.migration,
         },
       });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/lark/readiness') {
+      sendJson(response, 200, await larkReadinessSnapshot());
       return;
     }
 
