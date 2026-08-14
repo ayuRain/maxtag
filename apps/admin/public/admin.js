@@ -2078,7 +2078,7 @@ function renderLarkSetup() {
     },
     {
       label: '消息连接',
-      description: '消息与卡片事件能够进入 MaxTag',
+      description: '群聊和私聊消息能够进入 MaxTag',
       ready: Boolean(readiness.ingressReady),
     },
     {

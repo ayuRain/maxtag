@@ -1318,8 +1318,7 @@ event bus reports `1000040351: Incorrect domain name`, recreate or select the
 profile with the other brand and leave the working OpenAPI domain unchanged.
 When the supervised bridge is already running, add
 `--bridge-health-url=http://127.0.0.1:3080/health` or set
-`OPENTAG_LARK_BRIDGE_HEALTH_URL` to prove the message and card-action consumers
-are ready.
+`OPENTAG_LARK_BRIDGE_HEALTH_URL` to prove the message consumer is ready.
 
 To route long-connection messages into a running local MaxTag server, run the
 bridge in a second terminal:
@@ -1330,11 +1329,12 @@ npm run bridge:lark -- --workspace-id=dev-workspace --lark-cli-profile=opentag-s
 ```
 
 The bridge consumes `im.message.receive_v1` with `lark-cli event consume --as bot`
-and `card.action.trigger` in parallel. It posts normalized source-thread events
-to `/v1/client/events` and progress-card actions to `/v1/lark/card-actions`, so
-local Lark testing does not need a public HTTPS callback. In supervised
+and posts normalized source-thread events to `/v1/client/events`, so message
+testing does not need a public HTTPS callback. Lark long connections carry event
+subscriptions only; interactive-card callbacks use the separately authenticated
+`/v1/lark/card-actions` webhook endpoint. In supervised
 deployments set `OPENTAG_SERVER_URL=http://127.0.0.1:3077`,
-`OPENTAG_LARK_BRIDGE_EVENT_KEYS=im.message.receive_v1,card.action.trigger`, and
+`OPENTAG_LARK_BRIDGE_EVENT_KEYS=im.message.receive_v1`, and
 `OPENTAG_LARK_BRIDGE_OBSERVABILITY_PORT=3080`. When
 `OPENTAG_CLIENT_INGRESS_TOKEN` is set, pass the same token to the bridge through
 `--token=...` or the environment. Set `OPENTAG_LARK_CLI_PROFILE` when the

@@ -353,11 +353,8 @@ test('Lark long-connection bridge treats p2p messages as agent-addressed', () =>
   assert.equal(followUp.thread.id, payload.thread.id);
 });
 
-test('Lark long-connection bridge listens to messages and card actions by default', () => {
-  assert.deepEqual(configuredEventKeys(), [
-    'im.message.receive_v1',
-    'card.action.trigger',
-  ]);
+test('Lark long-connection bridge listens to message events by default', () => {
+  assert.deepEqual(configuredEventKeys(), ['im.message.receive_v1']);
 });
 
 test('Lark long-connection bridge diagnoses an independent profile brand mismatch', () => {
@@ -497,6 +494,10 @@ test(
       OPENTAG_LARK_BOT_OPEN_ID: 'ou_bot',
       OPENTAG_OBSERVABILITY_HOST: '127.0.0.1',
       OPENTAG_LARK_BRIDGE_OBSERVABILITY_PORT: String(observabilityPort),
+      // The fake CLI exercises the bridge's generic multi-consumer path. Real
+      // lark-cli releases expose message events here but not card callbacks.
+      OPENTAG_LARK_BRIDGE_EVENT_KEYS:
+        'im.message.receive_v1,card.action.trigger',
       OPENTAG_LARK_CLI_PROFILE: 'opentag-smoke',
       OPENTAG_METRICS_TOKEN: metricsToken,
     });

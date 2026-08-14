@@ -86,7 +86,7 @@ test('deployment environment and Prometheus targets stay aligned', async () => {
   assert.match(environment, /^OPENTAG_SERVER_URL=http:\/\/127\.0\.0\.1:3077$/m);
   assert.match(
     environment,
-    /^OPENTAG_LARK_BRIDGE_EVENT_KEYS=im\.message\.receive_v1,card\.action\.trigger$/m,
+    /^OPENTAG_LARK_BRIDGE_EVENT_KEYS=im\.message\.receive_v1$/m,
   );
   assert.match(environment, /^OPENTAG_LARK_CLI_PROFILE=opentag-production$/m);
   assert.match(environment, /^OPENTAG_LARK_EVENT_MODE=long-connection$/m);

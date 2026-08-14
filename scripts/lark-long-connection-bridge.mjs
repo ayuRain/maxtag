@@ -350,7 +350,10 @@ export function configuredEventKeys() {
       .map((value) => value.trim())
       .filter(Boolean);
   }
-  return ['im.message.receive_v1', 'card.action.trigger'];
+  // Lark long connections carry event subscriptions, not card callbacks.
+  // Card actions must use the authenticated callback endpoint instead of
+  // being passed to `lark-cli event consume` as an EventKey.
+  return ['im.message.receive_v1'];
 }
 
 export function larkEventToClientEvent(event, options = {}) {
