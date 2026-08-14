@@ -7,6 +7,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { FileLarkBotCredentialStore } from '@opentag/config';
 import {
   bridgeHealth,
@@ -14,11 +15,23 @@ import {
   createBridgeState,
   eventKeyState,
   handleEvent,
+  isMainModule,
   larkConsumerExitError,
   larkEventToClientEvent,
   prepareManagedLarkProfile,
   renderBridgeMetrics,
 } from '../scripts/lark-long-connection-bridge.mjs';
+
+test('Lark bridge recognizes a symlinked production entrypoint as the main module', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-main-module-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const target = path.join(root, 'bridge.mjs');
+  const link = path.join(root, 'current-bridge.mjs');
+  await fs.writeFile(target, 'export {};\n');
+  await fs.symlink(target, link);
+
+  assert.equal(await isMainModule(pathToFileURL(target).href, link), true);
+});
 
 test('Lark bridge builds its managed profile through secret stdin in private temporary storage', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-managed-profile-'));

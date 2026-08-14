@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { FileLarkBotCredentialStore } from '@opentag/config';
 
 function argValue(name) {
@@ -989,9 +989,23 @@ async function consumeKey(cfg, state, eventKey) {
   }
 }
 
-const invokedUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
+export async function isMainModule(
+  moduleUrl = import.meta.url,
+  argvEntry = process.argv[1],
+) {
+  if (!argvEntry) return false;
+  try {
+    const [invokedPath, modulePath] = await Promise.all([
+      fs.realpath(argvEntry),
+      fs.realpath(fileURLToPath(moduleUrl)),
+    ]);
+    return invokedPath === modulePath;
+  } catch {
+    return pathToFileURL(path.resolve(argvEntry)).href === moduleUrl;
+  }
+}
 
-if (import.meta.url === invokedUrl) {
+if (await isMainModule()) {
   const cfg = await prepareManagedLarkProfile(config());
   const state = createBridgeState();
   state.backfill.enabled = cfg.backfillEnabled;
