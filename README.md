@@ -158,7 +158,7 @@ the provider runtime, durable state, and Lark delivery.
 | Human Take over | A live run was receipt-bound, actor-authorized, cancelled, terminally updated, handed off in the same topic, and organization-audited | Live proven; reproduce with `npm run smoke:lark-takeover` |
 | Stop | Exact-card cancellation and idempotent repeated callback reached terminal `cancelled` | Live proven; reproduce with `npm run smoke:lark-stop` |
 | Knowledge Source search/read | Exact route-bound phrase retrieval, source/line citation, delivery, and disable fencing | Live proven; raw event ledgers stay outside the public repository |
-| In-thread capability status | `/status` and bilingual capability questions return the exact current route, identity, actor access, memory boundary, enabled Skills/Agents/Sources/tools, standing work, and next-run budget state without invoking a model | Implemented locally; real Lark command pending |
+| In-thread capability status | A real private-group `/status` resolved the current workspace/project/channel/topic and actor access, completed through the dedicated `thread-status` executor, delivered one reply to the same topic, recorded a redacted organization audit entry, and created no model usage record | Live proven |
 | Runtime SIGTERM recovery | Lease heartbeat, requeue, replacement claim, progress-card reuse, and publish fencing | Local process proven; production supervisor proof pending |
 | Proactive routines | Scheduler visibility, routing, failure policy, and preflight | Implemented locally; real scheduled Lark send pending |
 | Disconnect recovery | Per-channel checkpoints and idempotent silent backfill | Implemented locally; blocked by Lark history scopes in the pilot app |
