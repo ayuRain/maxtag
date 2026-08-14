@@ -1210,7 +1210,20 @@ Binary generic-client attachments use `contentBase64`; `localPath` is rejected.
 HTTP(S) URLs can remain remote references. `OPENTAG_MAX_ATTACHMENT_BYTES`
 defaults to 30 MB and is checked before decoded bytes are written.
 
-## Chat Pairing
+## Lark Add-Bot Onboarding
+
+The default single-workspace experience is deliberately configuration-free for
+group members. An installation owner configures the Lark app, default project,
+and executor once. A member then adds MaxTag from the group's **Bots** menu and
+mentions `@MaxTag` in the first message. MaxTag routes the group to the default
+project and persists the topic route; replies in that topic do not need another
+mention.
+
+Keep `OPENTAG_LARK_REQUIRE_BINDING=false` for this add-bot-and-mention flow.
+Project access policy is still evaluated before every run. Use explicit pairing
+only when one bot must route different groups into different projects.
+
+## Optional Chat Pairing
 
 Open **Connectors**, choose Lark, Telegram, or GitHub and a target project, then generate
 an invitation. Send the returned command in the chat that should serve that
@@ -1227,6 +1240,7 @@ projects without sharing project or thread memory. Configure the gate and TTL
 with:
 
 ```bash
+# Optional multi-project gate; false is the normal add-bot-and-mention flow.
 OPENTAG_LARK_REQUIRE_BINDING=true
 OPENTAG_TELEGRAM_REQUIRE_BINDING=true
 OPENTAG_GITHUB_REQUIRE_BINDING=true

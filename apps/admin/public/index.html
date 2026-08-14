@@ -50,11 +50,11 @@
           <button class="nav-item active" data-view="overview" type="button">
             Overview
           </button>
-          <button class="nav-item" data-view="projects" type="button">
+          <button class="nav-item advanced-nav-item" data-view="projects" type="button">
             Projects
             <span class="nav-count" id="project-count">0</span>
           </button>
-          <button class="nav-item" data-view="connectors" type="button">
+          <button class="nav-item advanced-nav-item" data-view="connectors" type="button">
             Connectors
             <span class="nav-count" id="client-count">0</span>
           </button>
@@ -66,44 +66,47 @@
             Activity
             <span class="nav-count" id="active-count">0</span>
           </button>
-          <button class="nav-item" data-view="skills" type="button">
+          <button class="nav-item advanced-nav-item" data-view="skills" type="button">
             Skills
             <span class="nav-count" id="skill-count">0</span>
           </button>
-          <button class="nav-item" data-view="sources" type="button">
+          <button class="nav-item advanced-nav-item" data-view="sources" type="button">
             Sources
             <span class="nav-count" id="source-count">0</span>
           </button>
-          <button class="nav-item" data-view="agents" type="button">
+          <button class="nav-item advanced-nav-item" data-view="agents" type="button">
             Agents
             <span class="nav-count" id="agent-count">0</span>
           </button>
-          <button class="nav-item" data-view="spend" type="button">
+          <button class="nav-item advanced-nav-item" data-view="spend" type="button">
             Spend
             <span class="nav-count" id="spend-alert-count">0</span>
           </button>
-          <button class="nav-item" data-view="access" type="button">
+          <button class="nav-item advanced-nav-item" data-view="access" type="button">
             Access
             <span class="nav-count" id="member-count">0</span>
           </button>
-          <button class="nav-item" data-view="routines" type="button">
+          <button class="nav-item advanced-nav-item" data-view="routines" type="button">
             Routines
             <span class="nav-count" id="routine-count">0</span>
           </button>
-          <button class="nav-item" data-view="workflows" type="button">
+          <button class="nav-item advanced-nav-item" data-view="workflows" type="button">
             Workflows
             <span class="nav-count" id="workflow-count">0</span>
           </button>
-          <button class="nav-item" data-view="audit" type="button">
+          <button class="nav-item advanced-nav-item" data-view="audit" type="button">
             Audit
             <span class="nav-count" id="audit-count">0</span>
           </button>
-          <button class="nav-item" data-view="memory" type="button">
+          <button class="nav-item advanced-nav-item" data-view="memory" type="button">
             Memory
           </button>
         </nav>
 
         <div class="sidebar-footer">
+          <button class="secondary-button admin-mode-toggle" id="toggle-admin-mode" type="button">
+            管理员设置
+          </button>
           <div class="operator-principal">
             <strong id="operator-name">Local operator</strong>
             <span id="operator-scope">Owner / installation</span>
@@ -135,25 +138,29 @@
           <section class="onboarding-panel" id="onboarding-panel">
             <div class="onboarding-intro">
               <div>
-                <span class="eyebrow">首次接入</span>
-                <h2>把第一个飞书群接入 MaxTag</h2>
-                <p id="onboarding-summary">按顺序完成配置，预计需要 5–10 分钟。</p>
+                <span class="eyebrow">飞书群助手</span>
+                <h2>把 MaxTag 拉进群，直接 @ 它</h2>
+                <p id="onboarding-summary">管理员只需初始化一次，普通成员不需要登录或配置。</p>
               </div>
               <button class="text-button" id="onboarding-dismiss" type="button">暂时收起</button>
             </div>
             <div class="onboarding-progress" aria-label="接入进度">
               <div>
-                <strong id="onboarding-progress-label">0 / 6 已完成</strong>
-                <span id="onboarding-progress-hint">下一步：检查工作空间</span>
+                <strong id="onboarding-progress-label">正在检查服务状态</strong>
+                <span id="onboarding-progress-hint">准备好后即可直接添加机器人</span>
               </div>
               <div class="onboarding-progress-track" aria-hidden="true">
                 <i id="onboarding-progress-fill"></i>
               </div>
             </div>
             <ol class="onboarding-steps" id="onboarding-steps"></ol>
+            <details class="onboarding-admin-details" id="onboarding-admin-details">
+              <summary id="onboarding-admin-summary">管理员初始化状态</summary>
+              <div id="onboarding-admin-checks"></div>
+            </details>
             <div class="onboarding-actions">
-              <button class="primary-button" id="onboarding-primary-action" type="button">开始配置</button>
-              <span>页面不会回显 Lark App Secret；密钥仍由部署环境托管。</span>
+              <button class="primary-button" id="onboarding-primary-action" type="button">网页试用</button>
+              <span>群成员只需把机器人加入群聊，不需要理解项目、执行器或群绑定。</span>
             </div>
           </section>
           <button class="onboarding-reopen text-button" id="onboarding-reopen" type="button" hidden>

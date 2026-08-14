@@ -11,22 +11,26 @@ test('admin browser module parses as JavaScript', async () => {
   await execFileAsync(process.execPath, ['--check', 'apps/admin/public/admin.js']);
 });
 
-test('admin offers a Chinese-first, state-backed Lark onboarding path', async () => {
+test('admin offers a Chinese-first, add-bot-and-mention Lark onboarding path', async () => {
   const [html, script, styles] = await Promise.all([
     fs.readFile('apps/admin/public/index.html', 'utf8'),
     fs.readFile('apps/admin/public/admin.js', 'utf8'),
     fs.readFile('apps/admin/public/admin.css', 'utf8'),
   ]);
   assert.match(html, /id="onboarding-panel"/u);
-  assert.match(html, /把第一个飞书群接入 MaxTag/u);
+  assert.match(html, /把 MaxTag 拉进群，直接 @ 它/u);
   assert.match(html, /id="onboarding-steps"/u);
   assert.match(script, /function installChineseInterface/u);
   assert.match(script, /function renderOnboarding/u);
+  assert.match(script, /function setAdminMode/u);
+  assert.match(script, /在群里添加 MaxTag/u);
+  assert.match(script, /第一条消息需要 @/u);
   assert.match(script, /lark\.mode === 'http'.*lark\.hasCredentials/su);
   assert.match(script, /item\.status === 'ready' \|\| item\.mode === 'local-cli'/u);
-  assert.match(script, /item\.platform === 'lark'.*item\.status === 'completed'/u);
   assert.match(script, /maxtag-onboarding-dismissed-v1/u);
+  assert.match(script, /maxtag-admin-mode-v1/u);
   assert.match(styles, /\.onboarding-progress-track/u);
+  assert.match(styles, /\.app-shell:not\(\.admin-mode\) \.advanced-nav-item/u);
   assert.match(styles, /scroll-snap-type: x proximity/u);
 });
 

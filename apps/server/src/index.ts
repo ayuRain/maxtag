@@ -1661,6 +1661,7 @@ function larkTransportStatus(): Record<string, unknown> {
     callbackMaxSkewSeconds: larkCallbackMaxSkewSeconds,
     callbackMaxBytes: larkCallbackMaxBytes,
     requireBinding: larkRequireBinding,
+    onboardingMode: larkRequireBinding ? 'pairing-code' : 'add-bot-and-mention',
     threadHistoryMaxMessages: larkThreadHistoryMaxMessages,
     threadHistoryRetryMs: larkThreadHistoryRetryMs,
     chatInfoTimeoutMs: larkChatInfoTimeoutMs,

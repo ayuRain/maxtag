@@ -104,7 +104,7 @@ const ZH_CN = new Map(Object.entries({
   Routines: '定时任务', Workflows: '工作流', Activity: '运行记录', Audit: '审计', Memory: '记忆',
   'Local operator': '本地管理员', 'Owner / installation': '所有者 / 当前安装', Offline: '离线',
   'Runtime unavailable': '运行时不可用', 'Not synced': '尚未同步', Refresh: '刷新',
-  'Sign out': '退出登录', 'Test agent': '测试智能体', Routing: '路由', Manage: '管理',
+  'Sign out': '退出登录', 'Test agent': '网页试用', Routing: '路由', Manage: '管理',
   Surfaces: '接入端', Clients: '客户端', Latest: '最近', Runs: '运行', 'Open log': '查看日志',
   'Workspace profile': '工作空间配置', 'Workspace agent': '工作空间智能体', Active: '已启用',
   'Workspace name': '工作空间名称', 'Agent name': '智能体名称', Executor: '执行器',
@@ -124,8 +124,117 @@ const ZH_CN = new Map(Object.entries({
   'Event-driven work': '事件驱动', 'Organization evidence': '组织证据',
   'Scoped context': '分域上下文', 'Select a run': '请选择一条运行记录',
   'No cap': '不限额', 'Operation completed': '操作已完成',
+  'Development Workspace': '默认工作空间', 'Installation owner': '安装所有者', Online: '在线',
+  'authorized': '已授权', 'bindings': '个群聊', 'Workspace profile': '工作空间配置',
+  'Open workspace tools': '查看工作空间能力', 'Save project': '保存项目',
+  'New conversation': '新对话', 'Send message': '发送消息', 'Start a conversation': '开始新对话',
   'Your operator session expired.': '管理员会话已过期，请重新登录。',
 }));
+
+for (const [english, chinese] of Object.entries({
+  'Project policy': '项目策略', 'Project name': '项目名称', 'Project ID': '项目 ID',
+  Agent: '智能体', Profile: '配置方式', 'Use workspace agent': '使用工作空间智能体',
+  'Custom project agent': '自定义项目智能体', 'Workspace shared': '工作空间共享',
+  Boundary: '隔离范围', 'Project isolated': '项目隔离', 'Default retention': '默认保留期限',
+  'Use workspace default': '使用工作空间默认值', 'Keep indefinitely': '永久保留',
+  'Custom days': '自定义天数', Days: '天数', Approval: '审批方式',
+  'Direct writes': '直接写入', 'Require approval': '需要审批', Remember: '记住', Forget: '忘记',
+  Channel: '群聊', Thread: '话题', 'Workspace baseline': '工作空间默认启用',
+  'Delegated Agents': '子智能体', Tools: '工具', 'Workspace defaults': '工作空间默认值',
+  Policy: '策略', 'Custom project policy': '自定义项目策略', 'Write approval': '写入审批',
+  Network: '网络', 'Deny by default': '默认禁止', Restricted: '指定范围',
+  'Allow all': '全部允许', 'Allowed hosts': '允许访问的域名', 'Channel binding': '群聊接入',
+  Client: '客户端', Activation: '触发方式', Mention: '提及时', 'Always on': '始终响应',
+  'Require mention': '首条消息需要 @', Bind: '接入群聊', 'Save project': '保存项目',
+  'Reusable procedures': '可复用流程', 'New skill': '新建技能', Catalog: '目录',
+  'Agent Skill': '智能体技能', Draft: '草稿', 'Skill ID': '技能 ID', Disable: '停用',
+  'Save skill': '保存技能', 'Governed context': '受控知识', 'New source': '新建知识源',
+  'Knowledge Source': '知识源', 'Source ID': '知识源 ID', Kind: '类型', Text: '文本',
+  'File snapshot': '文件快照', 'URL snapshot': '网页快照', 'Media type': '媒体类型',
+  'Source URI': '来源地址', 'Automatic refresh': '自动刷新', Off: '关闭', Hourly: '每小时',
+  'Every 6 hours': '每 6 小时', Daily: '每天', Weekly: '每周', 'Import file': '导入文件',
+  'Content snapshot': '内容快照', 'Unsaved snapshot': '快照尚未保存', 'Save source': '保存知识源',
+  'Bounded specialists': '受限专家', 'New agent': '新建子智能体', 'Delegated Agent': '子智能体',
+  'Agent ID': '智能体 ID', Model: '模型', 'Max turns': '最大轮次', 'Timeout (seconds)': '超时（秒）',
+  'Loaded on invocation': '调用时加载', 'Read-only tools': '只读工具',
+  'Intersected with the parent route': '受主智能体权限范围限制', 'Memory scopes': '记忆范围',
+  'Allowed network hosts': '允许访问的域名', 'Save agent': '保存子智能体',
+  'Agent team': '智能体团队', 'Recent tasks': '最近任务', 'Hard limits': '硬性限制',
+  'Workspace controls': '工作空间限制', 'Current month': '本月', 'Model calls': '模型调用',
+  'Agent and memory runner': '主智能体与记忆任务', 'Aggregate caps': '总量上限',
+  'Per-client limits': '按客户端限制', Channels: '群聊', 'Usage coverage': '用量覆盖',
+  'Threshold notifications': '阈值通知', Alerts: '告警', 'Workspace directory': '工作空间成员',
+  Members: '成员', 'Workspace role': '工作空间角色', Owner: '所有者', Admin: '管理员',
+  Member: '成员', Guest: '访客', 'User ID': '用户 ID', 'Add member': '添加成员',
+  'Project boundary': '项目边界', 'Project access': '项目权限', 'Access mode': '访问方式',
+  Open: '开放', 'Workspace members': '工作空间成员', 'Project members': '项目成员',
+  'Save mode': '保存访问方式', 'Project role': '项目角色', Manager: '项目管理员',
+  Contributor: '协作者', Viewer: '只读成员', Assign: '分配',
+  'Installation control plane': '平台管理', 'Operator credentials': '管理员凭据',
+  'Credential ID': '凭据 ID', 'Workspace IDs': '工作空间 ID', 'Create credential': '创建凭据',
+  'Lark agent': '飞书智能体', 'Agent identities': '智能体身份', 'Identity ID': '身份 ID',
+  Provider: '服务商', 'App ID env': 'App ID 环境变量', 'App secret env': 'App Secret 环境变量',
+  'Token env': '令牌环境变量', 'External actor': '外部身份', 'API base URL': 'API 地址',
+  'Save identity': '保存身份', 'Agent tools': '智能体工具', 'MCP connectors': 'MCP 连接器',
+  'Workspace routing': '工作空间路由', 'Connect a chat': '接入群聊', 'Generate code': '生成配对码',
+  'Send in chat': '发送到群聊', 'Copy command': '复制命令', 'Recent access': '最近接入',
+  Invitations: '邀请', 'Project routing': '项目路由', 'Bound chats': '已接入群聊',
+  'Client runtime': '客户端运行状态', Adapters: '适配器', Scheduler: '调度器',
+  'No tick recorded': '暂无调度记录', 'Tick now': '立即检查', 'Proactive run': '主动任务',
+  'New routine': '新建定时任务', Schedule: '计划', 'Not scheduled': '未设置', Frequency: '频率',
+  Once: '单次', Interval: '间隔', 'Run at': '执行时间', 'Every (minutes)': '间隔（分钟）',
+  Time: '时间', 'Time zone': '时区', Destination: '发送位置', 'Client neutral': '通用客户端',
+  Conversation: '会话类型', 'Public channel': '公开群', 'Direct message': '私聊',
+  'Private channel': '私密群', 'Thread ID (optional)': '话题 ID（可选）', Notifications: '通知',
+  'Per routine': '按任务设置', Send: '发送', 'Every result': '每次结果',
+  'Failures only': '仅失败时', Silent: '静默', 'Alert after failures': '连续失败后告警',
+  'Notify when recovered': '恢复后通知', Executions: '执行记录', 'Run now': '立即运行',
+  'Save routine': '保存定时任务', Coordinator: '协调器', 'Native producers': '原生事件源',
+  'Event sources': '事件源', Source: '来源', 'Lark document': '飞书文档',
+  'Document ID': '文档 ID', 'Poll interval': '检查间隔', 'Add route': '添加路由',
+  'Agent workflow': '智能体工作流', 'New workflow': '新建工作流', Trigger: '触发方式',
+  Manual: '手动', Event: '事件', 'Event type': '事件类型', 'Native producer': '原生事件源',
+  'This event uses a configured native producer route for this project.': '此事件使用该项目已配置的原生事件路由。',
+  Steps: '步骤', 'Add step': '添加步骤', 'Final step': '最终步骤', Archive: '归档',
+  'Save workflow': '保存工作流', 'Web client': '网页端', Conversations: '会话',
+  'Workspace assistant': '工作空间助手', 'Select a conversation': '请选择会话', Idle: '空闲',
+  'Start a project conversation': '开始项目会话', 'Durable workspace thread': '可恢复的工作空间会话',
+  Attach: '添加附件', Stop: '停止', 'Search activity': '搜索运行记录',
+  'Recent 50 runs': '最近 50 次运行', All: '全部', Live: '进行中', Done: '已完成',
+  'Worker pass': '执行一轮任务', 'Recover runs': '恢复运行', 'Recover delivery': '恢复投递',
+  'Guarded writes': '受控写入', 'Tool approvals': '工具审批', 'Workspace threads': '工作空间话题',
+  Transport: '传输', Delivery: '投递', Outbound: '发出', Inbound: '收到',
+  'Data lifecycle': '数据生命周期', 'No preview': '尚未预览', 'Retain days': '保留天数',
+  'Keep / thread': '每话题保留', Preview: '预览', Apply: '应用', Category: '类别',
+  Tasks: '任务', 'Tool calls': '工具调用', Knowledge: '知识', Bindings: '群聊接入',
+  Outcome: '结果', Started: '已开始', Succeeded: '成功', Denied: '已拒绝', Cancelled: '已取消',
+  Changed: '已变更', Actor: '操作人', Action: '操作', 'Export CSV': '导出 CSV',
+  'Select an audit entry': '请选择一条审计记录', Installation: '当前安装',
+  'Search approved memory': '搜索已确认记忆', Analyze: '语义分析', 'Current scope': '当前范围',
+  'Memory runner': '记忆任务', 'Per-turn retrieval loading': '正在加载每轮记忆检索状态',
+  'Automatic wrapup loading': '正在加载自动整理状态', 'Synthesize thread': '整理整个话题',
+  'Project memory': '项目记忆', 'Current memory': '当前记忆', 'No revisions': '暂无历史版本',
+  Reload: '重新加载', 'No memory loaded.': '尚未加载记忆。', 'Memory note': '记忆内容',
+  Retention: '保留期限', 'Use route default': '使用路由默认值', 'Custom date': '自定义日期',
+  Expires: '到期时间', 'No timed memory': '没有定时到期的记忆', 'Clear expiry': '清除到期时间',
+  'Set on matching': '为匹配项设置', 'Forget matching': '忘记匹配项',
+  'Immutable revisions': '不可变历史版本', History: '历史', Proposals: '待审批修改',
+  Approve: '批准', Reject: '拒绝', 'No pending proposals.': '没有待审批的修改。',
+  'Shown once': '仅显示一次', 'Operator token': '管理员令牌',
+  'This token cannot be recovered after you close this dialog.': '关闭此窗口后将无法再次查看该令牌。',
+  'Copy token': '复制令牌', 'Inherited policy': '继承策略', 'Save defaults': '保存默认设置',
+  'Channel policy': '群聊策略', 'Use project instructions': '使用项目指令',
+  'Append for this channel': '为当前群聊追加', 'Replace for this channel': '替换当前群聊指令',
+  'Use project tools': '使用项目工具', 'Add channel tools': '添加群聊工具',
+  'Custom channel tools': '自定义群聊工具', 'Use project policy': '使用项目策略',
+  'Channel instructions': '群聊指令', 'Channel Skills': '群聊技能', 'Channel Sources': '群聊知识源',
+  'Channel Agents': '群聊子智能体', 'Added to workspace and project': '在工作空间和项目基础上追加',
+  'Monthly budget': '月度预算', 'Use default channel limit': '使用默认群聊限额',
+  'Custom channel budget': '自定义群聊预算', 'No channel limit': '群聊不限额',
+  'Max runs': '最大运行次数', 'Max cost (USD)': '最大费用（美元）',
+  'Use project defaults': '使用项目默认值', 'Save channel': '保存群聊设置',
+  'Client preview': '客户端预览', Message: '消息', 'No card': '暂无卡片', 'No output': '暂无输出',
+})) ZH_CN.set(english, chinese);
 
 const ZH_CN_PATTERNS = [
   [/^(\d+) clients$/, '$1 个客户端'], [/^(\d+) Projects$/, '$1 个项目'],
@@ -568,7 +677,8 @@ function renderWorkspaceHeader() {
   const storageLabel =
     state.capabilities?.storage?.driver === 'sqlite' ? 'SQLite WAL' : 'file';
   const activeClients = clients.filter((client) => client.status !== 'planned').length;
-  $('#runtime-label').textContent = `${activeClients} clients / ${storageLabel} / ${workerMode}`;
+  const workerLabel = workerMode === 'manual' ? '手动调度' : workerMode === 'external' ? '独立调度' : workerMode;
+  $('#runtime-label').textContent = `${activeClients} 个客户端 / ${storageLabel} / ${workerLabel}`;
 }
 
 function metric(value, label) {
@@ -599,6 +709,7 @@ function renderSummary() {
 }
 
 const ONBOARDING_DISMISSED_KEY = 'maxtag-onboarding-dismissed-v1';
+const ADMIN_MODE_KEY = 'maxtag-admin-mode-v1';
 
 function onboardingChecks() {
   const workspace = state.workspace?.workspace;
@@ -607,42 +718,39 @@ function onboardingChecks() {
   const lark = state.capabilities?.larkTransport || {};
   return [
     {
-      title: '确认工作空间',
-      description: '工作空间用于隔离成员、预算、知识与运行记录。',
+      title: '默认智能体已创建',
+      description: '普通成员无需选择工作空间或项目。',
       complete: Boolean(workspace?.workspace?.id),
       view: 'projects', action: '检查工作空间',
     },
     {
-      title: '创建项目',
-      description: '项目决定智能体指令、执行器和可访问的能力。',
+      title: '默认项目已准备',
+      description: '新加入的群会自动使用默认项目。',
       complete: projects.length > 0,
       view: 'projects', action: '配置项目',
     },
     {
-      title: '连接飞书应用',
-      description: '由运维写入 Lark App ID / Secret；页面只显示连接状态，不回显密钥。',
+      title: '飞书机器人已上线',
+      description: '飞书应用凭据与长连接由平台管理员统一维护。',
       complete: lark.mode === 'http' && Boolean(lark.hasCredentials),
       view: 'connectors', action: '查看连接器',
     },
     {
-      title: '启用真实执行器',
-      description: '上线前将执行器从 dry-run 切换为可运行状态，并完成一次健康检查。',
+      title: '智能体已可执行',
+      description: '真实执行器通过健康检查后，群成员即可开始使用。',
       complete: executors.some((item) => item.status === 'ready' || item.mode === 'local-cli'),
       view: 'projects', action: '检查执行器',
     },
-    {
-      title: '绑定飞书群',
-      description: '把群聊路由到指定项目；未绑定的群不会进入智能体。',
-      complete: state.bindings.some((item) => item.platform === 'lark'),
-      view: 'connectors', action: '创建群绑定',
-    },
-    {
-      title: '验证第一条回复',
-      description: '在已绑定群中发送 @MaxTag status，并确认收到完整回复。',
-      complete: state.runs.some((item) => item.platform === 'lark' && item.status === 'completed'),
-      view: 'activity', action: '查看运行记录',
-    },
   ];
+}
+
+function setAdminMode(enabled) {
+  $('#app-shell').classList.toggle('admin-mode', enabled);
+  $('#toggle-admin-mode').textContent = enabled ? '退出管理员设置' : '管理员设置';
+  localStorage.setItem(ADMIN_MODE_KEY, enabled ? 'true' : 'false');
+  if (!enabled && !['overview', 'assistant', 'activity'].includes(location.hash.slice(1))) {
+    showView('overview');
+  }
 }
 
 function renderOnboarding() {
@@ -654,25 +762,42 @@ function renderOnboarding() {
   reopen.hidden = !dismissed;
   const steps = onboardingChecks();
   const completed = steps.filter((step) => step.complete).length;
-  const next = steps.find((step) => !step.complete);
-  $('#onboarding-progress-label').textContent = `${completed} / ${steps.length} 已完成`;
-  $('#onboarding-progress-hint').textContent = next ? `下一步：${next.title}` : '接入完成，可以开始使用';
+  const ready = completed === steps.length;
+  $('#onboarding-progress-label').textContent = ready ? 'MaxTag 已可使用' : 'MaxTag 暂未开放';
+  $('#onboarding-progress-hint').textContent = ready
+    ? '现在可以把 MaxTag 添加到任意允许使用的飞书群'
+    : `管理员初始化 ${completed} / ${steps.length}`;
   $('#onboarding-progress-fill').style.width = `${Math.round((completed / steps.length) * 100)}%`;
-  $('#onboarding-summary').textContent = next
-    ? '按顺序完成配置，预计需要 5–10 分钟。当前安全模式不会向真实飞书群投递消息。'
-    : '第一个飞书群已接入并完成真实回复验证。';
-  $('#onboarding-steps').replaceChildren(...steps.map((step, index) => {
-    const item = element('li', `onboarding-step${step.complete ? ' complete' : step === next ? ' current' : ''}`);
-    const marker = element('span', 'onboarding-step-marker', step.complete ? '✓' : String(index + 1));
+  $('#onboarding-summary').textContent = ready
+    ? '管理员已经完成初始化。普通成员不需要登录本页面，也不需要手动创建项目或群绑定。'
+    : '管理员只需初始化一次。完成前系统保持安全模式，不会接收真实群消息。';
+  const memberSteps = [
+    ['在群里添加 MaxTag', '打开飞书群右上角菜单，选择“机器人”，搜索并添加 MaxTag。'],
+    ['@MaxTag 说出需求', '例如：@MaxTag 帮我总结这个话题。第一条消息需要 @，之后在同一话题里直接回复即可。'],
+    ['在群里查看结果', '进度、停止按钮、文件和最终结果都会回到原话题。'],
+  ];
+  $('#onboarding-steps').replaceChildren(...memberSteps.map(([title, description], index) => {
+    const item = element('li', 'onboarding-step');
+    const marker = element('span', 'onboarding-step-marker', String(index + 1));
     const copy = element('div', 'onboarding-step-copy');
-    copy.append(element('strong', '', step.title), element('span', '', step.description));
-    const status = element('span', 'onboarding-step-status', step.complete ? '已完成' : step === next ? '当前步骤' : '待完成');
-    item.append(marker, copy, status);
+    copy.append(element('strong', '', title), element('span', '', description));
+    item.append(marker, copy);
+    return item;
+  }));
+  $('#onboarding-admin-summary').textContent = `管理员初始化状态（${completed} / ${steps.length}）`;
+  $('#onboarding-admin-checks').replaceChildren(...steps.map((step) => {
+    const item = element('div', `onboarding-admin-check${step.complete ? ' complete' : ''}`);
+    item.append(
+      element('span', '', step.complete ? '✓' : '—'),
+      element('strong', '', step.title),
+      element('span', '', step.complete ? '已就绪' : '待完成'),
+    );
     return item;
   }));
   const action = $('#onboarding-primary-action');
-  action.textContent = next?.action || '打开网页助手';
-  action.dataset.view = next?.view || 'assistant';
+  action.textContent = ready ? '打开网页助手' : '查看管理员设置';
+  action.dataset.view = ready ? 'assistant' : 'connectors';
+  action.dataset.admin = ready ? 'false' : 'true';
 }
 
 function spendMoney(value) {
@@ -8407,12 +8532,19 @@ $('#onboarding-reopen').addEventListener('click', () => {
   $('#onboarding-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 $('#onboarding-primary-action').addEventListener('click', (event) => {
+  if (event.currentTarget.dataset.admin === 'true') setAdminMode(true);
   showView(event.currentTarget.dataset.view || 'projects');
+});
+$('#toggle-admin-mode').addEventListener('click', () => {
+  setAdminMode(!$('#app-shell').classList.contains('admin-mode'));
 });
 
 installChineseInterface();
+setAdminMode(localStorage.getItem(ADMIN_MODE_KEY) === 'true');
 const initialView = location.hash.slice(1);
-showView(viewCopy[initialView] ? initialView : 'overview', false);
+const initialAdminMode = $('#app-shell').classList.contains('admin-mode');
+const allowedInitialView = initialAdminMode || ['overview', 'assistant', 'activity'].includes(initialView);
+showView(viewCopy[initialView] && allowedInitialView ? initialView : 'overview', false);
 if (await loadOperatorSession()) await refreshAll();
 
 setInterval(() => {

@@ -92,7 +92,12 @@ Every inbound client event is normalized into the same sequence:
 client event -> SourceThread -> Workspace -> Project -> actor capability -> scoped memory -> Executor
 ```
 
-Client onboarding is separate from execution:
+For the default single-workspace Lark product, onboarding is intentionally
+add-bot-and-mention: an administrator configures the Lark app, default project,
+and executor once; a member then adds MaxTag to a group and mentions it. The
+first accepted run persists an observed topic route to that default project.
+Deployments that require explicit project selection can enable configured
+binding mode and retain the pairing-code flow:
 
 ```text
 pairing invitation -> client chat -> configured project binding -> SourceThread route

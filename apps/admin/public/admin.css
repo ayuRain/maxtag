@@ -247,6 +247,18 @@ h3 {
   background: rgba(255, 255, 255, 0.16);
 }
 
+.app-shell:not(.admin-mode) .advanced-nav-item {
+  display: none;
+}
+
+.app-shell:not(.admin-mode) .workspace-switcher > span:last-child {
+  display: none;
+}
+
+.app-shell:not(.admin-mode) #view-overview > :not(.onboarding-panel):not(.onboarding-reopen) {
+  display: none;
+}
+
 .sidebar-footer {
   border-top: 1px solid var(--line);
   padding: 13px 8px 0;
@@ -254,6 +266,12 @@ h3 {
   gap: 5px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.admin-mode-toggle {
+  width: 100%;
+  min-height: 34px;
+  margin-bottom: 7px;
 }
 
 .operator-principal {
@@ -546,6 +564,37 @@ h3 {
 .onboarding-actions { align-items: center; border-top: 1px solid var(--line); }
 .onboarding-actions > span { text-align: right; }
 .onboarding-reopen { margin-top: 14px; }
+
+.onboarding-admin-details {
+  border-top: 1px solid var(--line);
+  padding: 0 20px;
+}
+
+.onboarding-admin-details summary {
+  padding: 13px 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+#onboarding-admin-checks {
+  padding-bottom: 12px;
+}
+
+.onboarding-admin-check {
+  min-height: 34px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.onboarding-admin-check strong { color: var(--ink); font-size: 11px; }
+.onboarding-admin-check.complete > span:first-child { color: var(--green); font-weight: 800; }
 
 .client-table,
 .connector-binding-list,
@@ -4767,6 +4816,7 @@ pre {
   .onboarding-step-status { grid-column: 2; }
   .onboarding-actions { align-items: stretch; flex-direction: column; }
   .onboarding-actions > span { text-align: left; }
+  .onboarding-admin-details { padding: 0 16px; }
 
   .summary-strip,
   .connector-summary {
