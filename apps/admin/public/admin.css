@@ -4900,7 +4900,10 @@ pre {
     grid-template-columns: 22px minmax(0, 1fr) auto;
     padding: 10px 0;
   }
-  .lark-readiness-row > span:nth-child(3) { grid-column: 2 / -1; }
+  .lark-readiness-row > .lark-readiness-icon { grid-column: 1; grid-row: 1; }
+  .lark-readiness-row > strong { grid-column: 2; grid-row: 1; }
+  .lark-readiness-row > small { grid-column: 3; grid-row: 1; white-space: nowrap; }
+  .lark-readiness-row > span:nth-child(3) { grid-column: 2 / -1; grid-row: 2; }
   .connector-advanced > summary { align-items: flex-start; flex-direction: column; gap: 3px; }
 
   .summary-strip,
