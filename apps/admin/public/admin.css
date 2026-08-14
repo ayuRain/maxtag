@@ -661,6 +661,7 @@ h3 {
 .lark-guide li strong { margin-bottom: 2px; font-size: 11px; }
 .lark-platform-link { display: inline-flex; margin: 0 0 14px 24px; text-decoration: none; }
 .lark-channel-actions { display: flex; align-items: center; gap: 12px; }
+.lark-channel-actions > button { flex: 0 0 auto; white-space: nowrap; }
 .connector-advanced { margin-top: 18px; border-top: 1px solid var(--line); }
 .connector-advanced > summary {
   padding: 16px 4px;
@@ -4896,6 +4897,7 @@ pre {
   .onboarding-admin-details { padding: 0 16px; }
   .lark-channel-header { align-items: flex-start; padding: 15px 16px; }
   .lark-channel-body { padding: 16px; }
+  .lark-channel-actions { align-items: flex-start; }
   .lark-readiness-row {
     grid-template-columns: 22px minmax(0, 1fr) auto;
     padding: 10px 0;
