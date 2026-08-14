@@ -673,6 +673,23 @@ h3 {
 .lark-readiness-icon { color: var(--muted); font-size: 12px; font-weight: 800; }
 .lark-readiness-row.ready .lark-readiness-icon,
 .lark-readiness-row.ready > small { color: var(--green); }
+.executor-setup-card {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+.executor-setup-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.executor-setup-head > div { display: grid; gap: 3px; }
+.executor-setup-head strong { font-size: 12px; }
+.executor-setup-head span:not(.state-pill) { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.executor-setup-card .lark-credential-form { border: 0; padding: 0; }
 .lark-guide { border: 1px solid var(--line); border-radius: 7px; padding: 0 14px; }
 .lark-guide summary { padding: 12px 0; cursor: pointer; font-size: 12px; font-weight: 650; }
 .lark-guide ol { margin: 0; padding: 0 0 14px 24px; display: grid; gap: 10px; }

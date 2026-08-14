@@ -65,6 +65,26 @@ test('admin presents Lark as a focused channel card with progressive disclosure'
   assert.match(server, /validateManagedLarkBotCredential/u);
 });
 
+test('admin configures a real local CLI executor with either CLI login or an encrypted API key', async () => {
+  const [html, script, styles, server] = await Promise.all([
+    fs.readFile('apps/admin/public/index.html', 'utf8'),
+    fs.readFile('apps/admin/public/admin.js', 'utf8'),
+    fs.readFile('apps/admin/public/admin.css', 'utf8'),
+    fs.readFile('apps/server/src/index.ts', 'utf8'),
+  ]);
+  assert.match(html, /id="executor-credential-form"/u);
+  assert.match(html, /复用本机 CLI/u);
+  assert.match(html, /option value="api-key">API Key（推荐）/u);
+  assert.match(html, /id="executor-api-key"[^>]*type="password"/u);
+  assert.match(script, /async function saveExecutorCredentials/u);
+  assert.match(script, /async function removeExecutorCredentials/u);
+  assert.match(script, /getJson\('\/v1\/config\/executor'/u);
+  assert.match(styles, /\.executor-setup-card/u);
+  assert.match(server, /validateManagedExecutorCredential/u);
+  assert.match(server, /url\.pathname === '\/v1\/config\/executor'/u);
+  assert.match(server, /requireInstallationOwner/u);
+});
+
 test('admin Connectors and destinations expose native Slack', async () => {
   const [html, script] = await Promise.all([
     fs.readFile('apps/admin/public/index.html', 'utf8'),

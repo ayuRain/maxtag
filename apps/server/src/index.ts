@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
@@ -52,11 +53,15 @@ import {
   FileKnowledgeSourceStore,
   FileKnowledgeSourceRefreshStore,
   FileLarkBotCredentialStore,
+  FileExecutorCredentialStore,
   FileOperatorCredentialStore,
   FileToolCredentialIdentityStore,
   knowledgeSourceNextRefreshAt,
   KnowledgeSourceRevisionConflictError,
   LarkBotCredentialRevisionConflictError,
+  ExecutorCredentialRevisionConflictError,
+  managedExecutorRuntimeSettings,
+  normalizeManagedExecutorBaseUrl,
   FilePairingStore,
   FileManagedConnectorStore,
   FileThreadConfigStore,
@@ -235,6 +240,11 @@ const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
 const adminDir = path.resolve('apps/admin/public');
 const larkBotCredentialStore = new FileLarkBotCredentialStore(dataDir);
 const managedLarkBotCredential = await larkBotCredentialStore.get();
+const executorCredentialStore = new FileExecutorCredentialStore(dataDir);
+const managedExecutorCredential = await executorCredentialStore.get();
+const managedExecutorSettings = managedExecutorCredential
+  ? managedExecutorRuntimeSettings(managedExecutorCredential)
+  : undefined;
 const metricsToken = process.env.OPENTAG_METRICS_TOKEN?.trim();
 const shutdownTimeoutMs = numberEnvironmentValue(
   'OPENTAG_SHUTDOWN_TIMEOUT_MS',
@@ -373,8 +383,8 @@ const assistantStreamPollMs = Math.max(
   Number(process.env.OPENTAG_ASSISTANT_STREAM_POLL_MS || 250),
 );
 const agentWorkerId = `opentag-${process.pid}`;
-const executorMode =
-  process.env.OPENTAG_EXECUTOR_MODE === 'local-cli' ? 'local-cli' : 'dry-run';
+const executorMode = managedExecutorSettings?.mode ||
+  (process.env.OPENTAG_EXECUTOR_MODE === 'local-cli' ? 'local-cli' : 'dry-run');
 const executorWorkspaceRoot =
   process.env.OPENTAG_EXECUTOR_WORKSPACE_ROOT || process.cwd();
 const executorTimeoutMs = numberEnvironmentValue(
@@ -429,7 +439,9 @@ const transcriptMaxChars = numberEnvironmentValue(
   40_000,
 );
 const codexCommand = process.env.OPENTAG_CODEX_COMMAND || 'codex';
-const codexModel = process.env.OPENTAG_CODEX_MODEL;
+const codexModel = managedExecutorSettings?.codexModel || process.env.OPENTAG_CODEX_MODEL;
+const codexCommandPrefixArgs = managedExecutorSettings?.codexCommandPrefixArgs;
+const codexEnvironment = managedExecutorSettings?.codexEnvironment;
 const codexAppServer =
   process.env.OPENTAG_CODEX_APP_SERVER !== undefined
     ? !['0', 'false', 'no'].includes(
@@ -443,14 +455,16 @@ const codexHome =
   process.env.OPENTAG_CODEX_HOME || path.join(dataDir, 'providers', 'codex');
 const codexAuthSourceHome = process.env.OPENTAG_CODEX_AUTH_SOURCE_HOME;
 const claudeCommand = process.env.OPENTAG_CLAUDE_COMMAND || 'claude';
-const claudeModel = process.env.OPENTAG_CLAUDE_MODEL;
+const claudeModel = managedExecutorSettings?.claudeModel || process.env.OPENTAG_CLAUDE_MODEL;
+const claudeEnvironment = managedExecutorSettings?.claudeEnvironment;
 const claudeMaxBudgetUsd = optionalNumberEnvironmentValue(
   'OPENTAG_CLAUDE_MAX_BUDGET_USD',
 );
-const memoryExecutorId =
-  process.env.OPENTAG_MEMORY_EXECUTOR === 'claude' ? 'claude' : 'codex';
+const memoryExecutorId = managedExecutorSettings?.defaultExecutorId ||
+  (process.env.OPENTAG_MEMORY_EXECUTOR === 'claude' ? 'claude' : 'codex');
 const memoryModel =
   process.env.OPENTAG_MEMORY_MODEL ||
+  managedExecutorCredential?.model ||
   (memoryExecutorId === 'codex' ? 'gpt-5.6-luna' : undefined);
 const memoryAnalysisModel =
   process.env.OPENTAG_MEMORY_ANALYSIS_MODEL || memoryModel;
@@ -458,10 +472,11 @@ const memoryQueryModel = process.env.OPENTAG_MEMORY_QUERY_MODEL || memoryModel;
 const memoryRetrievalModel =
   process.env.OPENTAG_MEMORY_RETRIEVAL_MODEL || memoryModel;
 const memoryWrapupModel = process.env.OPENTAG_MEMORY_WRAPUP_MODEL || memoryModel;
-const knowledgeExecutorId =
-  process.env.OPENTAG_KNOWLEDGE_EXECUTOR === 'claude' ? 'claude' : 'codex';
+const knowledgeExecutorId = managedExecutorSettings?.defaultExecutorId ||
+  (process.env.OPENTAG_KNOWLEDGE_EXECUTOR === 'claude' ? 'claude' : 'codex');
 const knowledgeModel =
   process.env.OPENTAG_KNOWLEDGE_MODEL ||
+  managedExecutorCredential?.model ||
   (knowledgeExecutorId === 'codex' ? 'gpt-5.6-luna' : undefined);
 const knowledgeEnrichmentEnabled = !['0', 'false', 'no'].includes(
   String(
@@ -897,6 +912,12 @@ const toolBroker = createOpenTagToolBroker({
       ) {
         return undefined;
       }
+      if (
+        managedExecutorSettings?.enabledExecutorIds &&
+        !managedExecutorSettings.enabledExecutorIds.includes(definition.executorId)
+      ) {
+        return undefined;
+      }
       return createDefaultExecutorRegistry(
         {
           mode: executorMode,
@@ -906,16 +927,20 @@ const toolBroker = createOpenTagToolBroker({
           inheritEnv: executorInheritEnv,
           sessionMode: 'transcript',
           codexCommand,
+          codexCommandPrefixArgs,
+          codexEnvironment,
           codexModel:
             definition.executorId === 'codex' ? definition.model : codexModel,
           codexAppServer: false,
           codexHome,
           codexAuthSourceHome,
           claudeCommand,
+          claudeEnvironment,
           claudeModel:
             definition.executorId === 'claude' ? definition.model : claudeModel,
           claudeMaxBudgetUsd,
           defaultExecutorId: definition.executorId,
+          enabledExecutorIds: managedExecutorSettings?.enabledExecutorIds,
         },
         toolBroker,
       ).get(definition.executorId);
@@ -952,14 +977,19 @@ const executorRegistry = createDefaultExecutorRegistry(
     maxArtifactBytes: executorMaxArtifactBytes,
     maxArtifacts: executorMaxArtifacts,
     codexCommand,
+    codexCommandPrefixArgs,
+    codexEnvironment,
     codexModel,
     codexAppServer,
     codexContextCompactionThreshold,
     codexHome,
     codexAuthSourceHome,
     claudeCommand,
+    claudeEnvironment,
     claudeModel,
     claudeMaxBudgetUsd,
+    defaultExecutorId: managedExecutorSettings?.defaultExecutorId,
+    enabledExecutorIds: managedExecutorSettings?.enabledExecutorIds,
   },
   toolBroker,
 );
@@ -974,12 +1004,16 @@ const createMemoryExecutorRegistry = (model: string | undefined) =>
     inheritEnv: executorInheritEnv,
     sessionMode: 'transcript',
     codexCommand,
+    codexCommandPrefixArgs,
+    codexEnvironment,
     codexModel: memoryExecutorId === 'codex' ? model : codexModel,
     codexAppServer: false,
     claudeCommand,
+    claudeEnvironment,
     claudeModel: memoryExecutorId === 'claude' ? model : claudeModel,
     claudeMaxBudgetUsd,
     defaultExecutorId: memoryExecutorId,
+    enabledExecutorIds: managedExecutorSettings?.enabledExecutorIds,
   });
 const memoryAnalysisExecutorRegistry = createMemoryExecutorRegistry(
   memoryAnalysisModel,
@@ -1001,12 +1035,16 @@ const knowledgeExecutorRegistry = createDefaultExecutorRegistry({
   inheritEnv: executorInheritEnv,
   sessionMode: 'transcript',
   codexCommand,
+  codexCommandPrefixArgs,
+  codexEnvironment,
   codexModel: knowledgeExecutorId === 'codex' ? knowledgeModel : codexModel,
   codexAppServer: false,
   claudeCommand,
+  claudeEnvironment,
   claudeModel: knowledgeExecutorId === 'claude' ? knowledgeModel : claudeModel,
   claudeMaxBudgetUsd,
   defaultExecutorId: knowledgeExecutorId,
+  enabledExecutorIds: managedExecutorSettings?.enabledExecutorIds,
 });
 const workflowStore =
   sqliteStorage?.workflowStore ??
@@ -1046,7 +1084,7 @@ const threadConfigStore = new FileThreadConfigStore(path.join(dataDir, 'config')
     displayName: 'MaxTag',
     instructions:
       'You are MaxTag in a shared work thread. Keep progress visible and publish durable artifacts.',
-    defaultExecutorId: 'codex',
+    defaultExecutorId: managedExecutorSettings?.defaultExecutorId || 'codex',
   },
   workspace: {
     id: 'dev-workspace',
@@ -1169,6 +1207,12 @@ const delegatedAgentTaskService = new DelegatedAgentTaskService({
     if (definition.executorId !== 'codex' && definition.executorId !== 'claude') {
       return undefined;
     }
+    if (
+      managedExecutorSettings?.enabledExecutorIds &&
+      !managedExecutorSettings.enabledExecutorIds.includes(definition.executorId)
+    ) {
+      return undefined;
+    }
     return createDefaultExecutorRegistry(
       {
         mode: executorMode,
@@ -1178,14 +1222,18 @@ const delegatedAgentTaskService = new DelegatedAgentTaskService({
         inheritEnv: executorInheritEnv,
         sessionMode: 'transcript',
         codexCommand,
+        codexCommandPrefixArgs,
+        codexEnvironment,
         codexModel: definition.executorId === 'codex' ? definition.model : codexModel,
         codexAppServer: false,
         codexHome,
         codexAuthSourceHome,
         claudeCommand,
+        claudeEnvironment,
         claudeModel: definition.executorId === 'claude' ? definition.model : claudeModel,
         claudeMaxBudgetUsd,
         defaultExecutorId: definition.executorId,
+        enabledExecutorIds: managedExecutorSettings?.enabledExecutorIds,
       },
       toolBroker,
     ).get(definition.executorId);
@@ -1756,6 +1804,137 @@ async function validateManagedLarkBotCredential(input: {
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+async function runExecutorProbe(
+  command: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+  timeoutMs = 10_000,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const child = spawn(command, args, {
+      env: environment,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const finish = (value: { code: number | null; stdout: string; stderr: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    child.stdout.on('data', (chunk) => {
+      stdout = `${stdout}${String(chunk)}`.slice(-64 * 1024);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr = `${stderr}${String(chunk)}`.slice(-64 * 1024);
+    });
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (code) => finish({ code, stdout, stderr }));
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      finish({ code: null, stdout, stderr: 'executor_probe_timeout' });
+    }, timeoutMs);
+    timer.unref?.();
+  });
+}
+
+function executorModelsEndpoint(provider: 'codex' | 'claude', baseUrl?: string): string {
+  const root = (baseUrl ||
+    (provider === 'codex'
+      ? 'https://api.openai.com/v1'
+      : 'https://api.anthropic.com')).replace(/\/+$/u, '');
+  if (provider === 'codex') return `${root}/models`;
+  return `${root.endsWith('/v1') ? root : `${root}/v1`}/models?limit=1`;
+}
+
+async function validateManagedExecutorCredential(input: {
+  provider: 'codex' | 'claude';
+  authMode: 'cli' | 'api-key';
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<void> {
+  const command = input.provider;
+  let version;
+  try {
+    version = await runExecutorProbe(command, ['--version'], process.env, 5_000);
+  } catch {
+    throw new Error(`executor_${input.provider}_cli_not_installed`);
+  }
+  if (version.code !== 0) {
+    throw new Error(`executor_${input.provider}_cli_not_installed`);
+  }
+  if (input.authMode === 'cli') {
+    const args = input.provider === 'codex'
+      ? ['doctor', '--json']
+      : ['auth', 'status', '--json'];
+    const status = await runExecutorProbe(command, args, process.env, 15_000);
+    if (status.code !== 0) {
+      throw new Error(`executor_${input.provider}_cli_not_authenticated`);
+    }
+    if (input.provider === 'codex') {
+      try {
+        const report = JSON.parse(status.stdout) as {
+          checks?: Record<string, { status?: string }>;
+        };
+        if (report.checks?.['auth.credentials']?.status !== 'ok') {
+          throw new Error('not_authenticated');
+        }
+      } catch {
+        throw new Error('executor_codex_cli_not_authenticated');
+      }
+    }
+    return;
+  }
+  if (!input.apiKey) throw new Error('executor_api_key_required');
+  const headers: Record<string, string> = input.provider === 'codex'
+    ? { authorization: `Bearer ${input.apiKey}` }
+    : {
+        'x-api-key': input.apiKey,
+        'anthropic-version': '2023-06-01',
+      };
+  let response: Response;
+  try {
+    response = await fetch(executorModelsEndpoint(input.provider, input.baseUrl), {
+      headers,
+      signal: AbortSignal.timeout(12_000),
+    });
+  } catch {
+    throw new Error('executor_api_connection_failed');
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new Error('executor_api_key_rejected');
+  }
+  if (!response.ok) {
+    throw new Error(`executor_api_connection_http_${response.status}`);
+  }
+}
+
+async function executorInstallationStatus(): Promise<Record<string, unknown>> {
+  const statuses = await Promise.all(
+    (['codex', 'claude'] as const).map(async (provider) => {
+      try {
+        const result = await runExecutorProbe(provider, ['--version'], process.env, 5_000);
+        return [provider, {
+          installed: result.code === 0,
+          version: result.code === 0
+            ? (result.stdout || result.stderr).trim().slice(0, 160)
+            : undefined,
+        }] as const;
+      } catch {
+        return [provider, { installed: false }] as const;
+      }
+    }),
+  );
+  return Object.fromEntries(statuses);
 }
 
 function telegramTransportStatus(): {
@@ -7796,7 +7975,8 @@ async function enqueueMessageRun(input: {
       ? 'routine-command'
       : memoryCommand
         ? 'memory-command'
-        : resolvedPolicy.identity.defaultExecutorId,
+        : managedExecutorSettings?.defaultExecutorId ||
+          resolvedPolicy.identity.defaultExecutorId,
     transportMode,
     allowLiveSteering: !memoryCommand && !routineCommand && !threadStatusCommand,
     forceNewRun: Boolean(threadStatusCommand),
@@ -9821,6 +10001,149 @@ const server = createServer(async (request, response) => {
         );
       } catch (error) {
         if (error instanceof LarkBotCredentialRevisionConflictError) {
+          sendJson(response, 409, {
+            error: error.message,
+            currentRevision: error.currentRevision,
+          });
+          return;
+        }
+        sendJson(response, 409, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/config/executor') {
+      if (!requireInstallationOwner(response, operatorAuthentication!)) return;
+      sendJson(
+        response,
+        200,
+        {
+          config: await executorCredentialStore.getSummary(),
+          installations: await executorInstallationStatus(),
+          active: {
+            mode: executorMode,
+            defaultExecutorId: executorRegistry.defaultExecutorId,
+            executors: executorRegistry.list(),
+          },
+        },
+        { 'cache-control': 'no-store' },
+      );
+      return;
+    }
+
+    if (request.method === 'PUT' && url.pathname === '/v1/config/executor') {
+      if (!requireInstallationOwner(response, operatorAuthentication!)) return;
+      const body = (await readJsonBody(request, 24 * 1024)) as Record<string, unknown>;
+      const current = await executorCredentialStore.get();
+      const provider = stringValue(body, 'provider', current?.provider || 'codex');
+      const authMode = stringValue(body, 'authMode', current?.authMode || 'cli');
+      const model = stringValue(body, 'model');
+      let baseUrl: string | undefined;
+      const providedApiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+      const apiKey = providedApiKey || (
+        current?.provider === provider &&
+        current?.authMode === 'api-key'
+          ? current.apiKey
+          : undefined
+      );
+      const expectedRevision = numberValue(body, 'expectedRevision');
+      if (provider !== 'codex' && provider !== 'claude') {
+        sendJson(response, 400, { error: 'executor_invalid_provider' });
+        return;
+      }
+      if (authMode !== 'cli' && authMode !== 'api-key') {
+        sendJson(response, 400, { error: 'executor_invalid_auth_mode' });
+        return;
+      }
+      try {
+        baseUrl = normalizeManagedExecutorBaseUrl(stringValue(body, 'baseUrl'));
+      } catch (error) {
+        sendJson(response, 400, {
+          error: error instanceof Error ? error.message : String(error),
+          message: 'Base URL 必须是有效的 HTTPS 地址',
+        });
+        return;
+      }
+      if (
+        expectedRevision !== undefined &&
+        (!Number.isInteger(expectedRevision) || expectedRevision < 0)
+      ) {
+        sendJson(response, 400, { error: 'executor_invalid_revision' });
+        return;
+      }
+      try {
+        await validateManagedExecutorCredential({
+          provider,
+          authMode,
+          baseUrl,
+          apiKey,
+        });
+        const config = await executorCredentialStore.save({
+          provider,
+          authMode,
+          model,
+          baseUrl,
+          apiKey,
+          expectedRevision,
+          actor: operatorActor(operatorAuthentication!),
+        });
+        sendJson(
+          response,
+          200,
+          {
+            config,
+            reloadPending: true,
+            message: `${provider === 'codex' ? 'Codex' : 'Claude'} 执行器验证成功，服务正在重新加载`,
+          },
+          { 'cache-control': 'no-store' },
+        );
+      } catch (error) {
+        if (error instanceof ExecutorCredentialRevisionConflictError) {
+          sendJson(response, 409, {
+            error: error.message,
+            currentRevision: error.currentRevision,
+          });
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        const badInput = message.startsWith('executor_invalid_') ||
+          message === 'executor_api_key_required';
+        sendJson(response, badInput ? 400 : 422, {
+          error: message,
+          message: message.endsWith('_cli_not_installed')
+            ? '这台机器尚未安装所选 CLI'
+            : message.endsWith('_cli_not_authenticated')
+              ? '所选 CLI 尚未在 MaxTag 服务账号下登录，请改用 API Key 或先完成 CLI 登录'
+              : message === 'executor_api_key_rejected'
+                ? 'API Key 无效或没有模型访问权限'
+                : message === 'executor_api_connection_failed'
+                  ? '连接模型 API 超时或失败，请检查 Base URL'
+                  : '执行器配置验证失败',
+        });
+      }
+      return;
+    }
+
+    if (request.method === 'DELETE' && url.pathname === '/v1/config/executor') {
+      if (!requireInstallationOwner(response, operatorAuthentication!)) return;
+      const body = (await readJsonBody(request, 4 * 1024)) as Record<string, unknown>;
+      const expectedRevision = numberValue(body, 'expectedRevision');
+      try {
+        const config = await executorCredentialStore.remove({ expectedRevision });
+        sendJson(
+          response,
+          200,
+          {
+            config,
+            reloadPending: true,
+            message: '真实执行器已停用，服务正在重新加载',
+          },
+          { 'cache-control': 'no-store' },
+        );
+      } catch (error) {
+        if (error instanceof ExecutorCredentialRevisionConflictError) {
           sendJson(response, 409, {
             error: error.message,
             currentRevision: error.currentRevision,

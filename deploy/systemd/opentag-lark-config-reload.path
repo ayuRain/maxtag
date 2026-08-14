@@ -1,8 +1,9 @@
 [Unit]
-Description=Watch MaxTag managed Lark Bot configuration
+Description=Watch MaxTag managed runtime configuration
 
 [Path]
 PathChanged=/var/lib/opentag/lark-bot.enc.json
+PathChanged=/var/lib/opentag/executor.enc.json
 Unit=opentag-lark-config-reload.service
 
 [Install]

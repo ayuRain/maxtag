@@ -8,7 +8,11 @@ import {
 } from '@opentag/runtime-host';
 import type { LarkOpenApiDomain } from '@opentag/platform-lark';
 import { GitHubAppInstallationTokenProvider } from '@opentag/platform-github';
-import { FileLarkBotCredentialStore } from '@opentag/config';
+import {
+  FileExecutorCredentialStore,
+  FileLarkBotCredentialStore,
+  managedExecutorRuntimeSettings,
+} from '@opentag/config';
 
 function numberEnv(name: string, fallback: number): number {
   const value = process.env[name];
@@ -87,6 +91,10 @@ async function main(): Promise<void> {
   const startedAt = new Date().toISOString();
   const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
   const managedLarkBotCredential = await new FileLarkBotCredentialStore(dataDir).get();
+  const managedExecutorCredential = await new FileExecutorCredentialStore(dataDir).get();
+  const managedExecutor = managedExecutorCredential
+    ? managedExecutorRuntimeSettings(managedExecutorCredential)
+    : undefined;
   const intervalMs = numberEnv('OPENTAG_WORKER_INTERVAL_MS', 2000);
   const batchSize = numberEnv('OPENTAG_WORKER_BATCH', 1);
   const staleMs = numberEnv(
@@ -174,13 +182,15 @@ async function main(): Promise<void> {
       baseUrl: process.env.OPENTAG_GITHUB_BASE_URL,
     },
     executors: {
-      mode: executorMode(),
+      mode: managedExecutor?.mode || executorMode(),
       workspaceRoot: process.env.OPENTAG_EXECUTOR_WORKSPACE_ROOT,
       timeoutMs: optionalNumberEnv('OPENTAG_EXECUTOR_TIMEOUT_MS'),
       maxOutputBytes: optionalNumberEnv('OPENTAG_EXECUTOR_MAX_OUTPUT_BYTES'),
       inheritEnv: listEnv('OPENTAG_EXECUTOR_INHERIT_ENV'),
       codexCommand: process.env.OPENTAG_CODEX_COMMAND,
-      codexModel: process.env.OPENTAG_CODEX_MODEL,
+      codexCommandPrefixArgs: managedExecutor?.codexCommandPrefixArgs,
+      codexEnvironment: managedExecutor?.codexEnvironment,
+      codexModel: managedExecutor?.codexModel || process.env.OPENTAG_CODEX_MODEL,
       codexAppServer:
         process.env.OPENTAG_CODEX_APP_SERVER !== undefined
           ? booleanEnv('OPENTAG_CODEX_APP_SERVER', true)
@@ -194,7 +204,8 @@ async function main(): Promise<void> {
       codexHome: process.env.OPENTAG_CODEX_HOME,
       codexAuthSourceHome: process.env.OPENTAG_CODEX_AUTH_SOURCE_HOME,
       claudeCommand: process.env.OPENTAG_CLAUDE_COMMAND,
-      claudeModel: process.env.OPENTAG_CLAUDE_MODEL,
+      claudeEnvironment: managedExecutor?.claudeEnvironment,
+      claudeModel: managedExecutor?.claudeModel || process.env.OPENTAG_CLAUDE_MODEL,
       claudeMaxBudgetUsd: optionalNumberEnv('OPENTAG_CLAUDE_MAX_BUDGET_USD'),
       sessionMode:
         process.env.OPENTAG_EXECUTOR_SESSION_MODE === 'transcript'
@@ -210,13 +221,15 @@ async function main(): Promise<void> {
       artifactRoot: process.env.OPENTAG_ARTIFACT_ROOT,
       maxArtifactBytes: optionalNumberEnv('OPENTAG_MAX_ARTIFACT_BYTES'),
       maxArtifacts: optionalNumberEnv('OPENTAG_MAX_ARTIFACTS'),
+      defaultExecutorId: managedExecutor?.defaultExecutorId,
+      enabledExecutorIds: managedExecutor?.enabledExecutorIds,
     },
     memoryAnalysis: {
-      executorId:
-        process.env.OPENTAG_MEMORY_EXECUTOR === 'claude' ? 'claude' : 'codex',
+      executorId: managedExecutor?.defaultExecutorId ||
+        (process.env.OPENTAG_MEMORY_EXECUTOR === 'claude' ? 'claude' : 'codex'),
       model:
-        process.env.OPENTAG_MEMORY_MODEL ||
-        (process.env.OPENTAG_MEMORY_EXECUTOR === 'claude'
+        process.env.OPENTAG_MEMORY_MODEL || managedExecutorCredential?.model ||
+        ((managedExecutor?.defaultExecutorId || process.env.OPENTAG_MEMORY_EXECUTOR) === 'claude'
           ? undefined
           : 'gpt-5.6-luna'),
       analysisModel: process.env.OPENTAG_MEMORY_ANALYSIS_MODEL,
@@ -263,11 +276,11 @@ async function main(): Promise<void> {
         'OPENTAG_KNOWLEDGE_ENRICHMENT_ENABLED',
         executorMode() === 'local-cli',
       ),
-      executorId:
-        process.env.OPENTAG_KNOWLEDGE_EXECUTOR === 'claude' ? 'claude' : 'codex',
+      executorId: managedExecutor?.defaultExecutorId ||
+        (process.env.OPENTAG_KNOWLEDGE_EXECUTOR === 'claude' ? 'claude' : 'codex'),
       model:
-        process.env.OPENTAG_KNOWLEDGE_MODEL ||
-        (process.env.OPENTAG_KNOWLEDGE_EXECUTOR === 'claude'
+        process.env.OPENTAG_KNOWLEDGE_MODEL || managedExecutorCredential?.model ||
+        ((managedExecutor?.defaultExecutorId || process.env.OPENTAG_KNOWLEDGE_EXECUTOR) === 'claude'
           ? undefined
           : 'gpt-5.6-luna'),
       timeoutMs: optionalNumberEnv('OPENTAG_KNOWLEDGE_ENRICHMENT_TIMEOUT_MS'),

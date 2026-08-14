@@ -55,6 +55,7 @@ test('systemd services share a hardened, graceful runtime contract', async () =>
     fs.readFile('deploy/systemd/opentag-lark-config-reload.service', 'utf8'),
   ]);
   assert.match(reloadPath, /PathChanged=\/var\/lib\/opentag\/lark-bot\.enc\.json/u);
+  assert.match(reloadPath, /PathChanged=\/var\/lib\/opentag\/executor\.enc\.json/u);
   assert.match(reloadService, /systemctl try-restart opentag-server\.service opentag-worker\.service/u);
   assert.match(reloadService, /systemctl restart opentag-lark-bridge\.service/u);
 });

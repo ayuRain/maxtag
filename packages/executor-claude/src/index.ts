@@ -566,11 +566,14 @@ export class ClaudeExecutor implements Executor {
           }
           await pumpSteering(writer);
         },
-        env: createCliEnvironment({
-          provider: 'claude',
-          request,
-          inheritEnv: this.options.inheritEnv,
-        }),
+        env: {
+          ...createCliEnvironment({
+            provider: 'claude',
+            request,
+            inheritEnv: this.options.inheritEnv,
+          }),
+          ...this.options.environment,
+        },
         timeoutMs: this.options.timeoutMs ?? 20 * 60_000,
         maxOutputBytes: this.options.maxOutputBytes,
         abortSignal: request.abortSignal,

@@ -179,12 +179,15 @@ export interface RuntimeHostExecutorConfig {
   maxOutputBytes?: number;
   inheritEnv?: string[];
   codexCommand?: string;
+  codexCommandPrefixArgs?: string[];
+  codexEnvironment?: Record<string, string>;
   codexModel?: string;
   codexAppServer?: boolean;
   codexContextCompactionThreshold?: number;
   codexHome?: string;
   codexAuthSourceHome?: string;
   claudeCommand?: string;
+  claudeEnvironment?: Record<string, string>;
   claudeModel?: string;
   claudeMaxBudgetUsd?: number;
   sessionMode?: 'provider' | 'transcript';
@@ -195,6 +198,7 @@ export interface RuntimeHostExecutorConfig {
   maxArtifactBytes?: number;
   maxArtifacts?: number;
   defaultExecutorId?: 'codex' | 'claude';
+  enabledExecutorIds?: Array<'codex' | 'claude'>;
 }
 
 export function createDefaultExecutorRegistry(
@@ -217,6 +221,8 @@ export function createDefaultExecutorRegistry(
   const codex = createCodexExecutor({
     ...common,
     command: config.codexCommand,
+    commandPrefixArgs: config.codexCommandPrefixArgs,
+    environment: config.codexEnvironment,
     model: config.codexModel,
     appServer: config.codexAppServer,
     contextCompactionThreshold: config.codexContextCompactionThreshold,
@@ -226,6 +232,7 @@ export function createDefaultExecutorRegistry(
   const claude = createClaudeExecutor({
     ...common,
     command: config.claudeCommand,
+    environment: config.claudeEnvironment,
     model: config.claudeModel,
     maxBudgetUsd: config.claudeMaxBudgetUsd,
   });
@@ -254,9 +261,7 @@ export function createDefaultExecutorRegistry(
     status: mode === 'dry-run' ? 'dry-run' : 'ready',
     capabilities: { ...sharedCapabilities, steering, nativeCompaction },
   });
-  return new StaticExecutorRegistry({
-    defaultExecutorId: config.defaultExecutorId ?? 'codex',
-    registrations: [
+  const registrations = [
       {
         executor: codex,
         descriptor: descriptor(
@@ -276,7 +281,17 @@ export function createDefaultExecutorRegistry(
           config.claudeModel,
         ),
       },
-    ],
+    ].filter((registration) =>
+      !config.enabledExecutorIds ||
+      config.enabledExecutorIds.includes(registration.executor.id as 'codex' | 'claude'),
+    );
+  const defaultExecutorId = config.defaultExecutorId ?? 'codex';
+  if (!registrations.some((registration) => registration.executor.id === defaultExecutorId)) {
+    throw new Error('default_executor_not_enabled');
+  }
+  return new StaticExecutorRegistry({
+    defaultExecutorId,
+    registrations,
   });
 }
 

@@ -953,6 +953,49 @@
 
               <div class="lark-readiness-list" id="lark-readiness-list"></div>
 
+              <section class="executor-setup-card">
+                <div class="executor-setup-head">
+                  <div>
+                    <strong>真实执行器</strong>
+                    <span>复用本机 CLI；可以使用服务账号已有登录，或由平台加密托管 API Key。</span>
+                  </div>
+                  <span class="state-pill planned" id="executor-setup-state">待配置</span>
+                </div>
+                <form class="lark-credential-form" id="executor-credential-form">
+                  <label class="field">
+                    <span>执行器</span>
+                    <select id="executor-provider">
+                      <option value="codex">Codex CLI</option>
+                      <option value="claude">Claude CLI</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>认证方式</span>
+                    <select id="executor-auth-mode">
+                      <option value="api-key">API Key（推荐）</option>
+                      <option value="cli">复用本机 CLI 登录</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>模型（可选）</span>
+                    <input id="executor-model" autocomplete="off" spellcheck="false" placeholder="例如 gpt-5.5" />
+                  </label>
+                  <label class="field executor-api-field">
+                    <span>API Base URL（可选）</span>
+                    <input id="executor-base-url" type="url" autocomplete="off" spellcheck="false" placeholder="留空使用官方 API" />
+                  </label>
+                  <label class="field executor-api-field">
+                    <span>API Key</span>
+                    <input id="executor-api-key" type="password" autocomplete="new-password" placeholder="输入 API Key" />
+                  </label>
+                  <div class="lark-credential-actions">
+                    <button class="primary-button" id="save-executor-credentials" type="submit">验证并启用</button>
+                    <button class="danger-text-button" id="remove-executor-credentials" type="button" hidden>停用执行器</button>
+                  </div>
+                  <small id="executor-credential-hint">API Key 会使用 AES-256-GCM 加密保存，不会回显；执行仍由本机 CLI 完成。</small>
+                </form>
+              </section>
+
               <details class="lark-guide" id="lark-guide">
                 <summary>飞书开放平台配置指引</summary>
                 <ol>

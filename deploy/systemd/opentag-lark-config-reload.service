@@ -1,5 +1,5 @@
 [Unit]
-Description=Reload MaxTag services after managed Lark Bot configuration changes
+Description=Reload MaxTag services after managed runtime configuration changes
 
 [Service]
 Type=oneshot

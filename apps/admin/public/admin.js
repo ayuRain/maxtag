@@ -10,6 +10,7 @@ const state = {
   capabilities: null,
   larkReadiness: null,
   larkConfig: null,
+  executorConfig: null,
   mcpConnectors: null,
   toolIdentities: null,
   skills: null,
@@ -2123,6 +2124,102 @@ function renderLarkSetup() {
   $('#lark-test-result').textContent = readiness.checkedAt
     ? `${readiness.message || (ready ? '连接正常' : '仍有未完成项')} · ${formatTime(readiness.checkedAt, true)}`
     : '尚未验证';
+}
+
+function updateExecutorAuthFields() {
+  const apiMode = $('#executor-auth-mode').value === 'api-key';
+  for (const field of $$('.executor-api-field')) field.hidden = !apiMode;
+  const managed = state.executorConfig?.config;
+  const preservesKey = managed?.configured &&
+    managed.provider === $('#executor-provider').value &&
+    managed.authMode === 'api-key' &&
+    managed.hasApiKey;
+  $('#executor-api-key').required = apiMode && !preservesKey;
+  $('#executor-api-key').placeholder = preservesKey
+    ? '已加密保存；留空保持不变'
+    : '输入 API Key';
+}
+
+function renderExecutorSetup() {
+  const managed = state.executorConfig?.config;
+  const form = $('#executor-credential-form');
+  form.hidden = !canManageOperatorCredentials();
+  if (!form.contains(document.activeElement)) {
+    $('#executor-provider').value = managed?.provider || 'codex';
+    $('#executor-auth-mode').value = managed?.authMode || 'api-key';
+    $('#executor-model').value = managed?.model || '';
+    $('#executor-base-url').value = managed?.baseUrl || '';
+    $('#executor-api-key').value = '';
+  }
+  updateExecutorAuthFields();
+  $('#remove-executor-credentials').hidden = !managed?.configured;
+  const provider = $('#executor-provider').value;
+  const installation = state.executorConfig?.installations?.[provider];
+  const ready = Boolean(state.larkReadiness?.executorReady);
+  const stateNode = $('#executor-setup-state');
+  stateNode.className = `state-pill ${ready ? 'ready' : 'planned'}`;
+  stateNode.textContent = ready ? '已就绪' : '待配置';
+  $('#executor-credential-hint').textContent = managed?.configured
+    ? `${managed.provider === 'codex' ? 'Codex' : 'Claude'} · ${managed.authMode === 'cli' ? '本机 CLI 登录' : 'API Key'} · 版本 ${managed.revision} · ${formatTime(managed.updatedAt, true)}；修改后服务会自动重载。`
+    : installation?.installed
+      ? `${provider === 'codex' ? 'Codex CLI' : 'Claude CLI'} 已安装${installation.version ? `（${installation.version}）` : ''}；请选择认证方式。`
+      : `${provider === 'codex' ? 'Codex CLI' : 'Claude CLI'} 尚未安装，无法启用该执行器。`;
+}
+
+async function saveExecutorCredentials(event) {
+  event.preventDefault();
+  const button = $('#save-executor-credentials');
+  setButtonBusy(button, true, '正在验证', '验证并启用');
+  try {
+    const current = state.executorConfig?.config;
+    const result = await getJson('/v1/config/executor', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: $('#executor-provider').value,
+        authMode: $('#executor-auth-mode').value,
+        model: $('#executor-model').value.trim(),
+        baseUrl: $('#executor-base-url').value.trim(),
+        apiKey: $('#executor-api-key').value,
+        expectedRevision: current?.revision || 0,
+      }),
+    });
+    state.executorConfig = {
+      ...state.executorConfig,
+      config: result.config,
+    };
+    $('#executor-api-key').value = '';
+    renderExecutorSetup();
+    showToast(result.message || '真实执行器已保存，正在重新加载');
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    await refreshAll({ quiet: true });
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '正在验证', '验证并启用');
+  }
+}
+
+async function removeExecutorCredentials(button = $('#remove-executor-credentials')) {
+  const current = state.executorConfig?.config;
+  if (!current?.configured || !window.confirm('停用真实执行器？Bot 将不再执行模型任务。')) return;
+  setButtonBusy(button, true, '正在停用', '停用执行器');
+  try {
+    const result = await getJson('/v1/config/executor', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: current.revision }),
+    });
+    state.executorConfig = { ...state.executorConfig, config: result.config };
+    renderExecutorSetup();
+    showToast(result.message || '真实执行器已停用');
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    await refreshAll({ quiet: true });
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '正在停用', '停用执行器');
+  }
 }
 
 async function saveLarkCredentials(event) {
@@ -8152,6 +8249,7 @@ function renderAll() {
   fillProjectSelects();
   renderConnectorConsole();
   renderLarkSetup();
+  renderExecutorSetup();
   renderToolIdentities();
   renderOverviewRuns();
   renderProjectList();
@@ -8197,6 +8295,7 @@ async function refreshAll({ quiet = false } = {}) {
       delegatedAgents,
       operatorCredentials,
       larkConfig,
+      executorConfig,
       larkReadiness,
     ] =
       await Promise.all([
@@ -8224,6 +8323,9 @@ async function refreshAll({ quiet = false } = {}) {
         canManageOperatorCredentials()
           ? getJson('/v1/config/lark')
           : Promise.resolve(null),
+        canManageOperatorCredentials()
+          ? getJson('/v1/config/executor')
+          : Promise.resolve(null),
         getJson('/v1/lark/readiness'),
       ]);
     state.health = health;
@@ -8250,6 +8352,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.delegatedAgents = delegatedAgents;
     state.operatorCredentials = operatorCredentials;
     state.larkConfig = larkConfig;
+    state.executorConfig = executorConfig;
     state.larkReadiness = larkReadiness;
     const fallback = workspace.projects?.[0]?.projectId;
     state.selectedProjectId = projectById(state.selectedProjectId)?.projectId || fallback;
@@ -8288,6 +8391,14 @@ for (const button of $$('[data-go-view]')) {
 $('#auth-form').addEventListener('submit', (event) => void signInOperator(event));
 $('#sign-out').addEventListener('click', () => void signOutOperator());
 $('#refresh-all').addEventListener('click', () => void refreshAll());
+$('#executor-credential-form').addEventListener('submit', (event) =>
+  void saveExecutorCredentials(event),
+);
+$('#remove-executor-credentials').addEventListener('click', (event) =>
+  void removeExecutorCredentials(event.currentTarget),
+);
+$('#executor-provider').addEventListener('change', renderExecutorSetup);
+$('#executor-auth-mode').addEventListener('change', updateExecutorAuthFields);
 
 $('#assistant-project').addEventListener('change', (event) => {
   closeAssistantStream();

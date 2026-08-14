@@ -27,6 +27,7 @@ export interface CliExecutorOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   inheritEnv?: string[];
+  environment?: Record<string, string>;
   artifactRoot?: string;
   maxArtifactBytes?: number;
   maxArtifacts?: number;

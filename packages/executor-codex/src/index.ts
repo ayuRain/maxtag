@@ -452,11 +452,14 @@ export class CodexExecutor implements Executor {
         ]
           .filter(Boolean)
           .join('\n\n'),
-        env: createCliEnvironment({
-          provider: 'codex',
-          request,
-          inheritEnv: this.options.inheritEnv,
-        }),
+        env: {
+          ...createCliEnvironment({
+            provider: 'codex',
+            request,
+            inheritEnv: this.options.inheritEnv,
+          }),
+          ...this.options.environment,
+        },
         timeoutMs: this.options.timeoutMs ?? 20 * 60_000,
         maxOutputBytes: this.options.maxOutputBytes,
         abortSignal: request.abortSignal,
@@ -598,11 +601,14 @@ export class CodexExecutor implements Executor {
     toolSession: CliToolSession | undefined,
     providerSession: ProviderSessionContext | undefined,
   ): Promise<AgentRunResult> {
-    const sourceEnvironment = createCliEnvironment({
-      provider: 'codex',
-      request,
-      inheritEnv: this.options.inheritEnv,
-    });
+    const sourceEnvironment = {
+      ...createCliEnvironment({
+        provider: 'codex',
+        request,
+        inheritEnv: this.options.inheritEnv,
+      }),
+      ...this.options.environment,
+    };
     const codexHome = await prepareCodexAppServerHome({
       target:
         this.options.codexHome ||
