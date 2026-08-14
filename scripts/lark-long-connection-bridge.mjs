@@ -3,8 +3,10 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createServer } from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { FileLarkBotCredentialStore } from '@opentag/config';
 
 function argValue(name) {
   const prefix = `${name}=`;
@@ -422,6 +424,7 @@ export function larkEventToClientEvent(event, options = {}) {
 function config() {
   const dataDir = env('OPENTAG_DATA_DIR') || path.resolve('data');
   return {
+    dataDir,
     serverUrl:
       argValue('--server-url') ||
       env('OPENTAG_SERVER_URL') ||
@@ -483,6 +486,68 @@ function config() {
     dryRun: hasFlag('--dry-run'),
     json: hasFlag('--json'),
   };
+}
+
+async function runLarkCliConfig(args, input, home) {
+  const child = spawn('lark-cli', args, {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      HOME: home,
+      LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1',
+      LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1',
+    },
+    stdio: ['pipe', 'ignore', 'pipe'],
+  });
+  let stderr = '';
+  child.stdin.on('error', () => {});
+  child.stderr.on('data', (chunk) => {
+    stderr = `${stderr}${String(chunk)}`.slice(-1_024);
+  });
+  child.stdin.end(input);
+  const result = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  if (result.code !== 0) {
+    throw new Error(
+      `lark_managed_profile_init_failed:${result.code ?? result.signal ?? 'unknown'}:${stderr.trim()}`,
+    );
+  }
+}
+
+export async function prepareManagedLarkProfile(cfg) {
+  const credential = await new FileLarkBotCredentialStore(cfg.dataDir).get();
+  if (!credential) return cfg;
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'maxtag-lark-cli-'));
+  try {
+    await runLarkCliConfig(
+      [
+        'config',
+        'init',
+        '--name',
+        'maxtag-managed',
+        '--app-id',
+        credential.appId,
+        '--app-secret-stdin',
+        '--brand',
+        credential.domain,
+        '--lang',
+        'en',
+      ],
+      `${credential.appSecret}\n`,
+      home,
+    );
+    return {
+      ...cfg,
+      larkCliProfile: 'maxtag-managed',
+      larkCliHome: home,
+      managedCredentialRevision: credential.revision,
+    };
+  } catch (error) {
+    await fs.rm(home, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function readBackfillCheckpoints(filePath, fallback) {
@@ -804,6 +869,7 @@ async function consumeKey(cfg, state, eventKey) {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      ...(cfg.larkCliHome ? { HOME: cfg.larkCliHome } : {}),
       LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1',
       LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1',
     },
@@ -926,7 +992,7 @@ async function consumeKey(cfg, state, eventKey) {
 const invokedUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
 
 if (import.meta.url === invokedUrl) {
-  const cfg = config();
+  const cfg = await prepareManagedLarkProfile(config());
   const state = createBridgeState();
   state.backfill.enabled = cfg.backfillEnabled;
   for (const eventKey of cfg.eventKeys) eventKeyState(state, eventKey);
@@ -959,6 +1025,9 @@ if (import.meta.url === invokedUrl) {
   } finally {
     state.stopping = true;
     await observability?.close();
+    if (cfg.larkCliHome) {
+      await fs.rm(cfg.larkCliHome, { recursive: true, force: true });
+    }
     log('stopped', { eventKeys: [...state.eventKeys.values()] });
   }
 }

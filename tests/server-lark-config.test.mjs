@@ -1,0 +1,147 @@
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import fs from 'node:fs/promises';
+import http from 'node:http';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+async function freePort() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  await new Promise((resolve) => server.close(resolve));
+  return address.port;
+}
+
+async function waitForHealth(baseUrl, child, logs) {
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`server exited early (${child.exitCode})\n${logs.join('')}`);
+    }
+    try {
+      const response = await fetch(`${baseUrl}/health`);
+      if (response.ok) return response.json();
+    } catch {
+      // The listener can refuse connections briefly during startup.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`server startup timed out\n${logs.join('')}`);
+}
+
+async function startServer(dataDir, ownerToken, larkBaseUrl) {
+  const port = await freePort();
+  const logs = [];
+  const child = spawn(process.execPath, ['apps/server/dist/index.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      OPENTAG_PORT: String(port),
+      OPENTAG_HOST: '127.0.0.1',
+      OPENTAG_DATA_DIR: dataDir,
+      OPENTAG_ADMIN_TOKEN: ownerToken,
+      OPENTAG_ADMIN_COOKIE_SECURE: 'false',
+      OPENTAG_AGENT_WORKER: 'manual',
+      OPENTAG_ROUTINES_ENABLED: 'false',
+      OPENTAG_LARK_TRANSPORT: 'memory',
+      OPENTAG_LARK_EVENT_MODE: 'long-connection',
+      OPENTAG_LARK_BASE_URL: larkBaseUrl,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stdout.on('data', (chunk) => logs.push(chunk.toString()));
+  child.stderr.on('data', (chunk) => logs.push(chunk.toString()));
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const health = await waitForHealth(baseUrl, child, logs);
+  return { child, baseUrl, health, logs };
+}
+
+async function stopServer(child) {
+  if (child.exitCode !== null) return;
+  child.kill('SIGTERM');
+  await Promise.race([
+    once(child, 'exit'),
+    new Promise((resolve) => setTimeout(resolve, 2_000)),
+  ]);
+}
+
+test('installation owner saves a validated Lark Bot and restart activates HTTP transport', { timeout: 30_000 }, async (context) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-config-api-'));
+  context.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const larkPort = await freePort();
+  const requests = [];
+  const lark = http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    requests.push({ url: request.url, body: Buffer.concat(chunks).toString('utf8') });
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      code: 0,
+      tenant_access_token: 'tenant-test-token',
+      expire: 7200,
+    }));
+  });
+  await new Promise((resolve) => lark.listen(larkPort, '127.0.0.1', resolve));
+  context.after(() => new Promise((resolve) => lark.close(resolve)));
+
+  const ownerToken = 'managed-lark-owner-token-that-is-long-enough';
+  let running = await startServer(
+    dataDir,
+    ownerToken,
+    `http://127.0.0.1:${larkPort}`,
+  );
+  context.after(() => stopServer(running.child));
+  assert.equal(running.health.clients.lark.mode, 'memory');
+
+  const save = await fetch(`${running.baseUrl}/v1/config/lark`, {
+    method: 'PUT',
+    headers: {
+      authorization: `Bearer ${ownerToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      appId: 'cli_platform_managed',
+      appSecret: 'platform-managed-secret-value',
+      domain: 'feishu',
+      expectedRevision: 0,
+    }),
+  });
+  assert.equal(save.status, 200);
+  const savedText = await save.text();
+  assert.equal(savedText.includes('platform-managed-secret-value'), false);
+  const saved = JSON.parse(savedText);
+  assert.equal(saved.config.configured, true);
+  assert.equal(saved.config.revision, 1);
+  assert.equal(saved.reloadPending, true);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].url, /tenant_access_token\/internal/u);
+
+  const persisted = await fs.readFile(path.join(dataDir, 'lark-bot.enc.json'), 'utf8');
+  assert.equal(persisted.includes('cli_platform_managed'), false);
+  assert.equal(persisted.includes('platform-managed-secret-value'), false);
+
+  await stopServer(running.child);
+  running = await startServer(
+    dataDir,
+    ownerToken,
+    `http://127.0.0.1:${larkPort}`,
+  );
+  assert.equal(running.health.clients.lark.mode, 'http');
+  assert.equal(running.health.clients.lark.hasCredentials, true);
+  assert.equal(running.health.clients.lark.credentialSource, 'managed');
+
+  const read = await fetch(`${running.baseUrl}/v1/config/lark`, {
+    headers: { authorization: `Bearer ${ownerToken}` },
+  });
+  assert.equal(read.status, 200);
+  const readText = await read.text();
+  assert.equal(readText.includes('platform-managed-secret-value'), false);
+  assert.equal(JSON.parse(readText).config.appId, 'cli_platform_managed');
+});

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch MaxTag managed Lark Bot configuration
+
+[Path]
+PathChanged=/var/lib/opentag/lark-bot.enc.json
+Unit=opentag-lark-config-reload.service
+
+[Install]
+WantedBy=multi-user.target

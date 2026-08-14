@@ -36,12 +36,27 @@ test('systemd services share a hardened, graceful runtime contract', async () =>
   assert.match(units[1].text, /^After=.*opentag-server\.service/m);
   assert.match(
     units[1].text,
+    /^ConditionPathExists=\|\/var\/lib\/opentag\/lark-bot\.enc\.json$/m,
+  );
+  assert.match(
+    units[1].text,
+    /^ConditionPathExists=\|\/etc\/opentag\/enable-lark-bridge$/m,
+  );
+  assert.match(
+    units[1].text,
     /ExecStart=\/usr\/bin\/env node \/opt\/opentag\/scripts\/lark-long-connection-bridge\.mjs/,
   );
   assert.match(units[2].text, /^After=.*opentag-server\.service/m);
   assert.match(units[3].text, /^After=.*opentag-server\.service/m);
   const target = await fs.readFile('deploy/systemd/opentag.target', 'utf8');
   assert.match(target, /^Wants=.*opentag-lark-bridge\.service/m);
+  const [reloadPath, reloadService] = await Promise.all([
+    fs.readFile('deploy/systemd/opentag-lark-config-reload.path', 'utf8'),
+    fs.readFile('deploy/systemd/opentag-lark-config-reload.service', 'utf8'),
+  ]);
+  assert.match(reloadPath, /PathChanged=\/var\/lib\/opentag\/lark-bot\.enc\.json/u);
+  assert.match(reloadService, /systemctl try-restart opentag-server\.service opentag-worker\.service/u);
+  assert.match(reloadService, /systemctl restart opentag-lark-bridge\.service/u);
 });
 
 test('deployment environment and Prometheus targets stay aligned', async () => {

@@ -637,6 +637,27 @@ h3 {
   gap: 4px;
 }
 .lark-setup-callout.ready { border-color: #b9dece; background: var(--green-soft); }
+.lark-credential-form {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 180px;
+  gap: 12px;
+  align-items: end;
+}
+.lark-credential-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.lark-credential-form > small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
 .lark-readiness-list { border-top: 1px solid var(--line); }
 .lark-readiness-row {
   min-height: 52px;
@@ -4897,6 +4918,9 @@ pre {
   .onboarding-admin-details { padding: 0 16px; }
   .lark-channel-header { align-items: flex-start; padding: 15px 16px; }
   .lark-channel-body { padding: 16px; }
+  .lark-credential-form { grid-template-columns: 1fr; }
+  .lark-credential-actions,
+  .lark-credential-form > small { grid-column: 1; }
   .lark-channel-actions { align-items: flex-start; }
   .lark-readiness-row {
     grid-template-columns: 22px minmax(0, 1fr) auto;

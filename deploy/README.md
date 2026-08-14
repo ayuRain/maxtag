@@ -17,8 +17,13 @@ TLS reverse proxy -> opentag-server :3077
 `opentag-server` owns callbacks, generic client ingress, and the operator
 control plane. `opentag-lark-bridge` owns Feishu/Lark long-connection event
 consumption and feeds the loopback server, so Lark production ingress does not
-need a public callback URL. Set `OPENTAG_LARK_CLI_PROFILE` when the service
-account uses a named `lark-cli` profile for bot event consumption. The
+need a public callback URL. Installation owners can save App ID and App Secret
+in the MaxTag Web console. MaxTag validates them against the OpenAPI token
+endpoint, encrypts them at rest with AES-256-GCM under `/var/lib/opentag`, and
+the systemd path unit reloads server, worker, and bridge after a successful
+change. The bridge materializes a short-lived `lark-cli` profile only inside
+its private temporary directory, then deletes it on shutdown. Environment
+credentials and `OPENTAG_LARK_CLI_PROFILE` remain a deployment fallback. The
 profile's `feishu`/`lark` brand controls WebSocket ingress independently of
 `OPENTAG_LARK_DOMAIN`, which controls OpenAPI delivery; validate both on the
 deployment host.
@@ -46,13 +51,14 @@ Authenticate Codex and Claude as that service user because provider sessions
 are intentionally scoped to its home directory.
 
 Install `deploy/systemd/opentag.env.example` as
-`/etc/opentag/opentag.env`, replace every credential placeholder, and keep it
-owned by `root:opentag` with mode `0640`. Install the five unit files under
-`/etc/systemd/system`, then run:
+`/etc/opentag/opentag.env`, replace the non-Lark credential placeholders, and
+keep it owned by `root:opentag` with mode `0640`. Install the service, target,
+and Lark reload path units under `/etc/systemd/system`, then run:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now opentag.target
+sudo systemctl enable --now opentag-lark-config-reload.path
 systemctl status opentag-server opentag-lark-bridge opentag-worker opentag-scheduler
 ```
 

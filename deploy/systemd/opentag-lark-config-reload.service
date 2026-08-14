@@ -1,0 +1,6 @@
+[Unit]
+Description=Reload MaxTag services after managed Lark Bot configuration changes
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/bin/sleep 2; /usr/bin/systemctl try-restart opentag-server.service opentag-worker.service; /usr/bin/systemctl restart opentag-lark-bridge.service'

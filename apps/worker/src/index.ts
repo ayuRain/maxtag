@@ -8,6 +8,7 @@ import {
 } from '@opentag/runtime-host';
 import type { LarkOpenApiDomain } from '@opentag/platform-lark';
 import { GitHubAppInstallationTokenProvider } from '@opentag/platform-github';
+import { FileLarkBotCredentialStore } from '@opentag/config';
 
 function numberEnv(name: string, fallback: number): number {
   const value = process.env[name];
@@ -85,6 +86,7 @@ function passSummary(result: AgentWorkerPassResult): Record<string, unknown> {
 async function main(): Promise<void> {
   const startedAt = new Date().toISOString();
   const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
+  const managedLarkBotCredential = await new FileLarkBotCredentialStore(dataDir).get();
   const intervalMs = numberEnv('OPENTAG_WORKER_INTERVAL_MS', 2000);
   const batchSize = numberEnv('OPENTAG_WORKER_BATCH', 1);
   const staleMs = numberEnv(
@@ -134,10 +136,15 @@ async function main(): Promise<void> {
     dataDir,
     workerId: process.env.OPENTAG_WORKER_ID,
     lark: {
-      transportMode: process.env.OPENTAG_LARK_TRANSPORT,
-      appId: process.env.OPENTAG_LARK_APP_ID,
-      appSecret: process.env.OPENTAG_LARK_APP_SECRET,
-      domain: larkDomainValue(process.env.OPENTAG_LARK_DOMAIN),
+      transportMode: managedLarkBotCredential
+        ? 'http'
+        : process.env.OPENTAG_LARK_TRANSPORT,
+      appId: managedLarkBotCredential?.appId || process.env.OPENTAG_LARK_APP_ID,
+      appSecret:
+        managedLarkBotCredential?.appSecret || process.env.OPENTAG_LARK_APP_SECRET,
+      domain:
+        managedLarkBotCredential?.domain ||
+        larkDomainValue(process.env.OPENTAG_LARK_DOMAIN),
       baseUrl: process.env.OPENTAG_LARK_BASE_URL,
       botOpenId: process.env.OPENTAG_LARK_BOT_OPEN_ID,
       threadHistoryMaxMessages: numberEnv(

@@ -51,10 +51,12 @@ import {
   FileDelegatedAgentTaskStore,
   FileKnowledgeSourceStore,
   FileKnowledgeSourceRefreshStore,
+  FileLarkBotCredentialStore,
   FileOperatorCredentialStore,
   FileToolCredentialIdentityStore,
   knowledgeSourceNextRefreshAt,
   KnowledgeSourceRevisionConflictError,
+  LarkBotCredentialRevisionConflictError,
   FilePairingStore,
   FileManagedConnectorStore,
   FileThreadConfigStore,
@@ -231,16 +233,22 @@ const host = process.env.OPENTAG_HOST || '127.0.0.1';
 const processStartedAt = new Date().toISOString();
 const dataDir = process.env.OPENTAG_DATA_DIR || path.resolve('data');
 const adminDir = path.resolve('apps/admin/public');
+const larkBotCredentialStore = new FileLarkBotCredentialStore(dataDir);
+const managedLarkBotCredential = await larkBotCredentialStore.get();
 const metricsToken = process.env.OPENTAG_METRICS_TOKEN?.trim();
 const shutdownTimeoutMs = numberEnvironmentValue(
   'OPENTAG_SHUTDOWN_TIMEOUT_MS',
   25_000,
 );
 const botOpenId = process.env.OPENTAG_LARK_BOT_OPEN_ID;
-const larkTransportMode = process.env.OPENTAG_LARK_TRANSPORT || 'memory';
-const larkAppId = process.env.OPENTAG_LARK_APP_ID;
-const larkAppSecret = process.env.OPENTAG_LARK_APP_SECRET;
-const larkDomain = larkDomainValue(process.env.OPENTAG_LARK_DOMAIN);
+const larkTransportMode = managedLarkBotCredential
+  ? 'http'
+  : process.env.OPENTAG_LARK_TRANSPORT || 'memory';
+const larkAppId = managedLarkBotCredential?.appId || process.env.OPENTAG_LARK_APP_ID;
+const larkAppSecret =
+  managedLarkBotCredential?.appSecret || process.env.OPENTAG_LARK_APP_SECRET;
+const larkDomain = managedLarkBotCredential?.domain ||
+  larkDomainValue(process.env.OPENTAG_LARK_DOMAIN);
 const larkBaseUrl = process.env.OPENTAG_LARK_BASE_URL;
 const larkVerificationToken = process.env.OPENTAG_LARK_VERIFICATION_TOKEN;
 const larkEncryptKey = process.env.OPENTAG_LARK_ENCRYPT_KEY;
@@ -1653,6 +1661,7 @@ function larkTransportStatus(): Record<string, unknown> {
     requested,
     mode,
     hasCredentials,
+    credentialSource: managedLarkBotCredential ? 'managed' : hasCredentials ? 'environment' : 'none',
     domain: larkDomain,
     baseUrl: larkBaseUrl || undefined,
     verificationTokenConfigured: Boolean(larkVerificationToken),
@@ -1723,6 +1732,30 @@ async function larkReadinessSnapshot(): Promise<Record<string, unknown>> {
     bridgeReady,
     bridgeStatus,
   };
+}
+
+async function validateManagedLarkBotCredential(input: {
+  appId: string;
+  appSecret: string;
+  domain: LarkOpenApiDomain;
+  baseUrl?: string;
+}): Promise<void> {
+  const transport = new HttpLarkTransport(input);
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      transport.readiness(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('lark_bot_connection_timeout')),
+          10_000,
+        );
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 function telegramTransportStatus(): {
@@ -9679,6 +9712,125 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/v1/lark/readiness') {
       sendJson(response, 200, await larkReadinessSnapshot());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/config/lark') {
+      if (!requireInstallationOwner(response, operatorAuthentication!)) return;
+      sendJson(
+        response,
+        200,
+        {
+          config: await larkBotCredentialStore.getSummary(),
+          active: larkTransportStatus(),
+        },
+        { 'cache-control': 'no-store' },
+      );
+      return;
+    }
+
+    if (request.method === 'PUT' && url.pathname === '/v1/config/lark') {
+      if (!requireInstallationOwner(response, operatorAuthentication!)) return;
+      const body = (await readJsonBody(request, 16 * 1024)) as Record<string, unknown>;
+      const current = await larkBotCredentialStore.get();
+      const appId = stringValue(body, 'appId') || current?.appId;
+      const providedSecret =
+        typeof body.appSecret === 'string' ? body.appSecret.trim() : '';
+      const appSecret = providedSecret || current?.appSecret;
+      const domainValue = stringValue(body, 'domain', current?.domain || 'feishu');
+      const expectedRevision = numberValue(body, 'expectedRevision');
+      if (!appId || !appSecret) {
+        sendJson(response, 400, { error: 'lark_bot_app_id_and_secret_required' });
+        return;
+      }
+      if (domainValue !== 'feishu' && domainValue !== 'lark') {
+        sendJson(response, 400, { error: 'lark_bot_invalid_domain' });
+        return;
+      }
+      if (
+        expectedRevision !== undefined &&
+        (!Number.isInteger(expectedRevision) || expectedRevision < 0)
+      ) {
+        sendJson(response, 400, { error: 'lark_bot_invalid_revision' });
+        return;
+      }
+      try {
+        await validateManagedLarkBotCredential({
+          appId,
+          appSecret,
+          domain: domainValue,
+          baseUrl: larkBaseUrl,
+        });
+        const config = await larkBotCredentialStore.save({
+          appId,
+          appSecret,
+          domain: domainValue,
+          expectedRevision,
+          actor: operatorActor(operatorAuthentication!),
+        });
+        sendJson(
+          response,
+          200,
+          {
+            config,
+            reloadPending: true,
+            message: '飞书凭据验证成功，连接服务正在重新加载',
+          },
+          { 'cache-control': 'no-store' },
+        );
+      } catch (error) {
+        if (error instanceof LarkBotCredentialRevisionConflictError) {
+          sendJson(response, 409, {
+            error: error.message,
+            currentRevision: error.currentRevision,
+          });
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        sendJson(
+          response,
+          message.startsWith('lark_bot_invalid_') ? 400 : 422,
+          {
+            error: message === 'lark_bot_connection_timeout'
+              ? message
+              : 'lark_bot_credentials_rejected',
+            message: message === 'lark_bot_connection_timeout'
+              ? '连接飞书开放平台超时，请稍后重试'
+              : 'App ID 或 App Secret 无效，飞书开放平台拒绝了连接',
+          },
+        );
+      }
+      return;
+    }
+
+    if (request.method === 'DELETE' && url.pathname === '/v1/config/lark') {
+      if (!requireInstallationOwner(response, operatorAuthentication!)) return;
+      const body = (await readJsonBody(request, 4 * 1024)) as Record<string, unknown>;
+      const expectedRevision = numberValue(body, 'expectedRevision');
+      try {
+        const config = await larkBotCredentialStore.remove({ expectedRevision });
+        sendJson(
+          response,
+          200,
+          {
+            config,
+            reloadPending: true,
+            message: '飞书 Bot 已停用，连接服务正在重新加载',
+          },
+          { 'cache-control': 'no-store' },
+        );
+      } catch (error) {
+        if (error instanceof LarkBotCredentialRevisionConflictError) {
+          sendJson(response, 409, {
+            error: error.message,
+            currentRevision: error.currentRevision,
+          });
+          return;
+        }
+        sendJson(response, 409, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return;
     }
 

@@ -9,6 +9,7 @@ const state = {
   health: null,
   capabilities: null,
   larkReadiness: null,
+  larkConfig: null,
   mcpConnectors: null,
   toolIdentities: null,
   skills: null,
@@ -2051,12 +2052,28 @@ function renderConnectorConsole() {
 function renderLarkSetup() {
   const transport = state.capabilities?.larkTransport || {};
   const readiness = state.larkReadiness || {};
+  const managed = state.larkConfig?.config;
+  const credentialForm = $('#lark-credential-form');
+  credentialForm.hidden = !canManageOperatorCredentials();
+  if (!credentialForm.contains(document.activeElement)) {
+    $('#lark-app-id').value = managed?.appId || '';
+    $('#lark-app-secret').value = '';
+    $('#lark-domain').value = managed?.domain || 'feishu';
+  }
+  $('#lark-app-secret').required = !managed?.configured;
+  $('#lark-app-secret').placeholder = managed?.configured
+    ? '已加密保存；留空保持不变'
+    : '输入 App Secret';
+  $('#remove-lark-credentials').hidden = !managed?.configured;
+  $('#lark-credential-hint').textContent = managed?.configured
+    ? `已加密保存 · 版本 ${managed.revision} · ${formatTime(managed.updatedAt, true)}；修改后连接服务会自动重载。`
+    : '凭据会在服务端使用 AES-256-GCM 加密保存，页面不会回显 App Secret。';
   const checks = [
     {
       label: '飞书应用凭据',
       description: transport.hasCredentials
-        ? 'App ID 与 App Secret 已由部署环境安全托管'
-        : '等待管理员写入 App ID 与 App Secret',
+        ? 'App ID 与 App Secret 已由平台加密托管'
+        : '等待管理员在上方填写 App ID 与 App Secret',
       ready: Boolean(transport.hasCredentials),
     },
     {
@@ -2106,6 +2123,57 @@ function renderLarkSetup() {
   $('#lark-test-result').textContent = readiness.checkedAt
     ? `${readiness.message || (ready ? '连接正常' : '仍有未完成项')} · ${formatTime(readiness.checkedAt, true)}`
     : '尚未验证';
+}
+
+async function saveLarkCredentials(event) {
+  event.preventDefault();
+  const button = $('#save-lark-credentials');
+  setButtonBusy(button, true, '正在验证', '保存并连接');
+  try {
+    const current = state.larkConfig?.config;
+    const result = await getJson('/v1/config/lark', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        appId: $('#lark-app-id').value.trim(),
+        appSecret: $('#lark-app-secret').value,
+        domain: $('#lark-domain').value,
+        expectedRevision: current?.revision || 0,
+      }),
+    });
+    state.larkConfig = { config: result.config, active: state.larkConfig?.active };
+    $('#lark-app-secret').value = '';
+    renderLarkSetup();
+    showToast(result.message || '凭据已保存，正在连接飞书');
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    await refreshAll({ quiet: true });
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '正在验证', '保存并连接');
+  }
+}
+
+async function removeLarkCredentials(button = $('#remove-lark-credentials')) {
+  const current = state.larkConfig?.config;
+  if (!current?.configured || !window.confirm('停用飞书 Bot？群消息将不再进入 MaxTag。')) return;
+  setButtonBusy(button, true, '正在停用', '停用 Bot');
+  try {
+    const result = await getJson('/v1/config/lark', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: current.revision }),
+    });
+    state.larkConfig = { config: result.config, active: state.larkConfig?.active };
+    renderLarkSetup();
+    showToast(result.message || '飞书 Bot 已停用');
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    await refreshAll({ quiet: true });
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '正在停用', '停用 Bot');
+  }
 }
 
 async function testLarkConnection(button = $('#test-lark-connection')) {
@@ -8128,6 +8196,7 @@ async function refreshAll({ quiet = false } = {}) {
       knowledgeSources,
       delegatedAgents,
       operatorCredentials,
+      larkConfig,
       larkReadiness,
     ] =
       await Promise.all([
@@ -8151,6 +8220,9 @@ async function refreshAll({ quiet = false } = {}) {
         getJson(`/v1/agents?workspaceId=${workspaceId}`),
         canManageOperatorCredentials()
           ? getJson('/v1/operator-credentials')
+          : Promise.resolve(null),
+        canManageOperatorCredentials()
+          ? getJson('/v1/config/lark')
           : Promise.resolve(null),
         getJson('/v1/lark/readiness'),
       ]);
@@ -8177,6 +8249,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.knowledgeSources = knowledgeSources;
     state.delegatedAgents = delegatedAgents;
     state.operatorCredentials = operatorCredentials;
+    state.larkConfig = larkConfig;
     state.larkReadiness = larkReadiness;
     const fallback = workspace.projects?.[0]?.projectId;
     state.selectedProjectId = projectById(state.selectedProjectId)?.projectId || fallback;
@@ -8618,6 +8691,12 @@ $('#toggle-admin-mode').addEventListener('click', () => {
 });
 $('#test-lark-connection').addEventListener('click', (event) => {
   void testLarkConnection(event.currentTarget);
+});
+$('#lark-credential-form').addEventListener('submit', (event) => {
+  void saveLarkCredentials(event);
+});
+$('#remove-lark-credentials').addEventListener('click', (event) => {
+  void removeLarkCredentials(event.currentTarget);
 });
 
 installChineseInterface();

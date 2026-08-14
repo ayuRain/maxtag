@@ -44,16 +44,25 @@ test('admin presents Lark as a focused channel card with progressive disclosure'
   assert.match(html, /id="lark-channel-card"/u);
   assert.match(html, /id="lark-readiness-list"/u);
   assert.match(html, /id="test-lark-connection"/u);
+  assert.match(html, /id="lark-credential-form"/u);
+  assert.match(html, /id="lark-app-id"/u);
+  assert.match(html, /id="lark-app-secret"[^>]*type="password"/u);
+  assert.match(html, /保存并连接/u);
   assert.match(html, /id="connector-advanced"/u);
   assert.match(html, /飞书开放平台配置指引/u);
   assert.match(html, /https:\/\/open\.feishu\.cn\/app/u);
   assert.match(script, /function renderLarkSetup/u);
   assert.match(script, /async function testLarkConnection/u);
+  assert.match(script, /async function saveLarkCredentials/u);
+  assert.match(script, /async function removeLarkCredentials/u);
   assert.match(script, /getJson\('\/v1\/lark\/readiness'\)/u);
+  assert.match(script, /getJson\('\/v1\/config\/lark'/u);
   assert.match(styles, /\.lark-channel-card/u);
   assert.match(styles, /\.connector-advanced/u);
   assert.match(server, /async function larkReadinessSnapshot/u);
   assert.match(server, /url\.pathname === '\/v1\/lark\/readiness'/u);
+  assert.match(server, /url\.pathname === '\/v1\/config\/lark'/u);
+  assert.match(server, /validateManagedLarkBotCredential/u);
 });
 
 test('admin Connectors and destinations expose native Slack', async () => {

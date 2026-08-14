@@ -11,6 +11,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@opentag/config": "0.1.0",
     "@opentag/runtime-host": "0.1.0",
     "@opentag/platform-lark": "0.1.0"
   }

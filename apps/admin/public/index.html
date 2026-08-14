@@ -928,6 +928,29 @@
                 <span>完成下面的管理员步骤后，普通成员无需登录本平台。</span>
               </div>
 
+              <form class="lark-credential-form" id="lark-credential-form">
+                <label class="field">
+                  <span>App ID</span>
+                  <input id="lark-app-id" autocomplete="off" spellcheck="false" placeholder="cli_xxxxxxxxxxxxxxxx" required />
+                </label>
+                <label class="field">
+                  <span>App Secret</span>
+                  <input id="lark-app-secret" type="password" autocomplete="new-password" placeholder="已保存时留空可保持不变" />
+                </label>
+                <label class="field">
+                  <span>应用版本</span>
+                  <select id="lark-domain">
+                    <option value="feishu">飞书（中国大陆）</option>
+                    <option value="lark">Lark（国际版）</option>
+                  </select>
+                </label>
+                <div class="lark-credential-actions">
+                  <button class="primary-button" id="save-lark-credentials" type="submit">保存并连接</button>
+                  <button class="danger-text-button" id="remove-lark-credentials" type="button" hidden>停用 Bot</button>
+                </div>
+                <small id="lark-credential-hint">凭据会在服务端加密保存，页面不会回显 App Secret。</small>
+              </form>
+
               <div class="lark-readiness-list" id="lark-readiness-list"></div>
 
               <details class="lark-guide" id="lark-guide">
@@ -946,8 +969,8 @@
                     <span>至少开通发送消息、群聊 @ 消息和私聊消息权限；需要读取普通群消息时再申请敏感权限。</span>
                   </li>
                   <li>
-                    <strong>写入部署密钥</strong>
-                    <span>App ID 与 App Secret 由部署环境托管，页面只显示是否已配置，不回显密钥。</span>
+                    <strong>回到这里连接</strong>
+                    <span>填写 App ID 与 App Secret，验证成功后 MaxTag 会自动切换到真实连接。</span>
                   </li>
                 </ol>
                 <a class="secondary-button lark-platform-link" href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer">

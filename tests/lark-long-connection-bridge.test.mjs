@@ -7,6 +7,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { FileLarkBotCredentialStore } from '@opentag/config';
 import {
   bridgeHealth,
   configuredEventKeys,
@@ -15,8 +16,58 @@ import {
   handleEvent,
   larkConsumerExitError,
   larkEventToClientEvent,
+  prepareManagedLarkProfile,
   renderBridgeMetrics,
 } from '../scripts/lark-long-connection-bridge.mjs';
+
+test('Lark bridge builds its managed profile through secret stdin in private temporary storage', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-managed-profile-'));
+  const bin = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-managed-bin-'));
+  const marker = path.join(root, 'invocation.json');
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  context.after(() => fs.rm(bin, { recursive: true, force: true }));
+  const secret = 'managed-profile-secret-value';
+  await new FileLarkBotCredentialStore(root).save({
+    appId: 'cli_managed_profile',
+    appSecret: secret,
+    domain: 'feishu',
+    actor: 'test',
+  });
+  const fake = path.join(bin, 'lark-cli');
+  await fs.writeFile(fake, `#!/usr/bin/env node
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { input += chunk; });
+process.stdin.on('end', async () => {
+  await import('node:fs/promises').then((fs) => fs.writeFile(
+    process.env.FAKE_LARK_CONFIG_LOG,
+    JSON.stringify({ args: process.argv.slice(2), secretLength: input.trim().length, home: process.env.HOME }),
+  ));
+});
+`);
+  await fs.chmod(fake, 0o755);
+  const priorPath = process.env.PATH;
+  const priorMarker = process.env.FAKE_LARK_CONFIG_LOG;
+  process.env.PATH = `${bin}:${priorPath}`;
+  process.env.FAKE_LARK_CONFIG_LOG = marker;
+  let prepared;
+  try {
+    prepared = await prepareManagedLarkProfile({ dataDir: root });
+  } finally {
+    process.env.PATH = priorPath;
+    if (priorMarker === undefined) delete process.env.FAKE_LARK_CONFIG_LOG;
+    else process.env.FAKE_LARK_CONFIG_LOG = priorMarker;
+  }
+  context.after(() => fs.rm(prepared.larkCliHome, { recursive: true, force: true }));
+  assert.equal(prepared.larkCliProfile, 'maxtag-managed');
+  assert.equal(prepared.managedCredentialRevision, 1);
+  assert.match(prepared.larkCliHome, /maxtag-lark-cli-/u);
+  const invocation = JSON.parse(await fs.readFile(marker, 'utf8'));
+  assert.deepEqual(invocation.args.slice(0, 2), ['config', 'init']);
+  assert.equal(invocation.args.includes(secret), false);
+  assert.equal(invocation.secretLength, secret.length);
+  assert.equal(invocation.home, prepared.larkCliHome);
+});
 
 async function freePort() {
   const server = net.createServer();

@@ -8,5 +8,6 @@ export * from './file-knowledge-source-refresh-store.js';
 export * from './file-operator-credential-store.js';
 export * from './file-tool-credential-identity-store.js';
 export * from './file-delegated-agent-task-store.js';
+export * from './file-lark-bot-credential-store.js';
 export * from './pairing.js';
 export * from './workspace-access.js';

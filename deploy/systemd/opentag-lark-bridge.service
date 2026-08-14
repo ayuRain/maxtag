@@ -4,6 +4,8 @@ Documentation=file:/opt/opentag/deploy/README.md
 Wants=network-online.target opentag-server.service
 After=network-online.target opentag-server.service
 PartOf=opentag.target
+ConditionPathExists=|/var/lib/opentag/lark-bot.enc.json
+ConditionPathExists=|/etc/opentag/enable-lark-bridge
 
 [Service]
 Type=simple
