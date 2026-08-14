@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
+import { isIP } from 'node:net';
 import path from 'node:path';
 import {
   memoryScopeGranted,
@@ -662,11 +663,13 @@ export function buildAgentSystemPrompt(request: AgentRunRequest): string {
 export function artifactInstructions(enabled: boolean): string {
   if (!enabled) return '';
   return [
-    'When you create a user-facing file that should be returned to the work thread, keep it inside the current project directory.',
-    'For each such file, add exactly one final-response line in this form:',
+    'When you create a user-facing file that should be returned to the work thread, keep it inside the current project directory. When work produces a durable HTTPS reference, publish it as a managed link or pull-request artifact.',
+    'For each file, add exactly one final-response line in this form:',
     'OPENTAG_ARTIFACT: {"path":"relative/path.ext","title":"Human title","kind":"file"}',
-    'The path must be relative to the current project directory. Valid kinds are file, report, chart, and patch.',
-    'MaxTag removes these declaration lines from the visible reply, validates the files, and publishes managed copies.',
+    'For each external reference, use:',
+    'OPENTAG_ARTIFACT: {"url":"https://example.com/item","title":"Human title","kind":"link"}',
+    'The path must be relative to the current project directory. File kinds are file, report, chart, and patch. Reference kinds are link and pull-request; pull-request URLs must end in /pull/<number>.',
+    'MaxTag removes these declaration lines from the visible reply, validates files and public HTTPS references, and publishes durable managed artifacts.',
   ].join('\n');
 }
 
@@ -862,6 +865,10 @@ const ARTIFACT_KINDS = new Set<ArtifactKind>([
   'chart',
   'patch',
 ]);
+const REFERENCE_ARTIFACT_KINDS = new Set<ArtifactKind>([
+  'link',
+  'pull-request',
+]);
 
 function artifactSegment(value: string): string {
   const readable = value.replace(/[^a-zA-Z0-9_.-]/gu, '_').slice(0, 60) || 'run';
@@ -903,6 +910,38 @@ function artifactMimeType(filename: string): string {
       '.zip': 'application/zip',
     } as Record<string, string>
   )[extension] || 'application/octet-stream';
+}
+
+function managedArtifactReference(
+  raw: string,
+  kind: ArtifactKind,
+): { url: string; origin: string } {
+  if (!raw || raw.length > 2_048) throw new Error('URL must be 1-2048 characters');
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error('URL is invalid');
+  }
+  if (parsed.protocol !== 'https:') throw new Error('URL must use HTTPS');
+  if (parsed.username || parsed.password) throw new Error('URL credentials are not allowed');
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    !hostname ||
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost') ||
+    hostname.endsWith('.local') ||
+    isIP(hostname) !== 0
+  ) {
+    throw new Error('URL must use a public DNS hostname');
+  }
+  if (kind === 'pull-request' && !/\/pull\/[1-9][0-9]*\/?$/u.test(parsed.pathname)) {
+    throw new Error('pull-request URL must end in /pull/<number>');
+  }
+  parsed.hash = '';
+  const normalized = parsed.toString();
+  if (normalized.length > 2_048) throw new Error('normalized URL exceeds 2048 characters');
+  return { url: normalized, origin: parsed.origin };
 }
 
 function declarationJson(line: string): string | undefined {
@@ -1338,45 +1377,38 @@ export async function collectCliArtifacts(input: {
       warnings,
     };
   }
-  if (!input.artifactRoot) {
-    return {
-      summary: finalResponse(visibleLines.join('\n')),
-      artifacts: [],
-      memoryCandidates,
-      memoryDecisions,
-      memorySelections,
-      knowledgePassages,
-      warnings: [
-        ...warnings,
-        'Artifact declarations were ignored because no managed artifact root is configured.',
-      ],
-    };
-  }
-
   const artifacts: Artifact[] = [];
   const maxArtifacts = Math.max(1, input.maxArtifacts ?? DEFAULT_MAX_ARTIFACTS);
   const maxBytes = Math.max(1, input.maxArtifactBytes ?? DEFAULT_MAX_ARTIFACT_BYTES);
   const cwdReal = await fs.realpath(input.cwd);
-  const artifactRoot = path.resolve(input.artifactRoot);
   const runSegment = artifactSegment(input.runId);
-  const runDirectory = path.join(
-    artifactRoot,
-    'runs',
-    runSegment,
-  );
-  await fs.mkdir(artifactRoot, { recursive: true, mode: 0o700 });
-  const artifactRootReal = await fs.realpath(artifactRoot);
-  const runsDirectory = path.join(artifactRootReal, 'runs');
-  await fs.mkdir(runsDirectory, { recursive: true, mode: 0o700 });
-  const runsDirectoryReal = await fs.realpath(runsDirectory);
-  if (!pathWithin(artifactRootReal, runsDirectoryReal)) {
-    throw new Error('managed_artifact_directory_escape');
-  }
-  const runCandidate = path.join(runsDirectoryReal, runSegment);
-  await fs.mkdir(runCandidate, { recursive: true, mode: 0o700 });
-  const runDirectoryReal = await fs.realpath(runCandidate);
-  if (!pathWithin(artifactRootReal, runDirectoryReal)) {
-    throw new Error('managed_artifact_directory_escape');
+  let runDirectory: string | undefined;
+  let runDirectoryReal: string | undefined;
+  async function ensureManagedRunDirectory(): Promise<{
+    directory: string;
+    realDirectory: string;
+  } | undefined> {
+    if (!input.artifactRoot) return undefined;
+    if (runDirectory && runDirectoryReal) {
+      return { directory: runDirectory, realDirectory: runDirectoryReal };
+    }
+    const artifactRoot = path.resolve(input.artifactRoot);
+    runDirectory = path.join(artifactRoot, 'runs', runSegment);
+    await fs.mkdir(artifactRoot, { recursive: true, mode: 0o700 });
+    const artifactRootReal = await fs.realpath(artifactRoot);
+    const runsDirectory = path.join(artifactRootReal, 'runs');
+    await fs.mkdir(runsDirectory, { recursive: true, mode: 0o700 });
+    const runsDirectoryReal = await fs.realpath(runsDirectory);
+    if (!pathWithin(artifactRootReal, runsDirectoryReal)) {
+      throw new Error('managed_artifact_directory_escape');
+    }
+    const runCandidate = path.join(runsDirectoryReal, runSegment);
+    await fs.mkdir(runCandidate, { recursive: true, mode: 0o700 });
+    runDirectoryReal = await fs.realpath(runCandidate);
+    if (!pathWithin(artifactRootReal, runDirectoryReal)) {
+      throw new Error('managed_artifact_directory_escape');
+    }
+    return { directory: runDirectory, realDirectory: runDirectoryReal };
   }
 
   for (const [index, raw] of declarations.slice(0, maxArtifacts).entries()) {
@@ -1395,8 +1427,59 @@ export async function collectCliArtifacts(input: {
     }
 
     const relativePath = typeof parsed.path === 'string' ? parsed.path.trim() : '';
+    const rawUrl = typeof parsed.url === 'string' ? parsed.url.trim() : '';
+    if (relativePath && rawUrl) {
+      warnings.push(`Artifact declaration ${index + 1} cannot contain both path and url.`);
+      continue;
+    }
+    if (rawUrl) {
+      const declaredKind = typeof parsed.kind === 'string' ? parsed.kind : 'link';
+      if (!REFERENCE_ARTIFACT_KINDS.has(declaredKind as ArtifactKind)) {
+        warnings.push(
+          `Artifact declaration ${index + 1} with url must use kind link or pull-request.`,
+        );
+        continue;
+      }
+      const kind = declaredKind as ArtifactKind;
+      let reference: { url: string; origin: string };
+      try {
+        reference = managedArtifactReference(rawUrl, kind);
+      } catch (error) {
+        warnings.push(
+          `Artifact declaration ${index + 1} has an unsafe reference: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        continue;
+      }
+      const digest = createHash('sha256').update(reference.url).digest('hex');
+      const title =
+        typeof parsed.title === 'string' && parsed.title.trim()
+          ? parsed.title.trim().slice(0, 200)
+          : reference.url;
+      artifacts.push({
+        id: `artifact:${digest.slice(0, 24)}:${index + 1}`,
+        kind,
+        title,
+        url: reference.url,
+        metadata: {
+          managed: true,
+          storage: 'external-reference',
+          runId: input.runId,
+          sha256: digest,
+          origin: reference.origin,
+          collectedAt: new Date().toISOString(),
+        },
+      });
+      continue;
+    }
     if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes('\0')) {
       warnings.push(`Artifact declaration ${index + 1} must use a relative path.`);
+      continue;
+    }
+    const managedDirectory = await ensureManagedRunDirectory();
+    if (!managedDirectory) {
+      warnings.push(
+        `Artifact declaration ${index + 1} was ignored because no managed artifact root is configured.`,
+      );
       continue;
     }
     const sourceCandidate = path.resolve(cwdReal, relativePath);
@@ -1428,8 +1511,8 @@ export async function collectCliArtifacts(input: {
     const digest = createHash('sha256').update(bytes).digest('hex');
     const filename = artifactFilename(relativePath);
     const managedName = `${String(index + 1).padStart(2, '0')}-${digest.slice(0, 16)}-${filename}`;
-    const managedPath = path.join(runDirectory, managedName);
-    const managedRealPath = path.join(runDirectoryReal, managedName);
+    const managedPath = path.join(managedDirectory.directory, managedName);
+    const managedRealPath = path.join(managedDirectory.realDirectory, managedName);
     await writeArtifactImmutable(managedRealPath, bytes, digest);
 
     const declaredKind = typeof parsed.kind === 'string' ? parsed.kind : 'file';
@@ -1463,17 +1546,19 @@ export async function collectCliArtifacts(input: {
     );
   }
 
-  const manifest = {
-    runId: input.runId,
-    generatedAt: new Date().toISOString(),
-    artifacts,
-    warnings,
-  };
-  await fs.writeFile(
-    path.join(runDirectoryReal, `manifest-${randomUUID()}.json`),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    { flag: 'wx', mode: 0o600 },
-  );
+  if (runDirectoryReal) {
+    const manifest = {
+      runId: input.runId,
+      generatedAt: new Date().toISOString(),
+      artifacts,
+      warnings,
+    };
+    await fs.writeFile(
+      path.join(runDirectoryReal, `manifest-${randomUUID()}.json`),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      { flag: 'wx', mode: 0o600 },
+    );
+  }
   const visible = visibleLines.join('\n').trim();
   return {
     summary: finalResponse(

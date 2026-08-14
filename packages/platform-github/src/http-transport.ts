@@ -2,9 +2,11 @@ import type {
   GitHubDeliveryMetadata,
   GitHubTransport,
 } from './types.js';
+import type { GitHubTokenProvider } from './github-app-token.js';
 
 export interface HttpGitHubTransportOptions {
-  token: string;
+  token?: string;
+  tokenProvider?: GitHubTokenProvider;
   baseUrl?: string;
   fetch?: typeof fetch;
 }
@@ -40,12 +42,17 @@ export class GitHubApiError extends Error {
 }
 
 export class HttpGitHubTransport implements GitHubTransport {
-  private readonly token: string;
+  private readonly token?: string;
+  private readonly tokenProvider?: GitHubTokenProvider;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: HttpGitHubTransportOptions) {
+    if (Boolean(options.token?.trim()) === Boolean(options.tokenProvider)) {
+      throw new Error('github_transport_credential_invalid');
+    }
     this.token = options.token;
+    this.tokenProvider = options.tokenProvider;
     this.baseUrl = (options.baseUrl || 'https://api.github.com').replace(/\/+$/u, '');
     this.fetchImpl = options.fetch ?? fetch;
   }
@@ -90,11 +97,12 @@ export class HttpGitHubTransport implements GitHubTransport {
     pathname: string,
     body: string,
   ): Promise<GitHubCommentResponse> {
+    const token = this.token?.trim() || await this.tokenProvider!.getToken();
     const response = await this.fetchImpl(`${this.baseUrl}${pathname}`, {
       method,
       headers: {
         accept: 'application/vnd.github+json',
-        authorization: `Bearer ${this.token}`,
+        authorization: `Bearer ${token}`,
         'content-type': 'application/json; charset=utf-8',
         'user-agent': 'MaxTag',
         'x-github-api-version': '2022-11-28',

@@ -205,8 +205,12 @@ acceptance backlog.
 
 - Instruction-level resumable checkpoints when a provider turn itself cannot
   be resumed.
-- Hosted interactive reports and first-class PR/link artifact producers.
-- GitHub App installation-token exchange instead of only deployment tokens.
+- Hosted interactive reports. First-class PR/link artifact declarations are
+  implemented locally with public-HTTPS validation, durable run evidence, and
+  client-native link delivery; hosted report rendering remains.
+- GitHub App installation-token exchange is implemented locally for comment
+  delivery and brokered tools, with short-lived cached tokens and automatic
+  refresh. Live App installation proof remains.
 - Embedding/ANN retrieval when authorized corpora outgrow bounded lexical and
   semantic-alias recall.
 - High-capacity normalized storage, backup/restore, and disaster-recovery
@@ -317,7 +321,10 @@ For the detailed evidence matrix and sequencing, see
   clients cannot inject host paths. Codex and Claude can declare output files;
   MaxTag validates and copies them into a managed artifact root, records them
   in the run timeline, sends them through Lark or Telegram, and exposes
-  authenticated Activity downloads with hash verification.
+  authenticated Activity downloads with hash verification. They can also
+  declare managed `link` and `pull-request` references. MaxTag accepts only
+  credential-free public HTTPS URLs, validates pull-request URL shape, removes
+  fragments, and records the normalized reference without fetching it.
 - Authorized follow-ups in one active thread enter an atomic SQLite steering
   mailbox instead of starting concurrent runs. Live-capable executors can claim
   them in-place. Claude consumes follow-ups through its active stream; Codex
@@ -1123,10 +1130,14 @@ use redacted summaries and status counts rather than argument values.
 When a CLI creates a user-facing file, the executor asks it to declare the
 project-relative path in its final response. MaxTag strips that declaration,
 rejects traversal and symlink escapes, limits count and size, copies the bytes
-to `OPENTAG_ARTIFACT_ROOT`, and emits a durable artifact event. Server and
-standalone worker processes must use the same artifact root (the default is
+to `OPENTAG_ARTIFACT_ROOT`, and emits a durable artifact event. A CLI may instead
+declare a `link` or `pull-request` URL; MaxTag accepts only credential-free
+public HTTPS references and requires pull-request paths to end in
+`/pull/<number>`. Reference artifacts remain durable even when local file
+storage is unavailable. Server and standalone worker processes must use the
+same artifact root for file artifacts (the default is
 `<OPENTAG_DATA_DIR>/artifacts`). Activity never turns an arbitrary host path
-into a download; it serves only managed, hash-matching artifacts to an
+into a download; it serves only managed, hash-matching file artifacts to an
 authorized operator.
 
 Provider session continuity is enabled by default. MaxTag records the Codex
@@ -1503,16 +1514,25 @@ repository webhook:
 
 ```bash
 OPENTAG_GITHUB_TRANSPORT=http
-OPENTAG_GITHUB_TOKEN=github_pat_xxx
+OPENTAG_GITHUB_APP_ID=123456
+OPENTAG_GITHUB_APP_INSTALLATION_ID=987654
+OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE=/etc/opentag/github-app.pem
 OPENTAG_GITHUB_BOT_LOGIN=MaxTagBot
 OPENTAG_GITHUB_WEBHOOK_SECRET=replace-with-a-random-secret
 OPENTAG_GITHUB_WORKSPACE_ID=dev-workspace
 OPENTAG_GITHUB_REQUIRE_BINDING=true
 ```
 
+MaxTag signs a short-lived App JWT, exchanges it for an installation token,
+caches the token only until five minutes before expiry, and refreshes it
+automatically. The PEM stays in the configured file and the exchanged token is
+never persisted. `OPENTAG_GITHUB_TOKEN` remains a legacy alternative for local
+or transitional deployments; startup fails if it is combined with the GitHub
+App fields or if the App configuration is incomplete.
+
 Register `https://your-host/v1/github/events` as a JSON webhook, set the same
-secret, and subscribe to **Issue comments**. The token must be allowed to create
-and update comments in the target repositories. A `/pair CODE` comment binds
+secret, and subscribe to **Issue comments**. The App installation must be
+allowed to create and update comments in the target repositories. A `/pair CODE` comment binds
 the whole `owner/repo` channel to a project; each `owner/repo#issue` then becomes
 an isolated MaxTag thread. The first comment in a new issue must mention the
 configured bot login (or use `/maxtag`; `/opentag` remains an alias), while later comments in that issue

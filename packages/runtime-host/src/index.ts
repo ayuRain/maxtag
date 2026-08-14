@@ -61,6 +61,7 @@ import {
   GitHubPlatformAdapter,
   HttpGitHubTransport,
   MemoryGitHubTransport,
+  type GitHubTokenProvider,
   type GitHubTransport,
 } from '@opentag/platform-github';
 import {
@@ -167,6 +168,7 @@ export interface RuntimeHostSlackConfig {
 export interface RuntimeHostGitHubConfig {
   transportMode?: string;
   token?: string;
+  tokenProvider?: GitHubTokenProvider;
   baseUrl?: string;
 }
 
@@ -298,6 +300,7 @@ export interface RuntimeHostStorageConfig {
 
 export interface RuntimeHostToolBrokerConfig {
   githubToken?: string;
+  githubTokenProvider?: GitHubTokenProvider;
   githubBaseUrl?: string;
   externalMcpServersJson?: string;
   maxCallsPerRun?: number;
@@ -447,7 +450,7 @@ function githubTransportStatus(config: RuntimeHostGitHubConfig = {}): {
   baseUrl?: string;
 } {
   const requested = config.transportMode || 'memory';
-  const hasToken = Boolean(config.token);
+  const hasToken = Boolean(config.token || config.tokenProvider);
   return {
     requested,
     mode:
@@ -729,6 +732,7 @@ export class OpenTagWorkerHost {
       routines: this.routineStore,
       github: {
         token: config.toolBroker?.githubToken,
+        tokenProvider: config.toolBroker?.githubTokenProvider,
         baseUrl: config.toolBroker?.githubBaseUrl || config.github?.baseUrl,
       },
       defaultCredentialIdentities: {
@@ -743,7 +747,7 @@ export class OpenTagWorkerHost {
                 externalActor: config.lark.botOpenId || config.lark.appId,
               }
             : undefined,
-        github: config.toolBroker?.githubToken
+        github: config.toolBroker?.githubToken || config.toolBroker?.githubTokenProvider
           ? {
               id: 'github-default',
               displayName: 'GitHub installation identity',
@@ -774,7 +778,10 @@ export class OpenTagWorkerHost {
             },
           };
         }
-        if (id === 'github-default' && config.toolBroker?.githubToken) {
+        if (
+          id === 'github-default' &&
+          (config.toolBroker?.githubToken || config.toolBroker?.githubTokenProvider)
+        ) {
           return {
             id,
             displayName: 'GitHub installation identity',
@@ -782,6 +789,7 @@ export class OpenTagWorkerHost {
             revision: 1,
             github: {
               token: config.toolBroker.githubToken,
+              tokenProvider: config.toolBroker.githubTokenProvider,
               baseUrl: config.toolBroker.githubBaseUrl || config.github?.baseUrl,
             },
           };
@@ -2432,15 +2440,16 @@ export class OpenTagWorkerHost {
   } {
     const status = this.githubTransportStatus();
     if (status.mode === 'http') {
-      if (!this.config.github?.token) {
+      if (!this.config.github?.token && !this.config.github?.tokenProvider) {
         throw new Error(
-          'OPENTAG_GITHUB_TRANSPORT=http requires OPENTAG_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN.',
+          'OPENTAG_GITHUB_TRANSPORT=http requires a deployment token or GitHub App installation credentials.',
         );
       }
       return {
         mode: 'http',
         transport: new HttpGitHubTransport({
           token: this.config.github.token,
+          tokenProvider: this.config.github.tokenProvider,
           baseUrl: status.baseUrl,
         }),
       };

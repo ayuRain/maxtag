@@ -5,3 +5,4 @@ export * from './workflow-events.js';
 export * from './http-transport.js';
 export * from './memory-transport.js';
 export * from './github-platform-adapter.js';
+export * from './github-app-token.js';

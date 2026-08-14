@@ -206,6 +206,51 @@ function externalMcpConnector(calls) {
   };
 }
 
+test('brokered GitHub tools resolve short-lived installation tokens lazily', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-broker-github-app-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  let tokenCalls = 0;
+  let authorization;
+  const broker = createOpenTagToolBroker({
+    memory: new ScopedFileMemoryStore(root),
+    github: {
+      tokenProvider: {
+        async getToken() {
+          tokenCalls += 1;
+          return 'ghs_broker';
+        },
+      },
+      async fetch(_url, options) {
+        authorization = options.headers.authorization;
+        return new Response(JSON.stringify({
+          full_name: 'acme/payments',
+          private: true,
+          default_branch: 'main',
+        }), { status: 200 });
+      },
+    },
+  });
+  const session = await broker.open(runRequest([]));
+  assert.ok(session);
+  context.after(() => session.close());
+  const client = new Client({ name: 'github-app-broker-test', version: '0.1.0' });
+  await client.connect(new StdioClientTransport({
+    command: session.mcp.command,
+    args: session.mcp.args,
+    env: session.mcp.env,
+    stderr: 'pipe',
+  }));
+  context.after(() => client.close());
+
+  const result = await client.callTool({
+    name: 'github_repository',
+    arguments: { owner: 'acme', repo: 'payments' },
+  });
+  assert.equal(result.isError, undefined);
+  assert.equal(tokenCalls, 1);
+  assert.equal(authorization, 'Bearer ghs_broker');
+});
+
 async function connectedClient(context, session, name = 'opentag-local-tool-test') {
   assert.ok(session);
   context.after(() => session.close());

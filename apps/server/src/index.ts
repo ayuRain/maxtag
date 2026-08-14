@@ -105,6 +105,7 @@ import {
 } from '@opentag/memory';
 import {
   GitHubPlatformAdapter,
+  GitHubAppInstallationTokenProvider,
   HttpGitHubTransport,
   MemoryGitHubTransport,
   githubCallbackEventType,
@@ -299,6 +300,27 @@ const githubToken =
   process.env.OPENTAG_GITHUB_TOKEN ||
   process.env.GH_TOKEN ||
   process.env.GITHUB_TOKEN;
+const githubAppId = process.env.OPENTAG_GITHUB_APP_ID?.trim();
+const githubAppInstallationId =
+  process.env.OPENTAG_GITHUB_APP_INSTALLATION_ID?.trim();
+const githubAppPrivateKeyFile =
+  process.env.OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE?.trim();
+const githubAppTokenProvider = (() => {
+  const configured = [
+    githubAppId,
+    githubAppInstallationId,
+    githubAppPrivateKeyFile,
+  ].filter(Boolean).length;
+  if (!configured) return undefined;
+  if (configured !== 3) throw new Error('github_app_configuration_incomplete');
+  if (githubToken) throw new Error('github_credential_configuration_ambiguous');
+  return new GitHubAppInstallationTokenProvider({
+    appId: githubAppId!,
+    installationId: githubAppInstallationId!,
+    privateKeyFile: githubAppPrivateKeyFile!,
+    baseUrl: process.env.OPENTAG_GITHUB_BASE_URL,
+  });
+})();
 const githubBotLogin = process.env.OPENTAG_GITHUB_BOT_LOGIN;
 const githubWebhookSecret = process.env.OPENTAG_GITHUB_WEBHOOK_SECRET;
 const githubBaseUrl = process.env.OPENTAG_GITHUB_BASE_URL;
@@ -748,12 +770,16 @@ const defaultLarkToolIdentity =
       externalActor: botOpenId || larkAppId,
     }
   : undefined;
-const defaultGitHubToolIdentity = githubToken
+const defaultGitHubToolIdentity = githubToken || githubAppTokenProvider
   ? {
       id: 'github-default',
       displayName: 'GitHub installation identity',
       revision: 1,
-      externalActor: githubBotLogin,
+      externalActor:
+        githubBotLogin ||
+        (githubAppId && githubAppInstallationId
+          ? `github-app:${githubAppId}:installation:${githubAppInstallationId}`
+          : undefined),
     }
   : undefined;
 const toolBroker = createOpenTagToolBroker({
@@ -763,6 +789,7 @@ const toolBroker = createOpenTagToolBroker({
   routines: routineStore,
   github: {
     token: githubToken,
+    tokenProvider: githubAppTokenProvider,
     baseUrl: process.env.OPENTAG_GITHUB_BASE_URL,
   },
   defaultCredentialIdentities: {
@@ -785,11 +812,18 @@ const toolBroker = createOpenTagToolBroker({
         },
       };
     }
-    if (id === defaultGitHubToolIdentity?.id && githubToken) {
+    if (
+      id === defaultGitHubToolIdentity?.id &&
+      (githubToken || githubAppTokenProvider)
+    ) {
       return {
         ...defaultGitHubToolIdentity,
         provider: 'github',
-        github: { token: githubToken, baseUrl: githubBaseUrl },
+        github: {
+          token: githubToken,
+          tokenProvider: githubAppTokenProvider,
+          baseUrl: githubBaseUrl,
+        },
       };
     }
     const identity = await toolCredentialIdentityStore.get(id);
@@ -1707,7 +1741,7 @@ function githubTransportStatus(): {
   };
 } {
   const requested = githubTransportMode;
-  const hasToken = Boolean(githubToken);
+  const hasToken = Boolean(githubToken || githubAppTokenProvider);
   return {
     requested,
     mode:
@@ -2040,15 +2074,16 @@ function createGitHubTransportForRun(): {
 } {
   const status = githubTransportStatus();
   if (status.mode === 'http') {
-    if (!githubToken) {
+    if (!githubToken && !githubAppTokenProvider) {
       throw new Error(
-        'OPENTAG_GITHUB_TRANSPORT=http requires OPENTAG_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN.',
+        'OPENTAG_GITHUB_TRANSPORT=http requires a deployment token or GitHub App installation credentials.',
       );
     }
     return {
       mode: 'http',
       transport: new HttpGitHubTransport({
         token: githubToken,
+        tokenProvider: githubAppTokenProvider,
         baseUrl: githubBaseUrl,
       }),
     };
@@ -2700,9 +2735,7 @@ async function workspaceSnapshot(
             ? 'ready'
             : 'credentials-required'
           : tool.grantKind === 'github'
-            ? process.env.OPENTAG_GITHUB_TOKEN ||
-              process.env.GH_TOKEN ||
-              process.env.GITHUB_TOKEN
+            ? githubToken || githubAppTokenProvider
               ? 'ready'
               : 'public-only'
             : 'ready'),

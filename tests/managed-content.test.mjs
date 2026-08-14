@@ -228,6 +228,79 @@ test('CLI artifact collection strips declarations and rejects traversal and syml
   }
 });
 
+test('CLI artifact collection publishes durable HTTPS link and pull-request references', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-artifact-links-'));
+  try {
+    const result = await collectCliArtifacts({
+      finalMessage: [
+        'References ready.',
+        'OPENTAG_ARTIFACT: {"url":"https://github.com/ayuRain/MaxTag/pull/42#discussion","title":"Isolation proof","kind":"pull-request"}',
+        'OPENTAG_ARTIFACT: {"url":"https://docs.example.com/report?id=7","title":"Hosted report","kind":"link"}',
+        'OPENTAG_ARTIFACT: {"url":"http://example.com/plain","kind":"link"}',
+        'OPENTAG_ARTIFACT: {"url":"https://127.0.0.1/internal","kind":"link"}',
+        'OPENTAG_ARTIFACT: {"url":"https://github.com/ayuRain/MaxTag/issues/42","kind":"pull-request"}',
+      ].join('\n'),
+      cwd: root,
+      runId: 'run-artifact-links-1',
+    });
+
+    assert.equal(result.summary, 'References ready.');
+    assert.equal(result.artifacts.length, 2);
+    assert.deepEqual(
+      result.artifacts.map((artifact) => ({
+        kind: artifact.kind,
+        title: artifact.title,
+        url: artifact.url,
+        storage: artifact.metadata.storage,
+      })),
+      [
+        {
+          kind: 'pull-request',
+          title: 'Isolation proof',
+          url: 'https://github.com/ayuRain/MaxTag/pull/42',
+          storage: 'external-reference',
+        },
+        {
+          kind: 'link',
+          title: 'Hosted report',
+          url: 'https://docs.example.com/report?id=7',
+          storage: 'external-reference',
+        },
+      ],
+    );
+    assert.ok(result.artifacts.every((artifact) => artifact.metadata.managed === true));
+    assert.equal(result.warnings.length, 3);
+    assert.ok(result.warnings.some((warning) => warning.includes('must use HTTPS')));
+    assert.ok(result.warnings.some((warning) => warning.includes('public DNS hostname')));
+    assert.ok(result.warnings.some((warning) => warning.includes('/pull/<number>')));
+    assert.deepEqual(await fs.readdir(root), []);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('CLI artifact collection keeps link references when file storage is unavailable', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-artifact-link-no-root-'));
+  try {
+    await fs.writeFile(path.join(root, 'report.txt'), 'report');
+    const result = await collectCliArtifacts({
+      finalMessage: [
+        'OPENTAG_ARTIFACT: {"path":"report.txt","kind":"report"}',
+        'OPENTAG_ARTIFACT: {"url":"https://example.com/result","kind":"link"}',
+      ].join('\n'),
+      cwd: root,
+      runId: 'run-artifact-link-no-root',
+    });
+
+    assert.equal(result.artifacts.length, 1);
+    assert.equal(result.artifacts[0].kind, 'link');
+    assert.equal(result.artifacts[0].url, 'https://example.com/result');
+    assert.ok(result.warnings.some((warning) => warning.includes('no managed artifact root')));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('CLI output extracts bounded memory candidates without exposing declarations', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-memory-candidates-'));
   try {

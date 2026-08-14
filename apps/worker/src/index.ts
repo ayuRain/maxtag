@@ -7,6 +7,7 @@ import {
   type AgentWorkerPassResult,
 } from '@opentag/runtime-host';
 import type { LarkOpenApiDomain } from '@opentag/platform-lark';
+import { GitHubAppInstallationTokenProvider } from '@opentag/platform-github';
 
 function numberEnv(name: string, fallback: number): number {
   const value = process.env[name];
@@ -101,6 +102,34 @@ async function main(): Promise<void> {
   const observabilityPort = optionalNumberEnv(
     'OPENTAG_WORKER_OBSERVABILITY_PORT',
   );
+  const githubToken =
+    process.env.OPENTAG_GITHUB_TOKEN ||
+    process.env.GH_TOKEN ||
+    process.env.GITHUB_TOKEN;
+  const githubAppId = process.env.OPENTAG_GITHUB_APP_ID?.trim();
+  const githubAppInstallationId =
+    process.env.OPENTAG_GITHUB_APP_INSTALLATION_ID?.trim();
+  const githubAppPrivateKeyFile =
+    process.env.OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE?.trim();
+  const githubAppConfigured = [
+    githubAppId,
+    githubAppInstallationId,
+    githubAppPrivateKeyFile,
+  ].filter(Boolean).length;
+  if (githubAppConfigured !== 0 && githubAppConfigured !== 3) {
+    throw new Error('github_app_configuration_incomplete');
+  }
+  if (githubToken && githubAppConfigured) {
+    throw new Error('github_credential_configuration_ambiguous');
+  }
+  const githubAppTokenProvider = githubAppConfigured === 3
+    ? new GitHubAppInstallationTokenProvider({
+        appId: githubAppId!,
+        installationId: githubAppInstallationId!,
+        privateKeyFile: githubAppPrivateKeyFile!,
+        baseUrl: process.env.OPENTAG_GITHUB_BASE_URL,
+      })
+    : undefined;
   const host = createOpenTagWorkerHost({
     dataDir,
     workerId: process.env.OPENTAG_WORKER_ID,
@@ -133,10 +162,8 @@ async function main(): Promise<void> {
     },
     github: {
       transportMode: process.env.OPENTAG_GITHUB_TRANSPORT,
-      token:
-        process.env.OPENTAG_GITHUB_TOKEN ||
-        process.env.GH_TOKEN ||
-        process.env.GITHUB_TOKEN,
+      token: githubToken,
+      tokenProvider: githubAppTokenProvider,
       baseUrl: process.env.OPENTAG_GITHUB_BASE_URL,
     },
     executors: {
@@ -268,10 +295,8 @@ async function main(): Promise<void> {
       busyTimeoutMs: optionalNumberEnv('OPENTAG_SQLITE_BUSY_TIMEOUT_MS'),
     },
     toolBroker: {
-      githubToken:
-        process.env.OPENTAG_GITHUB_TOKEN ||
-        process.env.GH_TOKEN ||
-        process.env.GITHUB_TOKEN,
+      githubToken,
+      githubTokenProvider: githubAppTokenProvider,
       githubBaseUrl: process.env.OPENTAG_GITHUB_BASE_URL,
       externalMcpServersJson: process.env.OPENTAG_EXTERNAL_MCP_SERVERS_JSON,
       maxCallsPerRun: optionalNumberEnv('OPENTAG_TOOL_MAX_CALLS_PER_RUN'),

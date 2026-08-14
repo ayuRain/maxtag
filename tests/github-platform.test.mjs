@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { createHmac, generateKeyPairSync, verify } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +10,7 @@ import {
 } from '@opentag/delivery';
 import {
   GITHUB_WORKFLOW_EVENT_CATALOG,
+  GitHubAppInstallationTokenProvider,
   GitHubApiError,
   GitHubPlatformAdapter,
   HttpGitHubTransport,
@@ -21,6 +22,90 @@ import {
   parseAndValidateGitHubCallback,
   splitGitHubText,
 } from '@opentag/platform-github';
+
+test('GitHub App provider exchanges, caches, and refreshes installation tokens', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-github-app-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const privateKeyFile = path.join(root, 'github-app.pem');
+  await fs.writeFile(privateKeyFile, privateKey, { mode: 0o600 });
+  let timestamp = Date.parse('2026-08-14T03:00:00.000Z');
+  const requests = [];
+  const provider = new GitHubAppInstallationTokenProvider({
+    appId: 1234,
+    installationId: 9876,
+    privateKeyFile,
+    now: () => new Date(timestamp),
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      return new Response(JSON.stringify({
+        token: `ghs_installation_${requests.length}`,
+        expires_at: new Date(timestamp + 60 * 60_000).toISOString(),
+      }), { status: 201 });
+    },
+  });
+
+  const [first, concurrent] = await Promise.all([provider.getToken(), provider.getToken()]);
+  assert.equal(first, 'ghs_installation_1');
+  assert.equal(concurrent, first);
+  assert.equal(await provider.getToken(), first);
+  assert.equal(requests.length, 1);
+  assert.equal(
+    requests[0].url,
+    'https://api.github.com/app/installations/9876/access_tokens',
+  );
+  assert.equal(requests[0].options.method, 'POST');
+  assert.equal(requests[0].options.body, '{}');
+  const jwt = requests[0].options.headers.authorization.slice('Bearer '.length);
+  const [encodedHeader, encodedPayload, encodedSignature] = jwt.split('.');
+  assert.deepEqual(JSON.parse(Buffer.from(encodedHeader, 'base64url')), {
+    alg: 'RS256', typ: 'JWT',
+  });
+  const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url'));
+  assert.equal(payload.iss, '1234');
+  assert.equal(payload.iat, Math.floor(timestamp / 1000) - 60);
+  assert.equal(payload.exp, Math.floor(timestamp / 1000) + 9 * 60);
+  assert.equal(
+    verify(
+      'RSA-SHA256',
+      Buffer.from(`${encodedHeader}.${encodedPayload}`),
+      publicKey,
+      Buffer.from(encodedSignature, 'base64url'),
+    ),
+    true,
+  );
+
+  timestamp += 56 * 60_000;
+  assert.equal(await provider.getToken(), 'ghs_installation_2');
+  assert.equal(requests.length, 2);
+});
+
+test('HTTP GitHub transport resolves an installation token per request', async () => {
+  let tokenCalls = 0;
+  let authorization;
+  const transport = new HttpGitHubTransport({
+    tokenProvider: {
+      async getToken() {
+        tokenCalls += 1;
+        return 'ghs_dynamic';
+      },
+    },
+    fetch: async (_url, options) => {
+      authorization = options.headers.authorization;
+      return new Response(JSON.stringify({ id: 9 }), { status: 201 });
+    },
+  });
+  const result = await transport.createIssueComment({
+    owner: 'acme', repo: 'opentag', issueNumber: 1, body: 'ready',
+  });
+  assert.equal(result.commentId, '9');
+  assert.equal(tokenCalls, 1);
+  assert.equal(authorization, 'Bearer ghs_dynamic');
+});
 
 test('GitHub workflow producer normalizes bounded PR, issue, and CI events', () => {
   const common = {

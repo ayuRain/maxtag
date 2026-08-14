@@ -84,6 +84,35 @@ test('standalone worker host keeps GitHub runs on the native transport', async (
   }
 });
 
+test('standalone worker treats a GitHub App token provider as an HTTP credential', async (context) => {
+  const dataDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'opentag-github-app-worker-'),
+  );
+  context.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  let tokenCalls = 0;
+  const tokenProvider = {
+    async getToken() {
+      tokenCalls += 1;
+      return 'ghs_runtime';
+    },
+  };
+  const host = createOpenTagWorkerHost({
+    dataDir,
+    github: { transportMode: 'auto', tokenProvider },
+    toolBroker: { githubTokenProvider: tokenProvider },
+    executors: { mode: 'dry-run' },
+  });
+  context.after(() => host.close());
+
+  assert.deepEqual(host.githubTransportStatus(), {
+    requested: 'auto',
+    mode: 'http',
+    hasToken: true,
+    baseUrl: undefined,
+  });
+  assert.equal(tokenCalls, 0);
+});
+
 test('standalone worker revalidates the shared credential identity revision before an approved write', async (context) => {
   const dataDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'opentag-identity-worker-'),

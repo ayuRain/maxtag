@@ -71,7 +71,8 @@ export interface ResolvedToolCredentialIdentity {
   externalActor?: string;
   lark?: LarkOpenApiClient;
   github?: {
-    token: string;
+    token?: string;
+    tokenProvider?: { getToken(): Promise<string> };
     baseUrl?: string;
     fetch?: typeof fetch;
   };
@@ -88,6 +89,7 @@ export interface OpenTagToolBrokerOptions {
   lark?: LarkOpenApiClient;
   github?: {
     token?: string;
+    tokenProvider?: { getToken(): Promise<string> };
     baseUrl?: string;
     fetch?: typeof fetch;
   };
@@ -563,7 +565,7 @@ async function resolveCredentialIdentity(
   if (!configuredId) {
     const identity =
       options.defaultCredentialIdentities?.[provider] ??
-      (provider === 'github' && options.github?.token
+      (provider === 'github' && (options.github?.token || options.github?.tokenProvider)
         ? {
             id: 'github-default',
             displayName: 'GitHub installation identity',
@@ -582,9 +584,10 @@ async function resolveCredentialIdentity(
           provider,
           lark: provider === 'lark' ? options.lark : undefined,
           github:
-            provider === 'github' && options.github?.token
+            provider === 'github' && (options.github?.token || options.github?.tokenProvider)
               ? {
                   token: options.github.token,
+                  tokenProvider: options.github.tokenProvider,
                   baseUrl: options.github.baseUrl,
                   fetch: options.github.fetch,
                 }
@@ -867,7 +870,8 @@ async function githubRequest(
     'x-github-api-version': '2022-11-28',
   };
   if (request.body) headers['content-type'] = 'application/json; charset=utf-8';
-  if (github?.token) headers.authorization = `Bearer ${github.token}`;
+  const token = github?.token?.trim() || await github?.tokenProvider?.getToken();
+  if (token) headers.authorization = `Bearer ${token}`;
   const response = await (github?.fetch || fetch)(url, {
     method: request.method ?? 'GET',
     headers,
@@ -2061,7 +2065,11 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
         },
         required: ['owner', 'repo', 'title'],
       },
-      available: () => Boolean(options.github?.token || options.resolveCredentialIdentity),
+      available: () => Boolean(
+        options.github?.token ||
+        options.github?.tokenProvider ||
+        options.resolveCredentialIdentity,
+      ),
       authorize(request, input) {
         return resourceGrant(
           request,
@@ -2125,7 +2133,11 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
         },
         required: ['owner', 'repo', 'issueNumber', 'body'],
       },
-      available: () => Boolean(options.github?.token || options.resolveCredentialIdentity),
+      available: () => Boolean(
+        options.github?.token ||
+        options.github?.tokenProvider ||
+        options.resolveCredentialIdentity,
+      ),
       authorize(request, input) {
         return resourceGrant(
           request,

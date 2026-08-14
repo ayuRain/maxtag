@@ -84,12 +84,16 @@
   delivery.
 - Native GitHub `issue_comment` webhook/create/update adapter with repository
   pairing, issue/PR thread routing, HMAC-SHA256 validation, idempotency,
-  self-loop suppression, chunked replies, and tracked delivery.
+  self-loop suppression, chunked replies, tracked delivery, and GitHub App
+  installation-token exchange with in-memory expiry-aware caching. Live App
+  installation proof remains.
 - Content-addressed inbound attachment storage isolated by workspace, project,
   thread, and message; generic base64 upload rejects host path injection.
-- Managed CLI artifact declarations with traversal/symlink/size validation,
-  durable run events, native Lark/Telegram delivery, and authenticated
-  integrity-checked Activity downloads.
+- Managed CLI file artifact declarations with traversal/symlink/size
+  validation, plus public-HTTPS `link` and `pull-request` references with URL
+  normalization and PR-shape validation. Both produce durable run events and
+  client-native delivery; file artifacts retain authenticated integrity-checked
+  Activity downloads.
 - Shared file-backed workspace/project agent policy with workspace identity,
   executor, tool, and network defaults; explicit project identity/capability
   overrides; workspace-shared vs isolated project memory; monthly run/cost
@@ -221,8 +225,10 @@
   transcript recovery. Missing
   provider state and context-window exhaustion invalidate only the current
   scoped topic session and rebuild once from bounded durable context.
-- Add hosted interactive reports and first-class PR/link artifact producers on
-  top of the implemented managed file/report/chart/patch path.
+- Add hosted interactive reports on top of the managed artifact path.
+  First-class PR/link declarations, durable evidence, and client-native link
+  publishing are implemented locally; dedicated product-specific PR producers
+  may be added with the corresponding integration.
 - Add instruction-level resumable execution checkpoints. Lease heartbeat,
   provider-session/transcript recovery, progress-surface reuse, and restart
   replay are implemented; a replacement may still restart the current provider
@@ -282,8 +288,9 @@
 
 - Extend project grants to optional channel/thread overrides; project resource
   allowlists are implemented.
-- Add GitHub App installation token exchange on top of the implemented host-side
-  token provider.
+- Keep the implemented GitHub App JWT and installation-token exchange covered
+  by cache/refresh, Server/Worker transport, and broker tests; add live App
+  permission and delivery-recovery evidence.
 - Extend the implemented one-time exact-argument approval state machine for
   GitHub issue/comment, Lark document append, and Base record create/update to
   future close, merge, delete, and other destructive operations. Current writes
