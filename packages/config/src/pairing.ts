@@ -14,7 +14,7 @@ export type PairingInvitationStatus =
   | 'expired'
   | 'revoked';
 
-export type PairingActivationMode = 'mention' | 'always';
+export type PairingActivationMode = 'mention' | 'questions' | 'always';
 
 export interface PairingInvitation {
   id: string;

@@ -148,7 +148,7 @@ for (const [english, chinese] of Object.entries({
   Policy: '策略', 'Custom project policy': '自定义项目策略', 'Write approval': '写入审批',
   Network: '网络', 'Deny by default': '默认禁止', Restricted: '指定范围',
   'Allow all': '全部允许', 'Allowed hosts': '允许访问的域名', 'Channel binding': '群聊接入',
-  Client: '客户端', Activation: '触发方式', Mention: '提及时', 'Always on': '始终响应',
+  Client: '客户端', Activation: '触发方式', Mention: '仅被 @ 时', Questions: '回答明确问题', 'Always on': '持续响应',
   'Require mention': '首条消息需要 @', Bind: '接入群聊', 'Save project': '保存项目',
   'Reusable procedures': '可复用流程', 'New skill': '新建技能', Catalog: '目录',
   'Agent Skill': '智能体技能', Draft: '草稿', 'Skill ID': '技能 ID', Disable: '停用',

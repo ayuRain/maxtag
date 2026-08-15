@@ -226,6 +226,72 @@ test('channel policy API persists scoped instructions tools and budget', async (
   assert.equal(topicFollowUp.response.status, 202);
   assert.equal(topicFollowUp.data.accepted, true);
 
+  const questionsBinding = await jsonRequest(baseUrl, '/v1/bindings', {
+    method: 'POST',
+    body: {
+      workspaceId: 'dev-workspace',
+      projectId: 'opentag',
+      platform: 'lark',
+      externalId: 'oc_questions',
+      channelId: 'oc_questions',
+      scope: 'channel',
+      activationMode: 'questions',
+      requireMention: true,
+    },
+  });
+  assert.equal(questionsBinding.response.status, 200);
+  assert.equal(questionsBinding.data.binding.activationMode, 'questions');
+
+  const questionsStatement = await jsonRequest(baseUrl, '/v1/client/events', {
+    method: 'POST',
+    body: {
+      platform: 'lark',
+      eventId: 'event-questions-statement',
+      thread: {
+        id: 'lark:oc_questions:main',
+        externalId: 'oc_questions:main',
+        workspaceId: 'dev-workspace',
+        channelId: 'oc_questions',
+        rootMessageId: 'message-questions-statement',
+        visibility: 'public',
+        metadata: { larkConversationMode: 'main' },
+      },
+      message: {
+        id: 'message-questions-statement',
+        text: '今天继续发布',
+        actor: { id: 'ou-user' },
+        mentionsAgent: false,
+      },
+    },
+  });
+  assert.equal(questionsStatement.response.status, 202);
+  assert.equal(questionsStatement.data.reason, 'mention_required');
+
+  const questionsQuestion = await jsonRequest(baseUrl, '/v1/client/events', {
+    method: 'POST',
+    body: {
+      platform: 'lark',
+      eventId: 'event-questions-question',
+      thread: {
+        id: 'lark:oc_questions:main',
+        externalId: 'oc_questions:main',
+        workspaceId: 'dev-workspace',
+        channelId: 'oc_questions',
+        rootMessageId: 'message-questions-question',
+        visibility: 'public',
+        metadata: { larkConversationMode: 'main' },
+      },
+      message: {
+        id: 'message-questions-question',
+        text: '这个发布成功了吗',
+        actor: { id: 'ou-user' },
+        mentionsAgent: false,
+      },
+    },
+  });
+  assert.equal(questionsQuestion.response.status, 202);
+  assert.equal(questionsQuestion.data.accepted, true);
+
   const defaulted = await jsonRequest(baseUrl, '/v1/client/events', {
     method: 'POST',
     body: {

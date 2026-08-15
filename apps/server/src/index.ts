@@ -5893,7 +5893,9 @@ function activationModeValue(
   body: Record<string, unknown>,
 ): ThreadActivationMode | undefined {
   const value = stringValue(body, 'activationMode');
-  return value === 'always' || value === 'mention' ? value : undefined;
+  return value === 'always' || value === 'questions' || value === 'mention'
+    ? value
+    : undefined;
 }
 
 function bindingScopeValue(
@@ -6164,6 +6166,21 @@ function canUseEstablishedThreadBinding(thread: SourceThread): boolean {
   return Boolean(thread.rootMessageId || thread.topicId);
 }
 
+function looksLikeExplicitQuestion(text: string): boolean {
+  const normalized = text.replace(/\s+/gu, ' ').trim();
+  if (!normalized) return false;
+  if (/[?？]/u.test(normalized)) return true;
+  if (/(?:吗|呢|么|嘛|是否|能否|可否|是不是|有没有|要不要|可不可以|行不行)\s*[。！!…]*$/u.test(normalized)) {
+    return true;
+  }
+  if (/^(?:请问|谁|什么|为什么|为何|怎么|怎样|如何|是否|能否|可否|哪(?:个|些|里|儿)?|多少|几(?:个|点|天|次)?|何时|什么时候|在哪里|哪儿)/u.test(normalized)) {
+    return true;
+  }
+  return /^(?:who|what|when|where|why|how|which|whose|can|could|would|should|will|is|are|am|was|were|do|does|did|have|has|may|might)\b/iu.test(
+    normalized,
+  );
+}
+
 async function routeMessage(input: {
   thread: SourceThread;
   message: SourceMessage;
@@ -6225,7 +6242,14 @@ function shouldHandleMessage(input: {
   establishedThreadBinding?: ThreadBinding;
 }): boolean {
   if (input.thread.visibility === 'direct') return true;
+  if (input.message.mentionsAgent) return true;
   if (input.binding?.activationMode === 'always') return true;
+  if (
+    input.binding?.activationMode === 'questions' &&
+    looksLikeExplicitQuestion(input.message.text)
+  ) {
+    return true;
+  }
   if (
     input.establishedThreadBinding?.source === 'observed' ||
     input.establishedThreadBinding?.source === 'configured'
@@ -6235,7 +6259,7 @@ function shouldHandleMessage(input: {
   const requireMention =
     input.binding?.requireMention ??
     (input.thread.platform === 'lark' ? Boolean(botOpenId) : true);
-  return !requireMention || input.message.mentionsAgent;
+  return !requireMention;
 }
 
 function requiredActorCapability(input: {

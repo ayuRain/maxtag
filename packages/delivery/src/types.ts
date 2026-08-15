@@ -39,7 +39,7 @@ export type TurnDeliveryStatus =
   | 'failed'
   | 'cancelled';
 
-export type ThreadActivationMode = 'mention' | 'always';
+export type ThreadActivationMode = 'mention' | 'questions' | 'always';
 
 export type ThreadBindingScope = 'thread' | 'channel';
 
