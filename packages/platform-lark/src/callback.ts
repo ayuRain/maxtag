@@ -152,10 +152,15 @@ function validateTimestamp(
   if (!options.maxTimestampSkewSeconds) return { ok: true };
   const raw = headerValue(headers, 'x-lark-request-timestamp');
   if (!raw) return { ok: false, statusCode: 401, reason: 'stale_request' };
-  const seconds = Number(raw);
-  if (!Number.isFinite(seconds)) {
+  let seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
     return { ok: false, statusCode: 401, reason: 'stale_request' };
   }
+  // Lark callback families have emitted epoch timestamps in seconds,
+  // milliseconds, and microseconds. Normalize sub-second units before
+  // applying one strict replay window; the original header string remains
+  // untouched for signature verification.
+  while (seconds > 100_000_000_000) seconds /= 1_000;
   const nowSeconds = Math.floor((options.now ?? new Date()).getTime() / 1000);
   if (Math.abs(nowSeconds - seconds) > options.maxTimestampSkewSeconds) {
     return { ok: false, statusCode: 401, reason: 'stale_request' };

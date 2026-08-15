@@ -93,6 +93,25 @@ test('signed encrypted Lark v2 callbacks decrypt, authenticate, and preserve v2 
   assert.equal(normalized.thread.metadata.eventId, 'event-v2-1');
 });
 
+test('signed card callbacks normalize Lark microsecond replay timestamps', () => {
+  const encryptKey = 'microsecond-card-encrypt-key';
+  const inner = v2Message();
+  inner.header.event_type = 'card.action.trigger';
+  inner.header.create_time = '1786492800000000';
+  const rawBody = JSON.stringify({ encrypt: encryptPayload(inner, encryptKey) });
+  const parsed = parseAndValidateLarkCallback(
+    rawBody,
+    signedHeaders(rawBody, encryptKey, '1786492800000000'),
+    {
+      encryptKey,
+      verificationToken: 'verification-token',
+      maxTimestampSkewSeconds: 300,
+      now: new Date('2026-08-12T00:00:00.000Z'),
+    },
+  );
+  assert.deepEqual(parsed.validation, { ok: true });
+});
+
 test('unsigned encrypted URL verification requires a matching configured token', () => {
   const encryptKey = 'challenge-encrypt-key';
   const rawBody = JSON.stringify({
