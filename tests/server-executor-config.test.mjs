@@ -64,8 +64,6 @@ async function stopServer(child) {
 test('installation owner enables an authenticated local CLI executor and restart activates it', { timeout: 30_000 }, async (context) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-executor-api-'));
   const commandDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-executor-bin-'));
-  context.after(() => fs.rm(dataDir, { recursive: true, force: true }));
-  context.after(() => fs.rm(commandDir, { recursive: true, force: true }));
   await fs.writeFile(
     path.join(commandDir, 'codex'),
     `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "codex-cli 9.9.9"; exit 0; fi\nif [ "$1" = "doctor" ]; then echo '{"checks":{"auth.credentials":{"status":"ok"}}}'; exit 0; fi\nexit 2\n`,
@@ -75,6 +73,8 @@ test('installation owner enables an authenticated local CLI executor and restart
   const ownerToken = 'managed-executor-owner-token-that-is-long-enough';
   let running = await startServer(dataDir, ownerToken, commandDir);
   context.after(() => stopServer(running.child));
+  context.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  context.after(() => fs.rm(commandDir, { recursive: true, force: true }));
   const auth = { authorization: `Bearer ${ownerToken}` };
 
   const before = await fetch(`${running.baseUrl}/v1/config/executor`, { headers: auth });

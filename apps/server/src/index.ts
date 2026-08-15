@@ -8444,6 +8444,7 @@ async function ensureLarkHistoryOnboarding(input: {
     limit: 20,
   });
   let job = existing.find((candidate) => candidate.status === 'awaiting_choice');
+  const awaitingChoiceAlreadyExisted = Boolean(job);
   if (!job && existing.some((candidate) => candidate.status !== 'cancelled')) {
     return false;
   }
@@ -8499,9 +8500,29 @@ async function ensureLarkHistoryOnboarding(input: {
     await deliveryStore.updateLarkHistoryImportOnboarding(job.id, {
       cardMessageId,
     });
+    if (awaitingChoiceAlreadyExisted) {
+      await transport.sendText({
+        chatId: thread.channelId,
+        replyToMessageId: sourceReplyMessageId(message) || message.id,
+        text: '接入尚未完成：请打开上一次「MaxTag · 群聊接入」卡片，先选择或新建 Project，再选择历史范围。完成后我就会正常回复。',
+        metadata: { thread: job.thread, stage: 'thread-reply' },
+      });
+    }
     return true;
   } catch (error) {
     const wasExisting = existing.some((candidate) => candidate.id === job!.id);
+    if (wasExisting) {
+      const transport = new TrackedLarkTransport(
+        createLarkTransportForRun().transport,
+        deliveryStore,
+      );
+      await transport.sendText({
+        chatId: thread.channelId,
+        replyToMessageId: sourceReplyMessageId(message) || message.id,
+        text: '这个群还差一步初始化：请打开上一次「MaxTag · 群聊接入」卡片完成 Project 和历史范围选择。',
+        metadata: { thread: job.thread, stage: 'thread-reply' },
+      }).catch(() => undefined);
+    }
     if (!wasExisting) {
       await deliveryStore.cancelLarkHistoryImport(
         job.id,

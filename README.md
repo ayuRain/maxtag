@@ -1418,7 +1418,9 @@ Old groups use a separate operator-controlled initialization flow; this is not
 the disconnect backfill above. On the first group invocation MaxTag posts a
 one-time card with **Start now** and **Import the last 30/90/180 days**. The
 first mention is reserved for onboarding and does not also enqueue an Agent
-run. The card shows the group's current Project binding and lets an authorized
+run. While that choice is still pending, later mentions refresh the original
+card and receive an explicit reminder instead of being silently discarded. The
+card shows the group's current Project binding and lets an authorized
 workspace/project administrator change it before choosing a history range. A
 workspace owner or administrator can also enter a new Project name directly in
 the card; MaxTag creates an inherited Project policy and binds the group to it;

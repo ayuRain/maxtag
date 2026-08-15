@@ -107,7 +107,7 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
     if (
       request.method === 'POST' &&
       (request.url === '/open-apis/im/v1/messages?receive_id_type=chat_id' ||
-        request.url === '/open-apis/im/v1/messages/om_onboarding_request/reply')
+        /^\/open-apis\/im\/v1\/messages\/[^/]+\/reply$/u.test(request.url || ''))
     ) {
       response.end(JSON.stringify({ code: 0, data: { message_id: 'om_onboarding_card' } }));
       return;
@@ -241,6 +241,49 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
     { headers: { authorization: `Bearer ${ownerToken}` } },
   ).then((response) => response.json());
   assert.equal(runs.runs.length, 0);
+
+  const onboardingRepeat = await fetch(`${running.baseUrl}/v1/client/events`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer managed-lark-client-ingress-token',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      platform: 'lark',
+      eventId: 'onboarding-event-repeat-1',
+      thread: {
+        externalId: 'oc_onboarding:main',
+        channelId: 'oc_onboarding',
+        workspaceId: 'dev-workspace',
+        projectId: 'general',
+        visibility: 'private',
+      },
+      message: {
+        id: 'om_onboarding_repeat',
+        text: '@MaxTag are you there?',
+        actor: { id: 'ou-onboarding-owner' },
+        mentionsAgent: true,
+      },
+    }),
+  });
+  assert.equal(onboardingRepeat.status, 202);
+  const repeatResult = await onboardingRepeat.json();
+  assert.equal(repeatResult.accepted, true);
+  assert.equal(repeatResult.queued, false);
+  assert.equal(repeatResult.reason, 'lark_history_onboarding_required');
+  const reminder = requests.find(
+    (request) =>
+      request.url === '/open-apis/im/v1/messages/om_onboarding_repeat/reply',
+  );
+  assert.ok(reminder);
+  assert.match(reminder.body, /接入尚未完成/u);
+  assert.match(reminder.body, /选择或新建 Project/u);
+
+  const repeatRuns = await fetch(
+    `${running.baseUrl}/v1/runs?workspaceId=dev-workspace`,
+    { headers: { authorization: `Bearer ${ownerToken}` } },
+  ).then((response) => response.json());
+  assert.equal(repeatRuns.runs.length, 0);
 
   const selectProject = await fetch(`${running.baseUrl}/v1/lark/card-actions`, {
     method: 'POST',

@@ -88,6 +88,7 @@ test('admin initializes old Lark groups with previewed durable background import
   assert.match(server, /maxtag\.history\.select_project/u);
   assert.match(server, /maxtag\.history\.create_project/u);
   assert.match(server, /新建 Project/u);
+  assert.match(server, /接入尚未完成/u);
   assert.match(server, /lark_history_onboarding_required/u);
 });
 
