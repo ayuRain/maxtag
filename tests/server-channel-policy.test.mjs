@@ -123,6 +123,109 @@ test('channel policy API persists scoped instructions tools and budget', async (
   assert.equal(routed.data.route.projectId, 'opentag');
   assert.equal(routed.data.route.bindingScope, 'channel');
 
+  const mainStarted = await jsonRequest(baseUrl, '/v1/client/events', {
+    method: 'POST',
+    body: {
+      platform: 'lark',
+      eventId: 'event-main-start',
+      thread: {
+        id: 'lark:oc_incidents:main',
+        externalId: 'oc_incidents:main',
+        workspaceId: 'dev-workspace',
+        channelId: 'oc_incidents',
+        rootMessageId: 'message-main-start',
+        visibility: 'public',
+        metadata: { larkConversationMode: 'main' },
+      },
+      message: {
+        id: 'message-main-start',
+        text: '@MaxTag start a task',
+        actor: { id: 'ou-user' },
+        mentionsAgent: true,
+      },
+    },
+  });
+  assert.equal(mainStarted.response.status, 202);
+  assert.equal(mainStarted.data.accepted, true);
+
+  const mainChatter = await jsonRequest(baseUrl, '/v1/client/events', {
+    method: 'POST',
+    body: {
+      platform: 'lark',
+      eventId: 'event-main-chatter',
+      thread: {
+        id: 'lark:oc_incidents:main',
+        externalId: 'oc_incidents:main',
+        workspaceId: 'dev-workspace',
+        channelId: 'oc_incidents',
+        rootMessageId: 'message-main-chatter',
+        visibility: 'public',
+        metadata: { larkConversationMode: 'main' },
+      },
+      message: {
+        id: 'message-main-chatter',
+        text: 'ordinary channel conversation',
+        actor: { id: 'ou-user' },
+        mentionsAgent: false,
+      },
+    },
+  });
+  assert.equal(mainChatter.response.status, 202);
+  assert.equal(mainChatter.data.accepted, false);
+  assert.equal(mainChatter.data.reason, 'mention_required');
+
+  const topicStarted = await jsonRequest(baseUrl, '/v1/client/events', {
+    method: 'POST',
+    body: {
+      platform: 'lark',
+      eventId: 'event-topic-start',
+      thread: {
+        id: 'lark:oc_incidents:topic-1',
+        externalId: 'oc_incidents:topic-1',
+        workspaceId: 'dev-workspace',
+        channelId: 'oc_incidents',
+        rootMessageId: 'root-topic-1',
+        topicId: 'topic-1',
+        visibility: 'public',
+        metadata: { larkConversationMode: 'thread' },
+      },
+      message: {
+        id: 'message-topic-start',
+        text: '@MaxTag start this topic task',
+        actor: { id: 'ou-user' },
+        mentionsAgent: true,
+      },
+    },
+  });
+  assert.equal(topicStarted.response.status, 202);
+  assert.equal(topicStarted.data.accepted, true);
+
+  const topicFollowUp = await jsonRequest(baseUrl, '/v1/client/events', {
+    method: 'POST',
+    body: {
+      platform: 'lark',
+      eventId: 'event-topic-follow-up',
+      thread: {
+        id: 'lark:oc_incidents:topic-1',
+        externalId: 'oc_incidents:topic-1',
+        workspaceId: 'dev-workspace',
+        channelId: 'oc_incidents',
+        rootMessageId: 'root-topic-1',
+        topicId: 'topic-1',
+        visibility: 'public',
+        metadata: { larkConversationMode: 'thread' },
+      },
+      message: {
+        id: 'message-topic-follow-up',
+        text: 'continue the topic task without mentioning again',
+        actor: { id: 'ou-user' },
+        mentionsAgent: false,
+      },
+    },
+  });
+  assert.equal(topicFollowUp.response.status, 202);
+  assert.equal(topicFollowUp.data.accepted, true);
+
   const defaulted = await jsonRequest(baseUrl, '/v1/client/events', {
     method: 'POST',
     body: {

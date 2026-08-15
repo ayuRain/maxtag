@@ -5792,7 +5792,7 @@ function coerceClientEvent(
     topicId:
       stringValue(threadBody, 'topicId') ||
       stringValue(body, 'topicId') ||
-      rootMessageId,
+      (platformKind === 'lark' ? undefined : rootMessageId),
     title:
       stringValue(threadBody, 'title') ||
       stringValue(body, 'title') ||
@@ -6153,6 +6153,14 @@ function applyBindingToThread(
 }
 
 function canUseEstablishedThreadBinding(thread: SourceThread): boolean {
+  // A Lark group "main" conversation has one durable transcript id, while
+  // rootMessageId is set to each individual top-level message id. Treating
+  // that as an established topic makes every later piece of channel chatter
+  // bypass mention-required activation after the first @MaxTag invocation.
+  // Only a real Lark topic/thread may continue without another mention.
+  if (thread.platform === 'lark') {
+    return !thread.externalId.endsWith(':main') && Boolean(thread.topicId);
+  }
   return Boolean(thread.rootMessageId || thread.topicId);
 }
 
