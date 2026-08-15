@@ -297,6 +297,120 @@ export class OpenTagRuntime {
             updatedAt: now(),
           };
           await progress.update(surfaceId, state);
+          return;
+        }
+        if (event.type === 'tool_call') {
+          state = {
+            ...state,
+            status: 'running',
+            checklist: updateChecklist(state.checklist, {
+              id: `tool:${event.call.id}`,
+              label: `使用工具：${event.call.title}`,
+              status: 'running',
+              detail:
+                event.call.risk === 'write'
+                  ? '准备外部写入'
+                  : '读取所需信息',
+            }),
+            summary: `正在使用“${event.call.title}”。`,
+            updatedAt: now(),
+          };
+          await progress.update(surfaceId, state);
+          return;
+        }
+        if (event.type === 'tool_approval') {
+          const pending = event.approval.status === 'pending';
+          state = {
+            ...state,
+            status: pending ? 'waiting' : 'running',
+            checklist: updateChecklist(state.checklist, {
+              id: `tool:${event.approval.toolCallId}`,
+              label: `外部操作：${event.approval.title}`,
+              status: pending
+                ? 'pending'
+                : event.approval.status === 'succeeded'
+                  ? 'done'
+                  : event.approval.status === 'failed' ||
+                      event.approval.status === 'rejected' ||
+                      event.approval.status === 'expired'
+                    ? 'failed'
+                    : 'running',
+              detail: pending
+                ? '等待群内确认'
+                : event.approval.status === 'approved' ||
+                    event.approval.status === 'executing'
+                  ? '已批准，正在执行'
+                  : `状态：${event.approval.status}`,
+            }),
+            summary: pending
+              ? `等待你确认“${event.approval.title}”。`
+              : state.summary,
+            updatedAt: now(),
+          };
+          await progress.update(surfaceId, state);
+          return;
+        }
+        if (event.type === 'tool_result') {
+          const waiting = event.call.status === 'pending_approval';
+          const failed =
+            event.call.status === 'failed' || event.call.status === 'denied';
+          state = {
+            ...state,
+            status: waiting ? 'waiting' : 'running',
+            checklist: updateChecklist(state.checklist, {
+              id: `tool:${event.call.id}`,
+              label: `使用工具：${event.call.title}`,
+              status: waiting ? 'pending' : failed ? 'failed' : 'done',
+              detail: waiting
+                ? '等待群内确认'
+                : failed
+                  ? event.call.error || '操作未完成'
+                  : event.call.resultPreview || '已完成',
+            }),
+            summary: waiting ? state.summary : `“${event.call.title}”已处理，继续执行。`,
+            updatedAt: now(),
+          };
+          await progress.update(surfaceId, state);
+          return;
+        }
+        if (event.type === 'delegation') {
+          state = {
+            ...state,
+            status: 'running',
+            checklist: updateChecklist(state.checklist, {
+              id: `agent:${event.invocationId}`,
+              label: `子智能体：${event.agentId}`,
+              status:
+                event.status === 'running'
+                  ? 'running'
+                  : event.status === 'completed'
+                    ? 'done'
+                    : 'failed',
+              detail:
+                event.status === 'running'
+                  ? event.taskPreview || '正在协作处理'
+                  : event.summaryPreview || `状态：${event.status}`,
+            }),
+            summary:
+              event.status === 'running'
+                ? `正在请“${event.agentId}”协作。`
+                : state.summary,
+            updatedAt: now(),
+          };
+          await progress.update(surfaceId, state);
+          return;
+        }
+        if (event.type === 'artifact') {
+          state = {
+            ...state,
+            checklist: updateChecklist(state.checklist, {
+              id: `artifact:${event.artifact.id}`,
+              label: `生成产物：${event.artifact.title}`,
+              status: 'done',
+            }),
+            updatedAt: now(),
+          };
+          await progress.update(surfaceId, state);
         }
       };
 
@@ -312,8 +426,48 @@ export class OpenTagRuntime {
       };
       await progress.update(surfaceId, state);
 
-      const steering = input.steering
+      const rawSteering = input.steering
         ? await input.steering.open(executor.steeringMode ?? 'next_turn')
+        : undefined;
+      const followUps = new Set<string>();
+      const steering = rawSteering
+        ? {
+            mode: rawSteering.mode,
+            receive: async (...args: Parameters<typeof rawSteering.receive>) => {
+              const message = await rawSteering.receive(...args);
+              if (!message) return undefined;
+              followUps.add(message.id);
+              state = {
+                ...state,
+                status: 'running',
+                checklist: updateChecklist(state.checklist, {
+                  id: 'followups',
+                  label: '合并群内补充信息',
+                  status: 'running',
+                  detail: `已收到 ${followUps.size} 条补充`,
+                }),
+                summary: '已收到补充信息，正在合并到当前任务。',
+                updatedAt: now(),
+              };
+              await progress.update(surfaceId, state);
+              return message;
+            },
+            acknowledge: async (id: string, detail?: string) => {
+              await rawSteering.acknowledge(id, detail);
+              state = {
+                ...state,
+                checklist: updateChecklist(state.checklist, {
+                  id: 'followups',
+                  label: '合并群内补充信息',
+                  status: 'done',
+                  detail: `已纳入 ${followUps.size} 条补充`,
+                }),
+                summary: '补充信息已纳入，继续执行。',
+                updatedAt: now(),
+              };
+              await progress.update(surfaceId, state);
+            },
+          }
         : undefined;
       const providerSession =
         input.providerSession?.providerId === executor.id

@@ -143,6 +143,204 @@ test('runtime selects the executor configured by the project identity', async ()
   );
 });
 
+test('runtime progress incorporates live follow-ups, delegated work, and pending decisions', async () => {
+  const progress = [];
+  let steeringDelivered = false;
+  const thread = {
+    id: 'lark:payments:collaboration',
+    platform: 'lark',
+    externalId: 'payments:collaboration',
+    workspaceId: 'acme',
+    projectId: 'payments',
+    channelId: 'payments',
+    visibility: 'private',
+  };
+  const runtime = new OpenTagRuntime({
+    platform: {
+      kind: 'lark',
+      capabilities: {
+        supportsThreads: true,
+        supportsCards: true,
+        supportsFiles: true,
+        supportsReactions: true,
+        supportsMentions: true,
+      },
+      createProgressSurface() {
+        const record = (state) => progress.push(structuredClone(state));
+        return {
+          async create(state) {
+            record(state);
+            return { surfaceId: 'collaboration-card' };
+          },
+          async update(_id, state) { record(state); },
+          async complete(_id, state) { record(state); },
+        };
+      },
+      async sendMessage() {},
+    },
+    executor: {
+      id: 'codex',
+      label: 'Codex',
+      steeringMode: 'live',
+      async run(request) {
+        const followUp = await request.steering.receive();
+        assert.equal(followUp.message.text, '请同时检查数据库延迟。');
+        await request.steering.acknowledge(followUp.id, 'merged');
+        await request.onEvent({
+          type: 'delegation',
+          invocationId: 'delegate-1',
+          agentId: 'release-reviewer',
+          executorId: 'codex',
+          status: 'running',
+          taskPreview: '复核发布证据',
+        });
+        await request.onEvent({
+          type: 'delegation',
+          invocationId: 'delegate-1',
+          agentId: 'release-reviewer',
+          executorId: 'codex',
+          status: 'completed',
+          summaryPreview: '证据完整',
+        });
+        await request.onEvent({
+          type: 'tool_call',
+          call: {
+            id: 'tool-1',
+            name: 'github_issue_create',
+            title: '创建 GitHub Issue',
+            grantKind: 'github',
+            risk: 'write',
+          },
+        });
+        await request.onEvent({
+          type: 'tool_approval',
+          approval: {
+            id: 'approval-1',
+            status: 'pending',
+            runId: request.runId,
+            toolCallId: 'tool-1',
+            toolName: 'github_issue_create',
+            title: '创建 GitHub Issue',
+            grantKind: 'github',
+            risk: 'write',
+            arguments: {},
+            argumentSummary: {},
+            argumentDigest: 'digest',
+            platform: 'lark',
+            thread,
+            threadId: thread.id,
+            requestedBy: 'agent:maxtag',
+            requestedAt: '2026-08-15T00:00:00.000Z',
+            expiresAt: '2026-08-15T00:15:00.000Z',
+          },
+        });
+        await request.onEvent({
+          type: 'tool_result',
+          call: {
+            id: 'tool-1',
+            name: 'github_issue_create',
+            title: '创建 GitHub Issue',
+            grantKind: 'github',
+            risk: 'write',
+            status: 'pending_approval',
+            durationMs: 10,
+          },
+        });
+        return { summary: '等待批准后继续。', artifacts: [] };
+      },
+    },
+    memory: {
+      async loadThreadMemory() { return ''; },
+      async remember() {},
+      async forget() {},
+    },
+    threadConfig: {
+      async getIdentity() {
+        return {
+          id: 'maxtag',
+          displayName: 'MaxTag',
+          instructions: '',
+          defaultExecutorId: 'codex',
+        };
+      },
+      async getAccessBundle() {
+        return {
+          id: 'collaboration-access',
+          threadId: thread.id,
+          grants: [],
+          networkPolicy: { mode: 'deny-by-default', allowedHosts: [] },
+        };
+      },
+    },
+  });
+
+  await runtime.handleMessage({
+    runId: 'collaboration-run',
+    thread,
+    message: {
+      id: 'collaboration-message',
+      threadId: thread.id,
+      platform: 'lark',
+      text: '完成一次长任务。',
+      actor: { id: 'user-1' },
+      createdAt: '2026-08-15T00:00:00.000Z',
+      mentionsAgent: true,
+    },
+    steering: {
+      async open(mode) {
+        assert.equal(mode, 'live');
+        return {
+          mode,
+          async receive() {
+            if (steeringDelivered) return undefined;
+            steeringDelivered = true;
+            return {
+              id: 'steering-1',
+              targetRunId: 'collaboration-run',
+              receivedAt: '2026-08-15T00:00:01.000Z',
+              thread,
+              message: {
+                id: 'follow-up-message',
+                threadId: thread.id,
+                platform: 'lark',
+                text: '请同时检查数据库延迟。',
+                actor: { id: 'user-2' },
+                createdAt: '2026-08-15T00:00:01.000Z',
+                mentionsAgent: true,
+              },
+            };
+          },
+          async acknowledge() {},
+        };
+      },
+    },
+  });
+
+  assert.ok(progress.some((state) => state.status === 'waiting'));
+  assert.ok(
+    progress.some((state) =>
+      state.checklist.some(
+        (item) => item.id === 'followups' && item.status === 'done',
+      ),
+    ),
+  );
+  assert.ok(
+    progress.some((state) =>
+      state.checklist.some(
+        (item) => item.id === 'agent:delegate-1' && item.status === 'done',
+      ),
+    ),
+  );
+  assert.ok(
+    progress.some((state) =>
+      state.checklist.some(
+        (item) => item.id === 'tool:tool-1' && item.status === 'pending',
+      ),
+    ),
+  );
+  assert.equal(progress.at(-1).status, 'completed');
+});
+
 test('runtime resolves only currently enabled route skill summaries before execution', async () => {
   let executorRequest;
   const thread = {

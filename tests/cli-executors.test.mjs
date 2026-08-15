@@ -1588,6 +1588,7 @@ for await (const line of lines) {
 test('Codex app server interrupts the exact active turn on cancellation', async () => {
   const files = await fixture();
   const interruptMarker = path.join(files.root, 'interrupt.json');
+  const turnReadyMarker = path.join(files.root, 'turn-ready');
   const fakeCli = await files.script(
     'fake-codex-app-server-cancel.mjs',
     `import fs from 'node:fs/promises';
@@ -1597,7 +1598,10 @@ for await (const line of lines) {
   const message = JSON.parse(line);
   if (message.method === 'initialize') console.log(JSON.stringify({ id: message.id, result: {} }));
   if (message.method === 'thread/start') console.log(JSON.stringify({ id: message.id, result: { thread: { id: 'cancel-thread' } } }));
-  if (message.method === 'turn/start') console.log(JSON.stringify({ id: message.id, result: { turn: { id: 'cancel-turn', status: 'inProgress', items: [] } } }));
+  if (message.method === 'turn/start') {
+    await fs.writeFile(${JSON.stringify(turnReadyMarker)}, 'ready');
+    console.log(JSON.stringify({ id: message.id, result: { turn: { id: 'cancel-turn', status: 'inProgress', items: [] } } }));
+  }
   if (message.method === 'turn/interrupt') {
     await fs.writeFile(${JSON.stringify(interruptMarker)}, JSON.stringify(message.params));
     console.log(JSON.stringify({ id: message.id, result: {} }));
@@ -1615,7 +1619,18 @@ for await (const line of lines) {
     codexHome: path.join(files.root, 'codex-cancel-home'),
     timeoutMs: 2_000,
   }).run(request({ abortSignal: controller.signal }).value);
-  await delay(100);
+  const readyDeadline = Date.now() + 2_000;
+  while (true) {
+    try {
+      await fs.access(turnReadyMarker);
+      break;
+    } catch {
+      if (Date.now() >= readyDeadline) {
+        throw new Error('codex_cancel_test_turn_not_ready');
+      }
+      await delay(10);
+    }
+  }
   controller.abort('cancelled_from_shared_thread');
 
   await assert.rejects(execution, /cancelled_from_shared_thread|executor_aborted/u);

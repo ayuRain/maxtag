@@ -75,6 +75,8 @@ function statusPresentation(status: ProgressState['status']): {
       return { label: '等待开始', template: 'grey', icon: 'time_outlined' };
     case 'running':
       return { label: '处理中', template: 'wathet', icon: 'loading_outlined' };
+    case 'waiting':
+      return { label: '等待你的决定', template: 'orange', icon: 'time_outlined' };
     case 'blocked':
       return { label: '等待恢复', template: 'orange', icon: 'warning_outlined' };
     case 'completed':
@@ -90,6 +92,7 @@ function currentStep(state: ProgressState): string {
   const running = [...state.checklist].reverse().find((item) => item.status === 'running');
   if (running) return displayChecklistLabel(running);
   if (state.status === 'completed') return '结果已发送';
+  if (state.status === 'waiting') return '请处理下方确认卡片';
   if (state.status === 'blocked') return '任务会在服务恢复后继续';
   if (state.status === 'cancelled') return '已保留完成的工作';
   if (state.status === 'failed') return compact(state.summary || '请查看错误详情');
@@ -194,6 +197,8 @@ export function buildLarkProgressCard(state: ProgressState): LarkCardDocument {
 
   if (state.status === 'failed') {
     elements.push(markdown(`<font color='red'>**${escaped(compact(state.summary || '执行遇到错误', 240))}**</font>`));
+  } else if (state.status === 'waiting') {
+    elements.push(markdown(`<font color='orange'>**需要你的确认后才能继续外部操作。**</font>\n<font color='grey'>请处理同一话题里的确认卡片；任务状态会自动更新。</font>`));
   } else if (state.status === 'blocked') {
     elements.push(markdown(`<font color='orange'>**服务正在恢复，任务会自动继续。**</font>\n<font color='grey'>无需重新发送消息。</font>`));
   } else if (state.status === 'cancelled') {

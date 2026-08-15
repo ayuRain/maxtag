@@ -116,6 +116,14 @@ for (const status of ['completed', 'failed', 'cancelled']) {
   });
 }
 
+test('waiting Lark progress cards direct the user to the decision card and keep controls', () => {
+  const card = buildLarkProgressCard(progressState('waiting'));
+  assert.equal(card.header.template, 'orange');
+  assert.equal(cardButtons(card).length, 2);
+  assert.match(JSON.stringify(card), /等待你的决定/u);
+  assert.match(JSON.stringify(card), /确认卡片/u);
+});
+
 function memoryProposal(status = 'pending') {
   return {
     id: 'memory-proposal-1',

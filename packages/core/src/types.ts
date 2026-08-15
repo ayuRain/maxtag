@@ -721,7 +721,14 @@ export interface ChecklistItem {
 export interface ProgressState {
   runId: string;
   title: string;
-  status: 'queued' | 'running' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+  status:
+    | 'queued'
+    | 'running'
+    | 'waiting'
+    | 'blocked'
+    | 'completed'
+    | 'failed'
+    | 'cancelled';
   summary?: string;
   checklist: ChecklistItem[];
   updatedAt: string;
