@@ -421,7 +421,7 @@ export interface ThreadTranscriptEntry {
   role: 'user' | 'assistant';
   text: string;
   at: string;
-  source: 'run' | 'live_steering' | 'source_message';
+  source: 'run' | 'live_steering' | 'source_message' | 'context_summary';
   actor?: SourceActor;
   messageId?: string;
 }

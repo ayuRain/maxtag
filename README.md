@@ -477,14 +477,21 @@ For the detailed evidence matrix and sequencing, see
   to Codex with `gpt-5.6-luna`. Optional per-purpose retrieval, query, analysis,
   and wrapup model overrides inherit that default when unset, so frequent
   reranking can stay cheap while lower-frequency consolidation can use a more
-  capable model. Successful real agent runs also enqueue a
-  debounced background wrapup. Its durable per-thread cursor advances only
-  after successful analysis; long transcripts continue in oldest-first batches,
-  stale claims recover across processes, failures retry with backoff, and
-  terminal job history is retained on a bounded schedule. The reply path does
-  not wait for this work, and every accepted decision still becomes an approval
-  proposal rather than an immediate write. The Memory console presents those
-  proposals as an explicit current/proposed comparison with retrieval aliases,
+  capable model. Group context is consolidated independently of provider
+  sessions. Each routed group/topic stages a durable background wrapup after
+  200 new transcript entries, 100,000 new characters, or 24 hours, whichever
+  comes first. Its per-thread cursor advances only after successful analysis
+  and a persisted rolling summary; long transcripts continue in oldest-first
+  batches, stale claims recover across processes, and failures retry with
+  backoff. The summary immediately replaces its covered raw entries in later
+  model context. Raw message bodies remain in a seven-day recovery grace period,
+  then are removed while a lightweight manifest retains route, message/time
+  range, counts, content hash, summary id, and purge time. The reply path never
+  waits for this work. Non-destructive new Project facts are approved
+  automatically with an immutable memory revision; Company writes and
+  destructive replace/merge/forget decisions remain explicit proposals. The
+  Memory console presents those review-only proposals as an explicit
+  current/proposed comparison with retrieval aliases,
   model rationale, source, target document version, and approval-time retention
   evidence so reviewers do not have to infer a merge from a single summary line.
   Every successful runner invocation records a separate durable usage entry as

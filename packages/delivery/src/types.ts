@@ -3,6 +3,7 @@ import type {
   PlatformKind,
   SourceMessage,
   SourceThread,
+  ThreadTranscriptEntry,
   ThreadTranscriptCursor,
   ThreadTranscriptSnapshot,
   ToolApprovalRecord,
@@ -372,6 +373,7 @@ export interface LoadThreadTranscriptOptions {
   maxChars?: number;
   afterCursor?: ThreadTranscriptCursor;
   order?: 'latest' | 'oldest';
+  includeContextSummaries?: boolean;
 }
 
 export type LoadedThreadTranscript = ThreadTranscriptSnapshot;
@@ -415,6 +417,8 @@ export interface MemoryWrapupJobRecord {
   proposalIds?: string[];
   transcriptEntries?: number;
   transcriptOmittedEntries?: number;
+  contextSummaryId?: string;
+  autoApprovedProposalIds?: string[];
 }
 
 export interface EnqueueMemoryWrapupInput {
@@ -437,6 +441,8 @@ export interface CompleteMemoryWrapupInput {
   proposalIds?: string[];
   transcriptEntries?: number;
   transcriptOmittedEntries?: number;
+  contextSummaryId?: string;
+  autoApprovedProposalIds?: string[];
   now?: Date;
 }
 
@@ -535,10 +541,56 @@ export interface SourceThreadMessageRecord {
   threadExternalId: string;
   workspaceId?: string;
   projectId?: string;
+  thread?: SourceThread;
   message: SourceMessage;
   origin: SourceThreadMessageOrigin;
   firstObservedAt: string;
   lastObservedAt: string;
+}
+
+export interface ThreadContextSummaryRecord {
+  id: string;
+  platform: PlatformKind;
+  threadId: string;
+  threadExternalId: string;
+  workspaceId?: string;
+  projectId?: string;
+  summary: string;
+  coveredEntryIds: string[];
+  startAt: string;
+  endAt: string;
+  startMessageId?: string;
+  endMessageId?: string;
+  entryCount: number;
+  characterCount: number;
+  contentHash: string;
+  fromCursor?: ThreadTranscriptCursor;
+  toCursor: ThreadTranscriptCursor;
+  rawExpiresAt: string;
+  rawPurgedAt?: string;
+  createdAt: string;
+}
+
+export interface RecordThreadContextSummaryInput {
+  thread: SourceThread;
+  summary: string;
+  entries: ThreadTranscriptEntry[];
+  fromCursor?: ThreadTranscriptCursor;
+  toCursor: ThreadTranscriptCursor;
+  rawGraceMs?: number;
+  now?: Date;
+}
+
+export interface PurgeThreadContextRawOptions {
+  now?: Date;
+  limit?: number;
+}
+
+export interface PurgeThreadContextRawResult {
+  summaries: number;
+  sourceMessages: number;
+  runMessages: number;
+  steeringMessages: number;
 }
 
 export interface UpsertSourceThreadMessagesInput {
@@ -1054,6 +1106,7 @@ export interface FileDeliveryState {
   agentRunSteering: AgentRunSteeringRecord[];
   agentThreadSessions: AgentThreadSessionRecord[];
   sourceThreadMessages: SourceThreadMessageRecord[];
+  threadContextSummaries: ThreadContextSummaryRecord[];
   threadContextSyncs: ThreadContextSyncRecord[];
   usageRecords: AgentRunUsageRecord[];
   usageAlerts: UsageBudgetAlert[];

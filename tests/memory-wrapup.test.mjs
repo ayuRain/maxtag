@@ -89,6 +89,7 @@ function analysisStub(deliveryStore, calls, failures = { remaining: 0 }) {
         decisions: [],
         proposed: [],
         skipped: [],
+        contextSummary: `Summary batch ${calls.length}`,
         startedAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
       };
@@ -181,4 +182,141 @@ test('stale wrapup claims recover to another worker', async (context) => {
   assert.equal(recovered[0].id, first[0].id);
   assert.equal(recovered[0].claimedBy, 'worker-b');
   assert.equal(recovered[0].attempts, 2);
+});
+
+test('group context consolidation stages at 200 new entries, not on every message', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-wrapup-threshold-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const deliveryStore = new FileDeliveryStore(path.join(root, 'delivery'));
+  const sourceThread = thread();
+  const base = Date.now() - 60_000;
+  const messages = Array.from({ length: 199 }, (_, index) => ({
+    id: `recent-${index + 1}`,
+    threadId: sourceThread.id,
+    platform: 'lark',
+    text: `Recent message ${index + 1}`,
+    actor: { id: 'member', displayName: 'Member' },
+    createdAt: new Date(base + index).toISOString(),
+    mentionsAgent: false,
+  }));
+  await deliveryStore.upsertSourceThreadMessages({
+    thread: sourceThread,
+    messages,
+    origin: 'event',
+  });
+  const service = new MemoryWrapupService({
+    deliveryStore,
+    analysisService: analysisStub(deliveryStore, []),
+    workerId: 'memory-worker',
+    minEntries: 200,
+    maxAgeMs: 24 * 60 * 60_000,
+    debounceMs: 0,
+  });
+
+  assert.equal(await service.observeThread(sourceThread, messages.at(-1).id), undefined);
+  await deliveryStore.upsertSourceThreadMessages({
+    thread: sourceThread,
+    messages: [{
+      ...messages.at(-1),
+      id: 'recent-200',
+      text: 'Recent message 200',
+      createdAt: new Date(base + 200).toISOString(),
+    }],
+    origin: 'event',
+  });
+  const staged = await service.observeThread(sourceThread, 'recent-200');
+  assert.equal(staged?.status, 'pending');
+  assert.equal(
+    (await deliveryStore.listMemoryWrapups({ threadId: sourceThread.id }))
+      .filter((job) => job.status === 'pending').length,
+    1,
+  );
+});
+
+test('successful consolidation replaces covered raw context and purges it after grace', async (context) => {
+  const { deliveryStore, sourceThread, run } = await fixture(context);
+  const calls = [];
+  const service = new MemoryWrapupService({
+    deliveryStore,
+    analysisService: analysisStub(deliveryStore, calls),
+    workerId: 'memory-worker',
+    minEntries: 2,
+    debounceMs: 0,
+    rawGraceMs: 60_000,
+  });
+
+  await service.enqueueRun(run);
+  const pass = await service.runPass();
+  assert.equal(pass.completed, 1);
+  const summaries = await deliveryStore.listThreadContextSummaries({
+    thread: sourceThread,
+  });
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0].entryCount, 2);
+  assert.equal(summaries[0].contentHash.length, 64);
+  assert.equal(summaries[0].rawPurgedAt, undefined);
+
+  const visible = await deliveryStore.loadThreadTranscript({
+    thread: sourceThread,
+    maxEntries: 20,
+    maxChars: 40_000,
+  });
+  assert.ok(visible.entries.some((entry) => entry.source === 'context_summary'));
+  assert.ok(!visible.entries.some((entry) => entry.text === 'Decision 1'));
+  assert.equal((await deliveryStore.listSourceThreadMessages({ thread: sourceThread })).length, 5);
+
+  const purged = await deliveryStore.purgeThreadContextRaw({
+    now: new Date(Date.now() + 120_000),
+  });
+  assert.equal(purged.summaries, 1);
+  assert.equal(purged.sourceMessages, 2);
+  assert.equal((await deliveryStore.listSourceThreadMessages({ thread: sourceThread })).length, 3);
+  assert.ok(
+    (await deliveryStore.listThreadContextSummaries({ thread: sourceThread }))[0]
+      .rawPurgedAt,
+  );
+});
+
+test('consolidation auto-approves only non-destructive Project additions', async (context) => {
+  const { deliveryStore, sourceThread, run } = await fixture(context);
+  const approved = [];
+  const notified = [];
+  const base = analysisStub(deliveryStore, []);
+  const analysisService = {
+    ...base,
+    async analyze(input) {
+      const report = await base.analyze(input);
+      return {
+        ...report,
+        proposed: [
+          { id: 'project-add', status: 'pending', action: 'remember', scope: 'project' },
+          { id: 'company-add', status: 'pending', action: 'remember', scope: 'workspace' },
+          { id: 'project-replace', status: 'pending', action: 'replace', scope: 'project' },
+        ],
+      };
+    },
+  };
+  const service = new MemoryWrapupService({
+    deliveryStore,
+    analysisService,
+    workerId: 'memory-worker',
+    minEntries: 2,
+    debounceMs: 0,
+    autoApprove: async ({ proposal }) => {
+      approved.push(proposal.id);
+      return { ...proposal, status: 'approved' };
+    },
+    onProposals: async ({ proposals }) => {
+      notified.push(...proposals.map((proposal) => proposal.id));
+    },
+  });
+
+  await service.enqueueRun(run);
+  await service.runPass();
+  assert.deepEqual(approved, ['project-add']);
+  assert.deepEqual(notified, ['company-add', 'project-replace']);
+  const completed = (await deliveryStore.listMemoryWrapups({
+    threadId: sourceThread.id,
+  })).find((job) => job.status === 'completed');
+  assert.deepEqual(completed.autoApprovedProposalIds, ['project-add']);
 });

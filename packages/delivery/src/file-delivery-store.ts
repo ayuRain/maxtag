@@ -90,6 +90,10 @@ import type {
   CancelThreadAgentRunsResult,
   UpsertThreadBindingInput,
   SourceThreadMessageRecord,
+  ThreadContextSummaryRecord,
+  RecordThreadContextSummaryInput,
+  PurgeThreadContextRawOptions,
+  PurgeThreadContextRawResult,
   ScopedAgentRunTimelineEvent,
   UpsertSourceThreadMessagesInput,
   UpsertSourceThreadMessagesResult,
@@ -125,6 +129,7 @@ const EMPTY_STATE: FileDeliveryState = {
   agentRunSteering: [],
   agentThreadSessions: [],
   sourceThreadMessages: [],
+  threadContextSummaries: [],
   threadContextSyncs: [],
   usageRecords: [],
   usageAlerts: [],
@@ -182,6 +187,7 @@ export function createEmptyDeliveryState(): FileDeliveryState {
     agentRunSteering: [],
     agentThreadSessions: [],
     sourceThreadMessages: [],
+    threadContextSummaries: [],
     threadContextSyncs: [],
     usageRecords: [],
     usageAlerts: [],
@@ -227,6 +233,7 @@ export function normalizeDeliveryState(
     agentRunSteering: parsed.agentRunSteering ?? [],
     agentThreadSessions: parsed.agentThreadSessions ?? [],
     sourceThreadMessages: parsed.sourceThreadMessages ?? [],
+    threadContextSummaries: parsed.threadContextSummaries ?? [],
     threadContextSyncs: parsed.threadContextSyncs ?? [],
     usageRecords: parsed.usageRecords ?? [],
     usageAlerts: parsed.usageAlerts ?? [],
@@ -396,7 +403,22 @@ function transcriptTextForMessage(message: SourceMessage): string {
 function copySourceThreadMessage(
   record: SourceThreadMessageRecord,
 ): SourceThreadMessageRecord {
-  return { ...record, message: copySourceMessage(record.message) };
+  return {
+    ...record,
+    thread: record.thread ? structuredClone(record.thread) : undefined,
+    message: copySourceMessage(record.message),
+  };
+}
+
+function copyThreadContextSummary(
+  record: ThreadContextSummaryRecord,
+): ThreadContextSummaryRecord {
+  return {
+    ...record,
+    coveredEntryIds: [...record.coveredEntryIds],
+    fromCursor: record.fromCursor ? { ...record.fromCursor } : undefined,
+    toCursor: { ...record.toCursor },
+  };
 }
 
 function copyThreadContextSync(
@@ -773,6 +795,21 @@ function reconcileUsageAlertsInState(
 function sameSourceThreadScope(
   record: Pick<
     SourceThreadMessageRecord,
+    'platform' | 'threadId' | 'workspaceId' | 'projectId'
+  >,
+  thread: SourceThread,
+): boolean {
+  return (
+    record.platform === thread.platform &&
+    record.threadId === thread.id &&
+    record.workspaceId === thread.workspaceId &&
+    record.projectId === thread.projectId
+  );
+}
+
+function sameContextSummaryScope(
+  record: Pick<
+    ThreadContextSummaryRecord,
     'platform' | 'threadId' | 'workspaceId' | 'projectId'
   >,
   thread: SourceThread,
@@ -1764,6 +1801,33 @@ export class FileDeliveryStore {
     const excludedRun = options.excludeRunId
       ? state.agentRuns.find((run) => run.id === options.excludeRunId)
       : undefined;
+    const contextSummaries = options.includeContextSummaries === false
+      ? []
+      : state.threadContextSummaries
+          .filter((record) => sameContextSummaryScope(record, options.thread))
+          .filter(
+            (record) => !excludedRun || record.endAt <= excludedRun.createdAt,
+          );
+    const coveredEntryIds = new Set(
+      contextSummaries.flatMap((record) => record.coveredEntryIds),
+    );
+    for (const summary of contextSummaries) {
+      entries.push({
+        id: `transcript:${summary.id}:context`,
+        role: 'user',
+        text: [
+          `[Consolidated context: ${summary.entryCount} entries, ${summary.startAt} to ${summary.endAt}]`,
+          summary.summary,
+        ].join('\n'),
+        at: summary.endAt,
+        source: 'context_summary',
+        actor: {
+          id: 'opentag-context-summary',
+          displayName: 'MaxTag Context',
+          isBot: true,
+        },
+      });
+    }
     const runs = state.agentRuns
       .filter(
         (run) =>
@@ -1797,6 +1861,7 @@ export class FileDeliveryStore {
     const sourceMessageIds = new Set<string>();
     const sourceRecords = state.sourceThreadMessages
       .filter((record) => sameSourceThreadScope(record, options.thread))
+      .filter((record) => !coveredEntryIds.has(`transcript:${record.id}:source`))
       .filter((record) => !record.message.actor.isBot)
       .filter(
         (record) =>
@@ -1825,7 +1890,11 @@ export class FileDeliveryStore {
     }
 
     for (const run of runs) {
-      if (run.message && !sourceMessageIds.has(run.message.id)) {
+      if (
+        run.message &&
+        !sourceMessageIds.has(run.message.id) &&
+        !coveredEntryIds.has(`transcript:${run.id}:user`)
+      ) {
         entries.push({
           id: `transcript:${run.id}:user`,
           runId: run.id,
@@ -1840,7 +1909,10 @@ export class FileDeliveryStore {
       for (const steering of (liveSteeringByRun.get(run.id) ?? []).sort(
         (a, b) => a.sequence - b.sequence,
       )) {
-        if (sourceMessageIds.has(steering.message.id)) continue;
+        if (
+          sourceMessageIds.has(steering.message.id) ||
+          coveredEntryIds.has(`transcript:${steering.id}:live`)
+        ) continue;
         entries.push({
           id: `transcript:${steering.id}:live`,
           runId: steering.targetRunId,
@@ -1852,7 +1924,11 @@ export class FileDeliveryStore {
           messageId: steering.message.id,
         });
       }
-      if (run.status === 'completed' && run.summary) {
+      if (
+        run.status === 'completed' &&
+        run.summary &&
+        !coveredEntryIds.has(`transcript:${run.id}:assistant`)
+      ) {
         entries.push({
           id: `transcript:${run.id}:assistant`,
           runId: run.id,
@@ -2076,6 +2152,8 @@ export class FileDeliveryStore {
       job.proposalIds = input.proposalIds;
       job.transcriptEntries = input.transcriptEntries;
       job.transcriptOmittedEntries = input.transcriptOmittedEntries;
+      job.contextSummaryId = input.contextSummaryId;
+      job.autoApprovedProposalIds = input.autoApprovedProposalIds;
       job.lastError = undefined;
       if (input.cursor) {
         const cursorId = `${job.platform}:${job.workspaceId ?? ''}:${job.projectId ?? ''}:${job.threadId}`;
@@ -2137,6 +2215,20 @@ export class FileDeliveryStore {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, Math.max(1, Math.min(options.limit ?? 100, 500)))
       .map((job) => structuredClone(job));
+  }
+
+  async getMemoryWrapupCursor(
+    thread: SourceThread,
+  ): Promise<MemoryWrapupCursorRecord | undefined> {
+    const state = await this.readState();
+    const cursor = state.memoryWrapupCursors.find(
+      (item) =>
+        item.platform === thread.platform &&
+        item.threadId === thread.id &&
+        item.workspaceId === thread.workspaceId &&
+        item.projectId === thread.projectId,
+    );
+    return cursor ? structuredClone(cursor) : undefined;
   }
 
   async pruneMemoryWrapups(
@@ -3355,6 +3447,7 @@ export class FileDeliveryStore {
           existing.threadExternalId = input.thread.externalId;
           existing.workspaceId = input.thread.workspaceId;
           existing.projectId = input.thread.projectId;
+          existing.thread = structuredClone(input.thread);
           result.updated += 1;
           result.records.push(copySourceThreadMessage(existing));
           continue;
@@ -3367,6 +3460,7 @@ export class FileDeliveryStore {
           threadExternalId: input.thread.externalId,
           workspaceId: input.thread.workspaceId,
           projectId: input.thread.projectId,
+          thread: structuredClone(input.thread),
           message,
           origin: input.origin,
           firstObservedAt: timestamp,
@@ -3403,6 +3497,173 @@ export class FileDeliveryStore {
       .slice(0, limit)
       .reverse()
       .map(copySourceThreadMessage);
+  }
+
+  async listSourceThreads(options: {
+    workspaceId?: string;
+    projectId?: string;
+    limit?: number;
+  } = {}): Promise<SourceThread[]> {
+    const state = await this.readState();
+    const latest = new Map<string, SourceThreadMessageRecord>();
+    for (const record of state.sourceThreadMessages) {
+      if (options.workspaceId && record.workspaceId !== options.workspaceId) continue;
+      if (options.projectId && record.projectId !== options.projectId) continue;
+      const key = `${record.platform}:${record.workspaceId ?? ''}:${record.projectId ?? ''}:${record.threadId}`;
+      const current = latest.get(key);
+      if (!current || record.lastObservedAt > current.lastObservedAt) {
+        latest.set(key, record);
+      }
+    }
+    return [...latest.values()]
+      .sort((left, right) => right.lastObservedAt.localeCompare(left.lastObservedAt))
+      .slice(0, Math.max(1, Math.min(options.limit ?? 500, 2_000)))
+      .map((record) => {
+        if (record.thread) return structuredClone(record.thread);
+        const runThread = state.agentRuns
+          .filter(
+            (run) =>
+              run.thread &&
+              run.platform === record.platform &&
+              run.threadId === record.threadId &&
+              run.workspaceId === record.workspaceId &&
+              run.projectId === record.projectId,
+          )
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+          ?.thread;
+        return runThread
+          ? structuredClone(runThread)
+          : {
+              id: record.threadId,
+              platform: record.platform,
+              externalId: record.threadExternalId,
+              workspaceId: record.workspaceId,
+              projectId: record.projectId,
+              visibility: 'private',
+            };
+      });
+  }
+
+  async listThreadContextSummaries(options: {
+    thread: SourceThread;
+    limit?: number;
+  }): Promise<ThreadContextSummaryRecord[]> {
+    const state = await this.readState();
+    return state.threadContextSummaries
+      .filter((record) => sameContextSummaryScope(record, options.thread))
+      .sort((left, right) => left.endAt.localeCompare(right.endAt))
+      .slice(-Math.max(1, Math.min(options.limit ?? 100, 500)))
+      .map(copyThreadContextSummary);
+  }
+
+  async recordThreadContextSummary(
+    input: RecordThreadContextSummaryInput,
+  ): Promise<ThreadContextSummaryRecord> {
+    return this.mutate((state) => {
+      const summary = input.summary.trim().replace(/\s+/gu, ' ').slice(0, 12_000);
+      if (!summary) throw new Error('thread_context_summary_required');
+      if (!input.entries.length) throw new Error('thread_context_summary_entries_required');
+      const timestamp = input.now ?? new Date();
+      const id = `context-summary:${createHash('sha256')
+        .update(
+          [
+            input.thread.platform,
+            input.thread.workspaceId ?? '',
+            input.thread.projectId ?? '',
+            input.thread.id,
+            input.toCursor.at,
+            input.toCursor.entryId,
+          ].join('\u0000'),
+        )
+        .digest('hex')
+        .slice(0, 32)}`;
+      const existing = state.threadContextSummaries.find((item) => item.id === id);
+      if (existing) return copyThreadContextSummary(existing);
+      const coveredEntryIds = [...new Set(input.entries.map((entry) => entry.id))];
+      const messageEntries = input.entries.filter((entry) => Boolean(entry.messageId));
+      const characterCount = input.entries.reduce(
+        (total, entry) => total + entry.text.length,
+        0,
+      );
+      const contentHash = createHash('sha256')
+        .update(
+          input.entries
+            .map((entry) => `${entry.id}\u0000${entry.at}\u0000${entry.text}`)
+            .join('\u0001'),
+        )
+        .digest('hex');
+      const rawGraceMs = Math.max(
+        0,
+        Math.min(input.rawGraceMs ?? 7 * 24 * 60 * 60_000, 365 * 24 * 60 * 60_000),
+      );
+      const record: ThreadContextSummaryRecord = {
+        id,
+        platform: input.thread.platform,
+        threadId: input.thread.id,
+        threadExternalId: input.thread.externalId,
+        workspaceId: input.thread.workspaceId,
+        projectId: input.thread.projectId,
+        summary,
+        coveredEntryIds,
+        startAt: input.entries[0].at,
+        endAt: input.entries.at(-1)!.at,
+        startMessageId: messageEntries[0]?.messageId,
+        endMessageId: messageEntries.at(-1)?.messageId,
+        entryCount: input.entries.length,
+        characterCount,
+        contentHash,
+        fromCursor: input.fromCursor ? { ...input.fromCursor } : undefined,
+        toCursor: { ...input.toCursor },
+        rawExpiresAt: new Date(timestamp.getTime() + rawGraceMs).toISOString(),
+        createdAt: timestamp.toISOString(),
+      };
+      state.threadContextSummaries.push(record);
+      return copyThreadContextSummary(record);
+    });
+  }
+
+  async purgeThreadContextRaw(
+    options: PurgeThreadContextRawOptions = {},
+  ): Promise<PurgeThreadContextRawResult> {
+    return this.mutate((state) => {
+      const timestamp = (options.now ?? new Date()).toISOString();
+      const due = state.threadContextSummaries
+        .filter((record) => !record.rawPurgedAt && record.rawExpiresAt <= timestamp)
+        .sort((left, right) => left.rawExpiresAt.localeCompare(right.rawExpiresAt))
+        .slice(0, Math.max(1, Math.min(options.limit ?? 100, 1_000)));
+      const result: PurgeThreadContextRawResult = {
+        summaries: 0,
+        sourceMessages: 0,
+        runMessages: 0,
+        steeringMessages: 0,
+      };
+      const redacted = '[raw message purged after successful context consolidation]';
+      for (const summary of due) {
+        const covered = new Set(summary.coveredEntryIds);
+        const before = state.sourceThreadMessages.length;
+        state.sourceThreadMessages = state.sourceThreadMessages.filter(
+          (record) => !covered.has(`transcript:${record.id}:source`),
+        );
+        result.sourceMessages += before - state.sourceThreadMessages.length;
+        for (const run of state.agentRuns) {
+          if (!covered.has(`transcript:${run.id}:user`) || !run.message) continue;
+          run.message = { ...run.message, text: redacted, attachments: undefined };
+          result.runMessages += 1;
+        }
+        for (const steering of state.agentRunSteering) {
+          if (!covered.has(`transcript:${steering.id}:live`)) continue;
+          steering.message = {
+            ...steering.message,
+            text: redacted,
+            attachments: undefined,
+          };
+          result.steeringMessages += 1;
+        }
+        summary.rawPurgedAt = timestamp;
+        result.summaries += 1;
+      }
+      return result;
+    });
   }
 
   async getThreadContextSync(

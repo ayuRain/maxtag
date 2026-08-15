@@ -271,6 +271,10 @@ async function main(): Promise<void> {
       retryBaseMs: optionalNumberEnv('OPENTAG_MEMORY_WRAPUP_RETRY_BASE_MS'),
       maxAttempts: optionalNumberEnv('OPENTAG_MEMORY_WRAPUP_MAX_ATTEMPTS'),
       retentionMs: optionalNumberEnv('OPENTAG_MEMORY_WRAPUP_RETENTION_MS'),
+      minEntries: optionalNumberEnv('OPENTAG_MEMORY_WRAPUP_MIN_ENTRIES'),
+      maxChars: optionalNumberEnv('OPENTAG_MEMORY_WRAPUP_MAX_CHARS'),
+      maxAgeMs: optionalNumberEnv('OPENTAG_MEMORY_WRAPUP_MAX_AGE_MS'),
+      rawGraceMs: optionalNumberEnv('OPENTAG_MEMORY_RAW_GRACE_MS'),
     },
     knowledgeEnrichment: {
       enabled: booleanEnv(

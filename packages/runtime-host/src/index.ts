@@ -365,6 +365,10 @@ export interface RuntimeHostConfig {
     maxAttempts?: number;
     retentionMs?: number;
     keepLatestPerThread?: number;
+    minEntries?: number;
+    maxChars?: number;
+    maxAgeMs?: number;
+    rawGraceMs?: number;
   };
   knowledgeEnrichment?: {
     enabled?: boolean;
@@ -1052,6 +1056,20 @@ export class OpenTagWorkerHost {
       maxAttempts: config.memoryWrapup?.maxAttempts,
       retentionMs: config.memoryWrapup?.retentionMs,
       keepLatestPerThread: config.memoryWrapup?.keepLatestPerThread,
+      minEntries: config.memoryWrapup?.minEntries,
+      maxChars: config.memoryWrapup?.maxChars,
+      maxAgeMs: config.memoryWrapup?.maxAgeMs,
+      rawGraceMs: config.memoryWrapup?.rawGraceMs,
+      autoApprove: async ({ proposal }) => {
+        if (!this.memoryStore.approveMemoryProposal) {
+          throw new Error('memory_proposals_unavailable');
+        }
+        return this.memoryStore.approveMemoryProposal({
+          id: proposal.id,
+          actorId: 'system:memory-wrapup',
+          reason: 'Automatically approved a non-destructive Project fact from consolidated context.',
+        });
+      },
       onProposals: async ({ job, proposals }) => {
         if (job.thread.platform !== 'lark') return;
         const runPlatform = this.createPlatformForRun(job.thread);

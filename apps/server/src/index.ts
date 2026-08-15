@@ -589,6 +589,22 @@ const memoryWrapupRetentionMs = numberEnvironmentValue(
   'OPENTAG_MEMORY_WRAPUP_RETENTION_MS',
   7 * 24 * 60 * 60_000,
 );
+const memoryWrapupMinEntries = Math.min(
+  200,
+  numberEnvironmentValue('OPENTAG_MEMORY_WRAPUP_MIN_ENTRIES', 200),
+);
+const memoryWrapupMaxChars = Math.min(
+  200_000,
+  numberEnvironmentValue('OPENTAG_MEMORY_WRAPUP_MAX_CHARS', 100_000),
+);
+const memoryWrapupMaxAgeMs = numberEnvironmentValue(
+  'OPENTAG_MEMORY_WRAPUP_MAX_AGE_MS',
+  24 * 60 * 60_000,
+);
+const memoryWrapupRawGraceMs = numberEnvironmentValue(
+  'OPENTAG_MEMORY_RAW_GRACE_MS',
+  7 * 24 * 60 * 60_000,
+);
 const larkHistoryImportEnabled = !['0', 'false', 'no'].includes(
   String(process.env.OPENTAG_LARK_HISTORY_IMPORT_ENABLED || 'true').toLowerCase(),
 );
@@ -1191,6 +1207,20 @@ const memoryWrapupService = new MemoryWrapupService({
   retryBaseMs: memoryWrapupRetryBaseMs,
   maxAttempts: memoryWrapupMaxAttempts,
   retentionMs: memoryWrapupRetentionMs,
+  minEntries: memoryWrapupMinEntries,
+  maxChars: memoryWrapupMaxChars,
+  maxAgeMs: memoryWrapupMaxAgeMs,
+  rawGraceMs: memoryWrapupRawGraceMs,
+  autoApprove: async ({ proposal }) => {
+    if (!memoryStore.approveMemoryProposal) {
+      throw new Error('memory_proposals_unavailable');
+    }
+    return memoryStore.approveMemoryProposal({
+      id: proposal.id,
+      actorId: 'system:memory-wrapup',
+      reason: 'Automatically approved a non-destructive Project fact from consolidated context.',
+    });
+  },
   onProposals: async ({ job, proposals }) => {
     if (job.thread.platform !== 'lark') return;
     const runPlatform = createPlatformForRun(job.thread);
@@ -8946,6 +8976,11 @@ async function recordSourceThreadMessage(input: {
     messages: [input.message],
     origin: 'event',
   });
+  try {
+    await memoryWrapupService.observeThread(input.thread, input.message.id);
+  } catch (error) {
+    console.warn('MaxTag context consolidation staging failed', error);
+  }
 }
 
 async function queuedMessageRunResponse(

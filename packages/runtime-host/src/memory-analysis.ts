@@ -77,6 +77,7 @@ export interface MemoryAnalysisReport {
   decisions: AgentMemoryDecision[];
   proposed: MemoryProposal[];
   skipped: Array<{ decision: AgentMemoryDecision; reason: string }>;
+  contextSummary?: string;
   startedAt: string;
   completedAt: string;
   usage?: {
@@ -114,6 +115,20 @@ function containsSensitiveMemoryValue(value: string): boolean {
       value,
     )
   );
+}
+
+function sanitizedContextSummary(value: string): string | undefined {
+  const summary = value
+    .replace(
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu,
+      '[sensitive credential omitted]',
+    )
+    .replace(
+      /(\b(?:api[_ -]?key|app[_ -]?secret|client[_ -]?secret|password|passwd|access[_ -]?token|refresh[_ -]?token|verification[_ -]?token)\b\s*[:=]\s*)\S+/giu,
+      '$1[sensitive value omitted]',
+    )
+    .trim();
+  return summary ? summary.slice(0, 4_000) : undefined;
 }
 
 function normalizedValue(value: string | undefined): string {
@@ -317,6 +332,7 @@ export class MemoryAnalysisService {
         maxChars: status.maxChars,
         afterCursor: input.afterCursor,
         order: input.transcriptOrder,
+        includeContextSummaries: false,
       });
       if (!transcript.entries.length) {
         throw new Error('memory_analysis_transcript_empty');
@@ -531,6 +547,7 @@ export class MemoryAnalysisService {
         decisions,
         proposed,
         skipped,
+        contextSummary: sanitizedContextSummary(result.summary),
         startedAt,
         completedAt,
         usage: result.usage,
