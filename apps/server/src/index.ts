@@ -424,9 +424,10 @@ let inboundTelegramTransport: HttpTelegramTransport | undefined;
 let inboundSlackTransport: HttpSlackTransport | undefined;
 const executorInheritEnv = listEnvironmentValue('OPENTAG_EXECUTOR_INHERIT_ENV');
 const executorSessionMode =
-  process.env.OPENTAG_EXECUTOR_SESSION_MODE === 'transcript'
+  managedExecutorSettings?.sessionMode ||
+  (process.env.OPENTAG_EXECUTOR_SESSION_MODE === 'transcript'
     ? 'transcript'
-    : 'provider';
+    : 'provider');
 const executorSessionNamespace =
   process.env.OPENTAG_EXECUTOR_SESSION_NAMESPACE ||
   defaultProviderSessionNamespace();

@@ -310,6 +310,40 @@ test('automatic memory wrapup keeps the one-shot read-only analysis contract', (
   assert.doesNotMatch(prompt, /MaxTag project agent/u);
 });
 
+test('agent prompts distinguish durable memory from conversation context', () => {
+  const input = request({ memory: undefined });
+  input.value.access.grants = [
+    {
+      id: 'memory:workspace',
+      kind: 'memory',
+      scope: 'workspace',
+      label: 'Company memory',
+      constraints: { permissions: ['read', 'write'] },
+    },
+    {
+      id: 'memory:project',
+      kind: 'memory',
+      scope: 'project',
+      label: 'Project memory',
+      constraints: { permissions: ['read', 'write'] },
+    },
+    {
+      id: 'memory:thread',
+      kind: 'memory',
+      scope: 'thread',
+      label: 'Legacy thread memory',
+      constraints: { permissions: ['read', 'write'] },
+    },
+  ];
+  const prompt = buildAgentSystemPrompt(input.value);
+  const memoryPrompt = memoryCandidateInstructions(input.value);
+  assert.match(prompt, /does not mean the current conversation history is absent/u);
+  assert.match(prompt, /available as conversational context for follow-up questions/u);
+  assert.match(memoryPrompt, /Allowed scopes for this run: workspace, project/u);
+  assert.doesNotMatch(memoryPrompt, /Allowed scopes:.*thread/u);
+  assert.match(memoryPrompt, /one-off recall tests/u);
+});
+
 test('memory analysis parses bounded semantic aliases without exposing declarations', async () => {
   const input = request({ purpose: 'memory_analysis' });
   input.value.access.grants = [

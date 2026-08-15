@@ -139,6 +139,20 @@ test('memory runner synthesizes a full transcript into version-bound merge propo
             confidence: 0.2,
           },
           {
+            operation: 'remember',
+            scope: 'project',
+            text: 'This turn may still be running.',
+            reason: 'Uncertain transient status.',
+            confidence: 0.2,
+          },
+          {
+            operation: 'remember',
+            scope: 'project',
+            text: 'A 的值是 LEMON-731。',
+            reason: 'One-off recall test.',
+            confidence: 0.99,
+          },
+          {
             operation: 'merge',
             scope: 'project',
             text: 'An over-broad merge.',
@@ -238,11 +252,15 @@ test('memory runner synthesizes a full transcript into version-bound merge propo
   ]);
   assert.ok(report.skipped.some((item) => item.reason === 'sensitive_value'));
   assert.ok(
+    report.skipped.some((item) => item.reason === 'ephemeral_recall_value'),
+  );
+  assert.ok(
     report.skipped.some(
       (item) => item.reason === 'merge_selectors_limit_exceeded',
     ),
   );
-  assert.equal(report.skipped[0].reason, 'low_confidence');
+  assert.ok(report.skipped.some((item) => item.reason === 'scope_not_allowed'));
+  assert.ok(report.skipped.some((item) => item.reason === 'low_confidence'));
   assert.equal(requests[0].purpose, 'memory_analysis');
   assert.equal(requests[0].providerSession, undefined);
   assert.equal(requests[0].access.networkPolicy.mode, 'deny-by-default');

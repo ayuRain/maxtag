@@ -34,6 +34,7 @@ export interface ManagedExecutorCredentialSummary {
 
 export interface ManagedExecutorRuntimeSettings {
   mode: 'local-cli';
+  sessionMode: 'provider' | 'transcript';
   defaultExecutorId: ManagedExecutorProvider;
   enabledExecutorIds: ManagedExecutorProvider[];
   codexModel?: string;
@@ -186,6 +187,10 @@ export function managedExecutorRuntimeSettings(
 ): ManagedExecutorRuntimeSettings {
   const shared = {
     mode: 'local-cli' as const,
+    // MaxTag owns conversation continuity. Managed executors are deliberately
+    // stateless so CLI and API-key auth behave the same across restarts and
+    // gateways that implement provider sessions differently.
+    sessionMode: 'transcript' as const,
     defaultExecutorId: credential.provider,
     enabledExecutorIds: [credential.provider],
   };

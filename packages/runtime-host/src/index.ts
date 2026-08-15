@@ -237,7 +237,7 @@ export function createDefaultExecutorRegistry(
     maxBudgetUsd: config.claudeMaxBudgetUsd,
   });
   const sharedCapabilities = {
-    providerSessions: true,
+    providerSessions: config.sessionMode !== 'transcript',
     transcriptFallback: true,
     brokeredTools: true,
     nativeTools: true,
@@ -269,7 +269,7 @@ export function createDefaultExecutorRegistry(
           'Codex',
           codex.steeringMode ?? 'next_turn',
           config.codexModel,
-          codex.steeringMode === 'live',
+          config.sessionMode !== 'transcript' && codex.steeringMode === 'live',
         ),
       },
       {

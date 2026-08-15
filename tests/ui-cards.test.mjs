@@ -142,7 +142,7 @@ test('Lark memory merge cards expose every current fact and the merged result', 
   };
   const card = buildLarkMemoryProposalCard(proposal);
   const serialized = JSON.stringify(card);
-  assert.match(serialized, /Merge/u);
+  assert.match(serialized, /合并/u);
   assert.match(serialized, /Use Postgres for distributed workers/u);
   assert.match(serialized, /Keep database backups for 30 days/u);
   assert.match(serialized, /Postgres with 30\\\\-day backups/u);

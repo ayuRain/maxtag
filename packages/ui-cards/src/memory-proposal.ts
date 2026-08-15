@@ -50,7 +50,16 @@ function scopeLabel(proposal: MemoryProposal): string {
           : proposal.scope === 'thread'
             ? proposal.thread.title || proposal.thread.externalId
             : 'MaxTag';
-  return target ? `${proposal.scope} · ${target}` : proposal.scope;
+  const scope = proposal.scope === 'workspace'
+    ? '公司'
+    : proposal.scope === 'project'
+      ? '项目'
+      : proposal.scope === 'channel'
+        ? '群聊'
+        : proposal.scope === 'thread'
+          ? '话题'
+          : '安装';
+  return target ? `${scope} · ${target}` : scope;
 }
 
 function fieldBlock(proposal: MemoryProposal): Record<string, unknown> {
@@ -67,16 +76,16 @@ function fieldBlock(proposal: MemoryProposal): Record<string, unknown> {
         padding: '10px',
         elements: [
           markdown(
-            `**Change**\n${
+            `**操作**\n${
               proposal.action === 'remember'
-                ? 'Remember'
+                ? '记住'
                 : proposal.action === 'replace'
-                  ? 'Replace'
+                  ? '替换'
                   : proposal.action === 'merge'
-                    ? 'Merge'
+                    ? '合并'
                   : proposal.action === 'index'
-                    ? 'Index'
-                    : 'Forget'
+                    ? '添加检索索引'
+                    : '忘记'
             }`,
           ),
         ],
@@ -86,7 +95,7 @@ function fieldBlock(proposal: MemoryProposal): Record<string, unknown> {
         width: 'weighted',
         weight: 1,
         padding: '10px',
-        elements: [markdown(`**Scope**\n${escapeMarkdown(scopeLabel(proposal))}`)],
+        elements: [markdown(`**生效范围**\n${escapeMarkdown(scopeLabel(proposal))}`)],
       },
     ],
   };
@@ -95,14 +104,14 @@ function fieldBlock(proposal: MemoryProposal): Record<string, unknown> {
 function proposalContent(proposal: MemoryProposal): Record<string, unknown> {
   const label =
     proposal.action === 'remember'
-      ? 'Memory to add'
+      ? '要记住的内容'
       : proposal.action === 'replace'
-        ? 'Replacement memory'
+        ? '替换后的记忆'
         : proposal.action === 'merge'
-          ? 'Merged memory'
+          ? '合并后的记忆'
         : proposal.action === 'index'
-          ? 'Approved memory to index'
-        : 'Selector to remove';
+          ? '要添加检索索引的记忆'
+        : '要删除的记忆';
   return {
     tag: 'column_set',
     flex_mode: 'stretch',
@@ -116,11 +125,11 @@ function proposalContent(proposal: MemoryProposal): Record<string, unknown> {
         elements: [
           markdown(
             proposal.action === 'replace'
-              ? `**Current memory**\n${escapeMarkdown(proposal.selector || '(missing selector)')}\n\n**Replacement memory**\n${escapeMarkdown(proposal.value)}\n\n<font color='grey'>Expected document version: v${proposal.expectedDocumentVersion ?? '?'}</font>`
+              ? `**当前记忆**\n${escapeMarkdown(proposal.selector || '(缺少原内容)')}\n\n**替换后的记忆**\n${escapeMarkdown(proposal.value)}\n\n<font color='grey'>预期文档版本：v${proposal.expectedDocumentVersion ?? '?'}</font>`
               : proposal.action === 'merge'
-                ? `**Current memories**\n${escapeMarkdown((proposal.selectors || []).join('\n'))}\n\n**Merged memory**\n${escapeMarkdown(proposal.value)}\n\n<font color='grey'>Expected document version: v${proposal.expectedDocumentVersion ?? '?'}</font>`
+                ? `**当前记忆**\n${escapeMarkdown((proposal.selectors || []).join('\n'))}\n\n**合并后的记忆**\n${escapeMarkdown(proposal.value)}\n\n<font color='grey'>预期文档版本：v${proposal.expectedDocumentVersion ?? '?'}</font>`
               : proposal.action === 'index'
-                ? `**${label}**\n${escapeMarkdown(proposal.selector || proposal.value)}\n\n**Search aliases**\n${escapeMarkdown((proposal.searchAliases || []).join('\n'))}\n\n<font color='grey'>Expected document version: v${proposal.expectedDocumentVersion ?? '?'}</font>`
+                ? `**${label}**\n${escapeMarkdown(proposal.selector || proposal.value)}\n\n**检索别名**\n${escapeMarkdown((proposal.searchAliases || []).join('\n'))}\n\n<font color='grey'>预期文档版本：v${proposal.expectedDocumentVersion ?? '?'}</font>`
               : `**${label}**\n${escapeMarkdown(proposal.value)}`,
           ),
         ],
@@ -142,7 +151,7 @@ function proposalAudit(proposal: MemoryProposal): Record<string, unknown> {
         padding: '0 2px',
         elements: [
           markdown(
-            `<font color='grey'>Proposed by ${escapeMarkdown(actor)} · ${escapeMarkdown(proposal.createdAt)}</font>`,
+            `<font color='grey'>由 ${escapeMarkdown(actor)} 提议 · ${escapeMarkdown(proposal.createdAt)}</font>`,
           ),
         ],
       },
@@ -163,7 +172,7 @@ function approvalActions(proposal: MemoryProposal): Record<string, unknown> {
         elements: [
           {
             tag: 'button',
-            text: plainText('Approve'),
+            text: plainText('批准'),
             type: 'primary_filled',
             width: 'fill',
             behaviors: [
@@ -176,8 +185,8 @@ function approvalActions(proposal: MemoryProposal): Record<string, unknown> {
               },
             ],
             confirm: {
-              title: plainText('Approve this memory change?'),
-              text: plainText('The approved change becomes durable scoped memory.'),
+              title: plainText('批准这条记忆变更？'),
+              text: plainText('批准后将作为长期记忆保存到 MaxTag。'),
             },
           },
         ],
@@ -189,7 +198,7 @@ function approvalActions(proposal: MemoryProposal): Record<string, unknown> {
         elements: [
           {
             tag: 'button',
-            text: plainText('Reject'),
+            text: plainText('拒绝'),
             type: 'danger',
             width: 'fill',
             behaviors: [
@@ -202,8 +211,8 @@ function approvalActions(proposal: MemoryProposal): Record<string, unknown> {
               },
             ],
             confirm: {
-              title: plainText('Reject this memory change?'),
-              text: plainText('The proposal will remain in the audit history as rejected.'),
+              title: plainText('拒绝这条记忆变更？'),
+              text: plainText('该建议不会写入长期记忆，仅保留审计记录。'),
             },
           },
         ],
@@ -213,9 +222,9 @@ function approvalActions(proposal: MemoryProposal): Record<string, unknown> {
 }
 
 function terminalDecision(proposal: MemoryProposal): Record<string, unknown> {
-  const decision = proposal.status === 'approved' ? 'Approved' : 'Rejected';
-  const actor = proposal.decidedBy || 'unknown';
-  const at = proposal.decidedAt || 'unknown time';
+  const decision = proposal.status === 'approved' ? '已批准' : '已拒绝';
+  const actor = proposal.decidedBy || '未知';
+  const at = proposal.decidedAt || '未知时间';
   return {
     tag: 'column_set',
     flex_mode: 'stretch',
@@ -241,10 +250,10 @@ export function buildLarkMemoryProposalCard(
 ): LarkCardV2Document {
   const pending = proposal.status === 'pending';
   const statusLabel = pending
-    ? 'Pending'
+    ? '等待处理'
     : proposal.status === 'approved'
-      ? 'Approved'
-      : 'Rejected';
+      ? '已批准'
+      : '已拒绝';
   const statusColor = pending
     ? 'blue'
     : proposal.status === 'approved'
@@ -257,10 +266,10 @@ export function buildLarkMemoryProposalCard(
       update_multi: true,
       width_mode: 'default',
       enable_forward: false,
-      summary: { content: `Memory change ${statusLabel.toLowerCase()}` },
+      summary: { content: `记忆变更：${statusLabel}` },
     },
     header: {
-      title: plainText('Memory change approval'),
+      title: plainText('长期记忆确认'),
       subtitle: plainText(scopeLabel(proposal)),
       template: pending ? 'blue' : statusColor,
       icon: { tag: 'standard_icon', token: 'approve_colorful' },

@@ -18,9 +18,16 @@ import type { AgentRunRecord, DeliveryStore } from '@opentag/delivery';
 const ANALYZABLE_SCOPES: MemoryScopeKind[] = [
   'workspace',
   'project',
-  'channel',
-  'thread',
 ];
+
+function looksLikeEphemeralRecallValue(value: string): boolean {
+  const text = value.trim();
+  return (
+    /(?:临时|测试|一次性).{0,12}(?:口令|密码|标记|代码|值)/u.test(text) ||
+    /(?:temporary|one[- ]?time|test).{0,16}(?:code|token|marker|value)/iu.test(text) ||
+    /^[A-Za-zＡ-Ｚａ-ｚ]\s*(?:的值)?\s*(?:是|=)\s*[A-Z][A-Z0-9_-]*-\d{2,}\b/u.test(text)
+  );
+}
 
 export interface MemoryAnalysisServiceOptions {
   deliveryStore: DeliveryStore;
@@ -374,6 +381,13 @@ export class MemoryAnalysisService {
           )
         ) {
           reason = 'sensitive_value';
+        } else if (
+          (decision.operation === 'remember' ||
+            decision.operation === 'replace' ||
+            decision.operation === 'merge') &&
+          looksLikeEphemeralRecallValue(text)
+        ) {
+          reason = 'ephemeral_recall_value';
         } else if (
           (decision.operation === 'remember' ||
             decision.operation === 'replace' ||

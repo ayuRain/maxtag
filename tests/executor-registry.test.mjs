@@ -253,6 +253,17 @@ test('default registry publishes truthful Codex and Claude capability descriptor
   assert.equal(registry.describe('claude').capabilities.automaticMemoryCandidates, true);
 });
 
+test('transcript mode does not advertise provider-owned session continuity', () => {
+  const registry = createDefaultExecutorRegistry({
+    mode: 'local-cli',
+    sessionMode: 'transcript',
+  });
+  assert.equal(registry.describe('codex').capabilities.providerSessions, false);
+  assert.equal(registry.describe('claude').capabilities.providerSessions, false);
+  assert.equal(registry.describe('codex').capabilities.transcriptFallback, true);
+  assert.equal(registry.describe('codex').capabilities.nativeCompaction, false);
+});
+
 test('custom Codex wrappers retain the legacy steering contract unless app-server is explicit', () => {
   const legacy = createDefaultExecutorRegistry({
     mode: 'local-cli',
