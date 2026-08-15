@@ -254,10 +254,19 @@ export function parseAndValidateLarkCallback(
   const token = validateVerificationToken(body, options);
   if (!token.ok) return { body, validation: token };
 
+  const tokenVerifiedChallenge =
+    Boolean(options.verificationToken) && isUrlVerification(body);
   if (options.encryptKey && !signature.ok) {
-    const tokenVerifiedChallenge =
-      Boolean(options.verificationToken) && isUrlVerification(body);
     if (!tokenVerifiedChallenge) return { body, validation: signature };
+  }
+
+  // Lark's URL-verification handshake can omit replay headers even when the
+  // encrypted callback channel is configured. Decryption plus the constant-
+  // time Verification Token check above authenticates this side-effect-free
+  // challenge. Real events and any request carrying signature headers still
+  // require the normal timestamp window.
+  if (tokenVerifiedChallenge && signatureState.absent) {
+    return { body, validation: { ok: true } };
   }
 
   const timestamp = validateTimestamp(headers, options);

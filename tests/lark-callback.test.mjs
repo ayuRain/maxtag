@@ -109,6 +109,8 @@ test('unsigned encrypted URL verification requires a matching configured token',
   const accepted = parseAndValidateLarkCallback(rawBody, {}, {
     encryptKey,
     verificationToken: 'challenge-token',
+    maxTimestampSkewSeconds: 300,
+    now: new Date('2026-08-12T00:00:00.000Z'),
   });
   assert.deepEqual(accepted.validation, { ok: true });
   assert.equal(accepted.body.challenge, 'challenge-value');
