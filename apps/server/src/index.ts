@@ -6690,6 +6690,9 @@ function larkHistoryImportError(lastError?: string): string | undefined {
   if (lastError.includes('im:message.group_msg')) {
     return '缺少飞书权限 `im:message.group_msg`。请在开放平台添加权限并发布应用版本；MaxTag 会自动重试。';
   }
+  if (lastError === 'codex_no_final_response') {
+    return '聊天记录已归档；本轮没有提炼出候选记忆，可安全重试提炼。';
+  }
   return lastError.replace(/[\0\r\n]+/gu, ' ').trim().slice(0, 240);
 }
 

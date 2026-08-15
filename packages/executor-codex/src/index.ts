@@ -33,6 +33,14 @@ export interface CodexExecutorOptions extends CliExecutorOptions {
   contextCompactionThreshold?: number;
 }
 
+function allowsEmptyFinalResponse(request: AgentRunRequest): boolean {
+  return (
+    request.purpose === 'memory_analysis' ||
+    request.purpose === 'memory_wrapup' ||
+    request.purpose === 'memory_retrieval'
+  );
+}
+
 type JsonRecord = Record<string, unknown>;
 const CODEX_COMPACT_COMMAND = '/compact';
 const CODEX_OVERFLOW_CONTINUATION = [
@@ -507,7 +515,9 @@ export class CodexExecutor implements Executor {
       }
       throw new Error(providerError);
     }
-    if (!finalMessage.trim()) throw new Error('codex_no_final_response');
+    if (!finalMessage.trim() && !allowsEmptyFinalResponse(request)) {
+      throw new Error('codex_no_final_response');
+    }
     await request.onEvent?.({
       type: 'progress',
       item: {
@@ -1038,7 +1048,9 @@ export class CodexExecutor implements Executor {
     }
     if (steeringError) throw steeringError;
     if (providerError) throw new Error(providerError);
-    if (!finalMessage.trim()) throw new Error('codex_no_final_response');
+    if (!finalMessage.trim() && !allowsEmptyFinalResponse(request)) {
+      throw new Error('codex_no_final_response');
+    }
     await request.onEvent?.({
       type: 'progress',
       item: {

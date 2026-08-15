@@ -358,6 +358,7 @@ export class LarkHistoryImportService {
             return (
               (await this.options.deliveryStore.releaseLarkHistoryImport(job.id, {
                 delayMs: 0,
+                resetAttempts: true,
               })) ?? job
             );
           }
@@ -497,6 +498,7 @@ export class LarkHistoryImportService {
     return (
       (await this.options.deliveryStore.releaseLarkHistoryImport(job.id, {
         delayMs: 0,
+        resetAttempts: true,
       })) ?? job
     );
   }

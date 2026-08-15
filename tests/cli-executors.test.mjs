@@ -416,6 +416,33 @@ test('memory analysis parses bounded multi-fact merge declarations', async () =>
   assert.match(result.warnings[0], /at least two selectors are required/u);
 });
 
+test('Codex accepts an empty successful turn for memory analysis only', async () => {
+  const files = await fixture();
+  const fakeCli = await files.script(
+    'fake-codex-empty-memory.mjs',
+    `console.log(JSON.stringify({ type: 'thread.started', thread_id: 'ephemeral-memory' }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 12, output_tokens: 0 } }));
+`,
+  );
+  const executor = createCodexExecutor({
+    mode: 'local-cli',
+    sessionMode: 'provider',
+    command: process.execPath,
+    commandPrefixArgs: [fakeCli],
+    workspaceRoot: files.root,
+    timeoutMs: 2_000,
+  });
+
+  const memoryResult = await executor.run(request({ purpose: 'memory_analysis' }).value);
+  assert.equal(memoryResult.summary, '');
+  assert.deepEqual(memoryResult.memoryDecisions, []);
+
+  await assert.rejects(
+    executor.run(request().value),
+    /codex_no_final_response/u,
+  );
+});
+
 test('verified turn memory remains in the user prompt for resumed provider sessions', () => {
   const session = providerSession('codex', 'codex-session-memory');
   const input = request({

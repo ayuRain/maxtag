@@ -171,6 +171,31 @@ test('first-use choice can complete from-now or activate a bounded import', asyn
   assert.equal(fromNow.importedMessages, 0);
 });
 
+test('successful partial history progress resets the consecutive retry budget', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'maxtag-history-retries-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new FileDeliveryStore(root);
+  const created = await store.createLarkHistoryImport({
+    workspaceId: 'workspace-1', projectId: 'project-1', channelId: 'oc_history',
+    thread: mainThread(), mode: 'history',
+    since: new Date('2026-07-01T00:00:00.000Z'),
+    until: new Date('2026-08-01T00:00:00.000Z'),
+    now: new Date('2026-08-01T00:00:00.000Z'),
+  });
+  const [claimed] = await store.claimLarkHistoryImports({
+    workerId: 'test-worker', now: new Date('2026-08-01T00:00:00.000Z'),
+  });
+  assert.equal(claimed.id, created.id);
+  assert.equal(claimed.attempts, 1);
+  const released = await store.releaseLarkHistoryImport(created.id, {
+    resetAttempts: true,
+    now: new Date('2026-08-01T00:00:01.000Z'),
+  });
+  assert.equal(released.status, 'pending');
+  assert.equal(released.attempts, 0);
+  assert.equal(released.lastError, undefined);
+});
+
 test('history memory synthesis batches the canonical group transcript without agent runs', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'maxtag-history-memory-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));

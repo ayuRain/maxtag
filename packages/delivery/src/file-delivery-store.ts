@@ -4459,7 +4459,7 @@ export class FileDeliveryStore {
 
   async releaseLarkHistoryImport(
     id: string,
-    options?: { delayMs?: number; now?: Date },
+    options?: { delayMs?: number; now?: Date; resetAttempts?: boolean },
   ): Promise<LarkHistoryImportJobRecord | undefined> {
     return this.mutate((state) => {
       const job = state.larkHistoryImportJobs.find((item) => item.id === id);
@@ -4471,6 +4471,10 @@ export class FileDeliveryStore {
       ).toISOString();
       job.claimedAt = undefined;
       job.claimedBy = undefined;
+      if (options?.resetAttempts) {
+        job.attempts = 0;
+        job.lastError = undefined;
+      }
       job.updatedAt = current.toISOString();
       return copyLarkHistoryImport(job);
     });
