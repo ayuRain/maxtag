@@ -73,6 +73,7 @@ import type {
   CreateLarkHistoryImportInput,
   ClaimLarkHistoryImportsOptions,
   ConfigureLarkHistoryImportInput,
+  UpdateLarkHistoryImportOnboardingInput,
   UpdateLarkHistoryImportProgressInput,
   RetryLarkHistoryImportInput,
   ListLarkHistoryImportsOptions,
@@ -4359,6 +4360,31 @@ export class FileDeliveryStore {
       job.completedAt = input.mode === 'from_now' ? timestamp : undefined;
       job.failedAt = undefined;
       job.lastError = undefined;
+      return copyLarkHistoryImport(job);
+    });
+  }
+
+  async updateLarkHistoryImportOnboarding(
+    id: string,
+    input: UpdateLarkHistoryImportOnboardingInput,
+  ): Promise<LarkHistoryImportJobRecord | undefined> {
+    return this.mutate((state) => {
+      const job = state.larkHistoryImportJobs.find((item) => item.id === id);
+      if (!job || job.status !== 'awaiting_choice') {
+        return job ? copyLarkHistoryImport(job) : undefined;
+      }
+      const projectId = input.projectId?.trim();
+      if (input.projectId !== undefined && !projectId) {
+        throw new Error('lark_history_import_project_required');
+      }
+      if (projectId) {
+        job.projectId = projectId;
+        job.thread = { ...job.thread, projectId };
+      }
+      if (input.cardMessageId?.trim()) {
+        job.cardMessageId = input.cardMessageId.trim();
+      }
+      job.updatedAt = (input.now ?? new Date()).toISOString();
       return copyLarkHistoryImport(job);
     });
   }

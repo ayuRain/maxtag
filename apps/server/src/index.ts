@@ -99,6 +99,7 @@ import {
   type ThreadBinding,
   type ThreadBindingScope,
   type ThreadBindingSource,
+  type LarkHistoryImportJobRecord,
   type UsageBudgetCheckResult,
   type UsageBudgetLine,
   type AgentRunEventType,
@@ -6480,6 +6481,7 @@ const MAXTAG_HISTORY_FROM_NOW_ACTION = 'maxtag.history.from_now';
 const MAXTAG_HISTORY_IMPORT_30_ACTION = 'maxtag.history.import_30_days';
 const MAXTAG_HISTORY_IMPORT_90_ACTION = 'maxtag.history.import_90_days';
 const MAXTAG_HISTORY_IMPORT_180_ACTION = 'maxtag.history.import_180_days';
+const MAXTAG_HISTORY_SELECT_PROJECT_ACTION = 'maxtag.history.select_project';
 
 const MAXTAG_HISTORY_ACTION_DAYS = new Map<string, number>([
   [MAXTAG_HISTORY_IMPORT_30_ACTION, 30],
@@ -6496,6 +6498,7 @@ function buildLarkHistoryOnboardingCard(input?: {
   historyDays?: number;
   projectId?: string;
   channelTitle?: string;
+  projects?: Array<{ projectId: string; name: string }>;
 }): Record<string, unknown> {
   const selected = input?.selected;
   const historyDays = input?.historyDays ?? 90;
@@ -6515,6 +6518,43 @@ function buildLarkHistoryOnboardingCard(input?: {
     },
   ];
   if (!selected) {
+    if (input?.projects?.length) {
+      elements.push({
+        tag: 'markdown',
+        content: '**先确认这个群属于哪个 Project**',
+      });
+      for (let index = 0; index < input.projects.length; index += 2) {
+        elements.push({
+          tag: 'column_set',
+          flex_mode: 'stretch',
+          horizontal_spacing: 'small',
+          columns: input.projects.slice(index, index + 2).map((project) => ({
+            tag: 'column',
+            width: 'weighted',
+            weight: 1,
+            elements: [{
+              tag: 'button',
+              type: project.projectId === input.projectId ? 'primary' : 'default',
+              size: 'small',
+              text: larkPlainText(
+                `${project.projectId === input.projectId ? '✓ ' : ''}${project.name}`,
+              ),
+              behaviors: [{
+                type: 'callback',
+                value: {
+                  action: MAXTAG_HISTORY_SELECT_PROJECT_ACTION,
+                  project_id: project.projectId,
+                },
+              }],
+            }],
+          })),
+        });
+      }
+    }
+    elements.push({
+      tag: 'markdown',
+      content: '**再选择这个群从什么时候开始积累上下文**',
+    });
     elements.push({
       tag: 'column_set',
       flex_mode: 'stretch',
@@ -6612,6 +6652,33 @@ function buildLarkHistoryOnboardingCard(input?: {
   };
 }
 
+async function larkHistoryProjectOptions(
+  workspaceId: string,
+  selectedProjectId: string,
+): Promise<Array<{ projectId: string; name: string }>> {
+  const policies = await threadConfigStore.listProjectPolicies(workspaceId);
+  const projects = new Map(
+    policies.map((policy) => [
+      policy.projectId,
+      { projectId: policy.projectId, name: policy.name || policy.projectId },
+    ]),
+  );
+  if (!projects.has(selectedProjectId)) {
+    projects.set(selectedProjectId, { projectId: selectedProjectId, name: selectedProjectId });
+  }
+  return [...projects.values()]
+    .sort((left, right) => {
+      if (left.projectId === selectedProjectId && right.projectId !== selectedProjectId) {
+        return -1;
+      }
+      if (right.projectId === selectedProjectId && left.projectId !== selectedProjectId) {
+        return 1;
+      }
+      return left.name.localeCompare(right.name);
+    })
+    .slice(0, 8);
+}
+
 async function handleLarkHistoryOnboardingAction(
   action: LarkCardAction,
   inboundEventId: string,
@@ -6668,6 +6735,94 @@ async function handleLarkHistoryOnboardingAction(
       metadata: { actorId: action.actorId, authorization: actorAuthorizationPayload(authorization) },
     });
     return larkCardActionResponse('error', '请由公司管理员或项目管理员完成历史初始化。');
+  }
+  if (action.action === MAXTAG_HISTORY_SELECT_PROJECT_ACTION) {
+    const projects = await threadConfigStore.listProjectPolicies(job.workspaceId);
+    const target = projects.find(
+      (project) =>
+        project.projectId === action.projectId || project.id === action.projectId,
+    );
+    if (!target) {
+      return larkCardActionResponse('error', '目标 Project 不存在或已停用。');
+    }
+    const targetAuthorization = await accessStore.authorize({
+      workspaceId: job.workspaceId,
+      projectId: target.projectId,
+      platform: 'lark',
+      actor: { id: action.actorId, platformUserId: action.actorId },
+      capability: 'invoke_agent',
+    });
+    const targetManagedMembership = Boolean(
+      targetAuthorization.member || targetAuthorization.projectMembership,
+    );
+    const maySelectTarget =
+      targetAuthorization.allowed &&
+      (!targetManagedMembership ||
+        targetAuthorization.member?.role === 'owner' ||
+        targetAuthorization.member?.role === 'admin' ||
+        targetAuthorization.projectMembership?.role === 'manager');
+    if (!maySelectTarget) {
+      return larkCardActionResponse('error', '你没有管理目标 Project 的权限。');
+    }
+    const currentBinding = await deliveryStore.getThreadBindingForThread({
+      platform: 'lark',
+      externalId: job.channelId,
+      channelId: job.channelId,
+    });
+    await deliveryStore.configureThreadBinding({
+      platform: 'lark',
+      externalId: job.channelId,
+      scope: 'channel',
+      source: 'configured',
+      channelId: job.channelId,
+      workspaceId: job.workspaceId,
+      projectId: target.projectId,
+      title: job.channelTitle,
+      activationMode: currentBinding?.activationMode ?? 'mention',
+      requireMention: currentBinding?.requireMention ?? true,
+      actor: `lark:${action.actorId}`,
+      reason: 'lark_history_onboarding_project_selected',
+      metadata: {
+        ...currentBinding?.metadata,
+        historyImportJobId: job.id,
+        configuredBy: `lark:${action.actorId}`,
+      },
+    });
+    const updated = await deliveryStore.updateLarkHistoryImportOnboarding(job.id, {
+      projectId: target.projectId,
+      cardMessageId: action.cardMessageId,
+    });
+    if (!updated || updated.status !== 'awaiting_choice') {
+      return larkCardActionResponse('warning', '群聊接入状态已变化，请刷新后重试。');
+    }
+    const transport = new TrackedLarkTransport(
+      createLarkTransportForRun().transport,
+      deliveryStore,
+    );
+    await transport.updateCard({
+      cardId: action.cardMessageId,
+      card: buildLarkHistoryOnboardingCard({
+        projectId: updated.projectId,
+        channelTitle: updated.channelTitle,
+        projects: await larkHistoryProjectOptions(
+          updated.workspaceId,
+          updated.projectId,
+        ),
+      }),
+      metadata: { thread: updated.thread, stage: 'onboarding-card' },
+    }).catch(() => undefined);
+    await deliveryStore.markInboundEventProcessed(inboundEventId, {
+      workspaceId: updated.workspaceId,
+      projectId: updated.projectId,
+      threadId: updated.thread.id,
+      messageId: action.cardMessageId,
+      metadata: {
+        control: 'lark_history_project_selected',
+        actorId: action.actorId,
+        historyImportJobId: updated.id,
+      },
+    });
+    return larkCardActionResponse('success', `已切换到 Project：${target.name}。`);
   }
   const historyDays = MAXTAG_HISTORY_ACTION_DAYS.get(action.action);
   const history = typeof historyDays === 'number';
@@ -6745,6 +6900,7 @@ async function handleLarkCardAction(
   if (
     action &&
     (action.action === MAXTAG_HISTORY_FROM_NOW_ACTION ||
+      action.action === MAXTAG_HISTORY_SELECT_PROJECT_ACTION ||
       MAXTAG_HISTORY_ACTION_DAYS.has(action.action))
   ) {
     return handleLarkHistoryOnboardingAction(action, inboundEventId);
@@ -8143,7 +8299,7 @@ interface AgentWorkerPassResult {
 async function ensureLarkHistoryOnboarding(input: {
   thread: SourceThread;
   message: SourceMessage;
-}): Promise<void> {
+}): Promise<boolean> {
   const { thread, message } = input;
   if (
     thread.platform !== 'lark' ||
@@ -8151,14 +8307,17 @@ async function ensureLarkHistoryOnboarding(input: {
     !thread.channelId ||
     larkTransportStatus().mode !== 'http'
   ) {
-    return;
+    return false;
   }
   const existing = await deliveryStore.listLarkHistoryImports({
     workspaceId: thread.workspaceId,
     channelId: thread.channelId,
     limit: 20,
   });
-  if (existing.some((job) => job.status !== 'cancelled')) return;
+  let job = existing.find((candidate) => candidate.status === 'awaiting_choice');
+  if (!job && existing.some((candidate) => candidate.status !== 'cancelled')) {
+    return false;
+  }
   const mainThread: SourceThread = {
     ...thread,
     id: `lark:${thread.channelId}:main`,
@@ -8171,7 +8330,7 @@ async function ensureLarkHistoryOnboarding(input: {
       historyInitialization: true,
     },
   };
-  const job = await deliveryStore.createLarkHistoryImport({
+  job ??= await deliveryStore.createLarkHistoryImport({
     workspaceId: thread.workspaceId || 'dev-workspace',
     projectId: thread.projectId || 'general',
     channelId: thread.channelId,
@@ -8186,20 +8345,93 @@ async function ensureLarkHistoryOnboarding(input: {
       createLarkTransportForRun().transport,
       deliveryStore,
     );
-    await transport.createCard({
-      chatId: thread.channelId,
-      replyToMessageId: sourceReplyMessageId(message) || message.id,
-      card: buildLarkHistoryOnboardingCard({
-        projectId: job.projectId,
-        channelTitle: job.channelTitle,
-      }),
-      metadata: { thread: mainThread, stage: 'onboarding-card' },
+    const projects = await larkHistoryProjectOptions(job.workspaceId, job.projectId);
+    const card = buildLarkHistoryOnboardingCard({
+      projectId: job.projectId,
+      channelTitle: job.channelTitle,
+      projects,
     });
+    let cardMessageId = await larkHistoryOnboardingCardId(job);
+    if (cardMessageId) {
+      await transport.updateCard({
+        cardId: cardMessageId,
+        card,
+        metadata: { thread: job.thread, stage: 'onboarding-card' },
+      });
+    } else {
+      const created = await transport.createCard({
+        chatId: thread.channelId,
+        replyToMessageId: sourceReplyMessageId(message) || message.id,
+        card,
+        metadata: { thread: job.thread, stage: 'onboarding-card' },
+      });
+      cardMessageId = created.cardId;
+    }
+    await deliveryStore.updateLarkHistoryImportOnboarding(job.id, {
+      cardMessageId,
+    });
+    return true;
   } catch (error) {
-    await deliveryStore.cancelLarkHistoryImport(
-      job.id,
-      `onboarding_card_failed:${error instanceof Error ? error.message : String(error)}`,
-    );
+    const wasExisting = existing.some((candidate) => candidate.id === job!.id);
+    if (!wasExisting) {
+      await deliveryStore.cancelLarkHistoryImport(
+        job.id,
+        `onboarding_card_failed:${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    console.warn('MaxTag Lark history onboarding card failed', error);
+    return wasExisting;
+  }
+}
+
+async function larkHistoryOnboardingCardId(
+  job: LarkHistoryImportJobRecord,
+): Promise<string | undefined> {
+  if (job.cardMessageId) return job.cardMessageId;
+  const receipts = await deliveryStore.listOutbox({
+    workspaceId: job.workspaceId,
+    status: 'delivered',
+    limit: 500,
+  });
+  return receipts.find(
+    (receipt) =>
+      receipt.kind === 'lark.card.create' &&
+      receipt.target.chatId === job.channelId &&
+      receipt.payload.stage === 'onboarding-card' &&
+      Boolean(receipt.externalId),
+  )?.externalId;
+}
+
+async function refreshLarkHistoryOnboardingCards(): Promise<void> {
+  if (larkTransportStatus().mode !== 'http') return;
+  const jobs = await deliveryStore.listLarkHistoryImports({
+    status: 'awaiting_choice',
+    limit: 100,
+  });
+  if (!jobs.length) return;
+  const transport = new TrackedLarkTransport(
+    createLarkTransportForRun().transport,
+    deliveryStore,
+  );
+  for (const job of jobs) {
+    try {
+      const cardMessageId = await larkHistoryOnboardingCardId(job);
+      if (!cardMessageId) continue;
+      await transport.updateCard({
+        cardId: cardMessageId,
+        card: buildLarkHistoryOnboardingCard({
+          projectId: job.projectId,
+          channelTitle: job.channelTitle,
+          projects: await larkHistoryProjectOptions(job.workspaceId, job.projectId),
+        }),
+        metadata: { thread: job.thread, stage: 'onboarding-card' },
+      });
+      await deliveryStore.updateLarkHistoryImportOnboarding(job.id, {
+        cardMessageId,
+      });
+    } catch (error) {
+      console.warn('MaxTag Lark onboarding card refresh failed', error);
+    }
   }
 }
 
@@ -8237,9 +8469,6 @@ async function enqueueMessageRun(input: {
     projectId: routed.thread.projectId ?? 'general',
     activationMode: routed.binding?.activationMode,
     requireMention: routed.binding?.requireMention,
-  });
-  await ensureLarkHistoryOnboarding(routed).catch((error) => {
-    console.warn('MaxTag Lark history onboarding card failed', error);
   });
   const routeBinding = routed.binding ?? observedBinding;
   const larkTransport =
@@ -8281,6 +8510,39 @@ async function enqueueMessageRun(input: {
   const authorization = options?.authorization
     ? actorAuthorizationPayload(options.authorization)
     : { allowed: true, reason: 'operator_or_internal' };
+  const onboardingRequired = await ensureLarkHistoryOnboarding(routed);
+  if (onboardingRequired) {
+    if (options?.inboundEventId) {
+      await deliveryStore.markInboundEventProcessed(options.inboundEventId, {
+        workspaceId: routed.thread.workspaceId,
+        projectId: routed.thread.projectId,
+        threadId: routed.thread.id,
+        messageId: routed.message.id,
+        metadata: { control: 'lark_history_onboarding_required' },
+      });
+    }
+    return {
+      disposition: 'denied',
+      accepted: true,
+      queued: false,
+      reason: 'lark_history_onboarding_required',
+      authorization,
+      route,
+      transport: { platform: routed.thread.platform, mode: transportMode },
+      larkTransport: larkTransport
+        ? { mode: larkTransport.mode as 'memory' | 'http' }
+        : undefined,
+      telegramTransport: telegramTransport
+        ? { mode: telegramTransport.mode }
+        : undefined,
+      githubTransport: githubTransport
+        ? { mode: githubTransport.mode }
+        : undefined,
+      slackTransport: slackTransport
+        ? { mode: slackTransport.mode }
+        : undefined,
+    };
+  }
   const budgetCheck =
     !memoryCommand && !routineCommand && !threadStatusCommand
       ? await deliveryStore.checkUsageBudget({
@@ -16366,6 +16628,9 @@ server.listen(port, host, () => {
     memoryWrapupInterval.unref?.();
   }
   if (larkHistoryImportService.enabled) {
+    void refreshLarkHistoryOnboardingCards().catch((error) => {
+      console.error('MaxTag Lark onboarding card startup refresh failed', error);
+    });
     void larkHistoryImportService.runPass().catch((error) => {
       console.error('MaxTag Lark history import startup pass failed', error);
     });

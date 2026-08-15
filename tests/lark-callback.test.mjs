@@ -301,6 +301,41 @@ test('Lark long-connection card actions normalize from flat event output', () =>
   );
 });
 
+test('Lark onboarding card actions preserve the selected Project', () => {
+  const v2 = normalizeLarkCardAction({
+    schema: '2.0',
+    header: { event_type: 'card.action.trigger' },
+    event: {
+      operator: { open_id: 'ou-owner' },
+      action: {
+        tag: 'button',
+        value: {
+          action: 'maxtag.history.select_project',
+          project_id: 'project-2',
+        },
+      },
+      context: {
+        open_message_id: 'om-onboarding',
+        open_chat_id: 'oc-group',
+      },
+    },
+  });
+  assert.equal(v2.projectId, 'project-2');
+
+  const flat = normalizeFlatLarkCardAction({
+    type: 'card.action.trigger',
+    operator_id: 'ou-owner',
+    message_id: 'om-onboarding',
+    chat_id: 'oc-group',
+    action_tag: 'button',
+    action_value: JSON.stringify({
+      action: 'maxtag.history.select_project',
+      project_id: 'project-2',
+    }),
+  });
+  assert.equal(flat.projectId, 'project-2');
+});
+
 test('Lark memory proposal card actions normalize the proposal receipt scope', () => {
   const v2 = normalizeLarkCardAction({
     schema: '2.0',

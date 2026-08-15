@@ -140,6 +140,7 @@ export interface LarkCardAction {
   runId?: string;
   proposalId?: string;
   approvalId?: string;
+  projectId?: string;
   actorId: string;
   cardMessageId: string;
   chatId: string;

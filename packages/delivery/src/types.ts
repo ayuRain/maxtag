@@ -666,6 +666,12 @@ export interface ConfigureLarkHistoryImportInput {
   now?: Date;
 }
 
+export interface UpdateLarkHistoryImportOnboardingInput {
+  projectId?: string;
+  cardMessageId?: string;
+  now?: Date;
+}
+
 export interface UpdateLarkHistoryImportProgressInput {
   cursor?: LarkHistoryImportCursor;
   scannedMessages?: number;

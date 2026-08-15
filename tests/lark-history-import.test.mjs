@@ -139,12 +139,20 @@ test('first-use choice can complete from-now or activate a bounded import', asyn
     thread: mainThread(), mode: 'awaiting_choice', requestedBy: 'lark:ou_admin',
   });
   assert.equal(awaiting.status, 'awaiting_choice');
+  const rebound = await store.updateLarkHistoryImportOnboarding(awaiting.id, {
+    projectId: 'project-2',
+    cardMessageId: 'om_onboarding',
+  });
+  assert.equal(rebound.projectId, 'project-2');
+  assert.equal(rebound.thread.projectId, 'project-2');
+  assert.equal(rebound.cardMessageId, 'om_onboarding');
   const activated = await store.configureLarkHistoryImport(awaiting.id, {
     mode: 'history',
     since: new Date('2026-05-01T00:00:00.000Z'),
     until: new Date('2026-08-01T00:00:00.000Z'),
   });
   assert.equal(activated.status, 'pending');
+  assert.equal(activated.projectId, 'project-2');
   assert.equal(activated.cursor.windowSince, '2026-05-01T00:00:00.000Z');
 
   const other = await store.createLarkHistoryImport({

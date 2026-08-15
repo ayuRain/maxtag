@@ -49,6 +49,7 @@ async function startServer(dataDir, ownerToken, larkBaseUrl) {
       OPENTAG_ADMIN_TOKEN: ownerToken,
       OPENTAG_ADMIN_COOKIE_SECURE: 'false',
       OPENTAG_AGENT_WORKER: 'manual',
+      OPENTAG_CLIENT_INGRESS_TOKEN: 'managed-lark-client-ingress-token',
       OPENTAG_ROUTINES_ENABLED: 'false',
       OPENTAG_LARK_TRANSPORT: 'memory',
       OPENTAG_LARK_EVENT_MODE: 'long-connection',
@@ -82,11 +83,44 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
     for await (const chunk of request) chunks.push(chunk);
     requests.push({ url: request.url, body: Buffer.concat(chunks).toString('utf8') });
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({
-      code: 0,
-      tenant_access_token: 'tenant-test-token',
-      expire: 7200,
-    }));
+    if (request.url === '/open-apis/auth/v3/tenant_access_token/internal') {
+      response.end(JSON.stringify({
+        code: 0,
+        tenant_access_token: 'tenant-test-token',
+        expire: 7200,
+      }));
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/open-apis/im/v1/chats/oc_onboarding') {
+      response.end(JSON.stringify({
+        code: 0,
+        data: {
+          chat_id: 'oc_onboarding',
+          name: 'Onboarding group',
+          chat_mode: 'group',
+          chat_type: 'private',
+          external: false,
+        },
+      }));
+      return;
+    }
+    if (
+      request.method === 'POST' &&
+      (request.url === '/open-apis/im/v1/messages?receive_id_type=chat_id' ||
+        request.url === '/open-apis/im/v1/messages/om_onboarding_request/reply')
+    ) {
+      response.end(JSON.stringify({ code: 0, data: { message_id: 'om_onboarding_card' } }));
+      return;
+    }
+    if (
+      request.method === 'PATCH' &&
+      request.url === '/open-apis/im/v1/messages/om_onboarding_card'
+    ) {
+      response.end(JSON.stringify({ code: 0, data: {} }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ code: 404, msg: 'unexpected request' }));
   });
   await new Promise((resolve) => lark.listen(larkPort, '127.0.0.1', resolve));
   context.after(() => new Promise((resolve) => lark.close(resolve)));
@@ -144,4 +178,102 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   const readText = await read.text();
   assert.equal(readText.includes('platform-managed-secret-value'), false);
   assert.equal(JSON.parse(readText).config.appId, 'cli_platform_managed');
+
+  const project = await fetch(`${running.baseUrl}/v1/projects`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${ownerToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      workspaceId: 'dev-workspace',
+      projectId: 'second-project',
+      name: 'Second project',
+      agentMode: 'inherit',
+      capabilityMode: 'inherit',
+      memoryMode: 'workspace',
+    }),
+  });
+  assert.equal(project.status, 200);
+
+  const onboarding = await fetch(`${running.baseUrl}/v1/client/events`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer managed-lark-client-ingress-token',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      platform: 'lark',
+      eventId: 'onboarding-event-1',
+      thread: {
+        externalId: 'oc_onboarding:main',
+        channelId: 'oc_onboarding',
+        workspaceId: 'dev-workspace',
+        projectId: 'general',
+        visibility: 'private',
+      },
+      message: {
+        id: 'om_onboarding_request',
+        text: '@MaxTag hello',
+        actor: { id: 'ou-onboarding-owner' },
+        mentionsAgent: true,
+      },
+    }),
+  });
+  assert.equal(onboarding.status, 202);
+  const onboardingResult = await onboarding.json();
+  assert.equal(onboardingResult.accepted, true);
+  assert.equal(onboardingResult.queued, false);
+  assert.equal(onboardingResult.reason, 'lark_history_onboarding_required');
+  assert.equal(onboardingResult.run, undefined);
+  const cardRequest = requests.find(
+    (request) =>
+      request.url === '/open-apis/im/v1/messages/om_onboarding_request/reply',
+  );
+  assert.ok(cardRequest);
+  assert.match(cardRequest.body, /maxtag\.history\.select_project/u);
+  assert.match(cardRequest.body, /second-project/u);
+
+  const runs = await fetch(
+    `${running.baseUrl}/v1/runs?workspaceId=dev-workspace`,
+    { headers: { authorization: `Bearer ${ownerToken}` } },
+  ).then((response) => response.json());
+  assert.equal(runs.runs.length, 0);
+
+  const selectProject = await fetch(`${running.baseUrl}/v1/lark/card-actions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer managed-lark-client-ingress-token',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'card.action.trigger',
+      event_id: 'onboarding-select-project-1',
+      operator_id: 'ou-onboarding-owner',
+      message_id: 'om_onboarding_card',
+      chat_id: 'oc_onboarding',
+      action_tag: 'button',
+      action_value: JSON.stringify({
+        action: 'maxtag.history.select_project',
+        project_id: 'second-project',
+      }),
+    }),
+  });
+  assert.equal(selectProject.status, 200);
+  const projectAction = await selectProject.json();
+  assert.equal(projectAction.toast.type, 'success');
+
+  const imports = await fetch(
+    `${running.baseUrl}/v1/lark/history-imports?workspaceId=dev-workspace`,
+    { headers: { authorization: `Bearer ${ownerToken}` } },
+  ).then((response) => response.json());
+  assert.equal(imports.jobs[0].status, 'awaiting_choice');
+  assert.equal(imports.jobs[0].projectId, 'second-project');
+  assert.ok(
+    requests.some(
+      (request) =>
+        request.url === '/open-apis/im/v1/messages/om_onboarding_card' &&
+        request.body.includes('Second project'),
+    ),
+  );
 });
