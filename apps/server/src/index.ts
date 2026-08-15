@@ -232,6 +232,7 @@ import {
   larkEventModeValue,
 } from './startup-security.js';
 import { backfillLarkHistory } from './lark-backfill.js';
+import { LarkHistoryImportService } from './lark-history-import.js';
 
 const port = Number(process.env.OPENTAG_PORT || 3077);
 const host = process.env.OPENTAG_HOST || '127.0.0.1';
@@ -583,6 +584,21 @@ const memoryWrapupMaxAttempts = Math.min(
 const memoryWrapupRetentionMs = numberEnvironmentValue(
   'OPENTAG_MEMORY_WRAPUP_RETENTION_MS',
   7 * 24 * 60 * 60_000,
+);
+const larkHistoryImportEnabled = !['0', 'false', 'no'].includes(
+  String(process.env.OPENTAG_LARK_HISTORY_IMPORT_ENABLED || 'true').toLowerCase(),
+);
+const larkHistoryImportIntervalMs = numberEnvironmentValue(
+  'OPENTAG_LARK_HISTORY_IMPORT_INTERVAL_MS',
+  2_000,
+);
+const larkHistoryImportWindowMs = numberEnvironmentValue(
+  'OPENTAG_LARK_HISTORY_IMPORT_WINDOW_MS',
+  24 * 60 * 60_000,
+);
+const larkHistoryImportWindowsPerPass = Math.min(
+  31,
+  numberEnvironmentValue('OPENTAG_LARK_HISTORY_IMPORT_WINDOWS_PER_PASS', 7),
 );
 const routinesEnabled = !['0', 'false', 'no'].includes(
   String(process.env.OPENTAG_ROUTINES_ENABLED || 'true').toLowerCase(),
@@ -1071,6 +1087,7 @@ let routineSchedulerInterval: NodeJS.Timeout | undefined;
 let workflowCoordinatorInterval: NodeJS.Timeout | undefined;
 let larkDocumentWatcherInterval: NodeJS.Timeout | undefined;
 let memoryWrapupInterval: NodeJS.Timeout | undefined;
+let larkHistoryImportInterval: NodeJS.Timeout | undefined;
 let knowledgeEnrichmentInterval: NodeJS.Timeout | undefined;
 let knowledgeRefreshInterval: NodeJS.Timeout | undefined;
 let delegatedAgentTaskInterval: NodeJS.Timeout | undefined;
@@ -1120,6 +1137,30 @@ const memoryAnalysisService = new MemoryAnalysisService({
   maxEntries: memoryAnalysisMaxEntries,
   maxChars: memoryAnalysisMaxChars,
   minConfidence: memoryAnalysisMinConfidence,
+});
+const larkHistoryImportService = new LarkHistoryImportService({
+  deliveryStore,
+  memoryAnalysisService,
+  workerId: `${agentWorkerId}-lark-history`,
+  enabled: larkHistoryImportEnabled,
+  intervalWindowMs: larkHistoryImportWindowMs,
+  windowsPerPass: larkHistoryImportWindowsPerPass,
+  transport: () => {
+    if (larkTransportStatus().mode !== 'http') return undefined;
+    try {
+      return larkResourceTransport();
+    } catch {
+      return undefined;
+    }
+  },
+  botOpenId,
+  onTerminal: async (job) => {
+    const platform = createPlatformForRun(job.thread).platform;
+    const message = job.status === 'completed'
+      ? `历史初始化完成：已扫描 ${job.scannedMessages} 条消息，导入 ${job.importedMessages} 条，生成 ${job.proposalIds.length} 条待审核记忆。管理员可在 MaxTag「记忆」页面批量审核。`
+      : `历史初始化失败：${job.lastError || '未知错误'}。进度已保存，管理员可在 MaxTag 平台重试。`;
+    await platform.sendMessage(job.thread, message);
+  },
 });
 const memoryRetrievalService = new MemoryRetrievalService({
   executorRegistry: memoryRetrievalExecutorRegistry,
@@ -6435,6 +6476,253 @@ function larkCardActionResponse(
   return { toast: { type, content } };
 }
 
+const MAXTAG_HISTORY_FROM_NOW_ACTION = 'maxtag.history.from_now';
+const MAXTAG_HISTORY_IMPORT_30_ACTION = 'maxtag.history.import_30_days';
+const MAXTAG_HISTORY_IMPORT_90_ACTION = 'maxtag.history.import_90_days';
+const MAXTAG_HISTORY_IMPORT_180_ACTION = 'maxtag.history.import_180_days';
+
+const MAXTAG_HISTORY_ACTION_DAYS = new Map<string, number>([
+  [MAXTAG_HISTORY_IMPORT_30_ACTION, 30],
+  [MAXTAG_HISTORY_IMPORT_90_ACTION, 90],
+  [MAXTAG_HISTORY_IMPORT_180_ACTION, 180],
+]);
+
+function larkPlainText(content: string): Record<string, unknown> {
+  return { tag: 'plain_text', content };
+}
+
+function buildLarkHistoryOnboardingCard(input?: {
+  selected?: 'from_now' | 'history';
+  historyDays?: number;
+  projectId?: string;
+  channelTitle?: string;
+}): Record<string, unknown> {
+  const selected = input?.selected;
+  const historyDays = input?.historyDays ?? 90;
+  const elements: Array<Record<string, unknown>> = [
+    {
+      tag: 'markdown',
+      content: selected
+        ? selected === 'history'
+          ? `**已开始导入最近 ${historyDays} 天历史。**\n<font color="grey">任务会在后台断点续传；原消息先作为聊天档案，候选记忆仍需管理员审核。</font>`
+          : '**已选择从现在开始。**\n<font color="grey">MaxTag 不会读取旧消息，之后的新对话会自动积累。</font>'
+        : [
+            '**这个群已经可以使用 MaxTag。**',
+            `当前群：${input?.channelTitle || '本群'}`,
+            `归属 Project：${input?.projectId || '当前绑定项目'}`,
+            '请选择这个群从什么时候开始积累上下文；每个群独立初始化，多个群可以共享同一个 Project 的记忆和 Skills。',
+          ].join('\n'),
+    },
+  ];
+  if (!selected) {
+    elements.push({
+      tag: 'column_set',
+      flex_mode: 'stretch',
+      horizontal_spacing: 'small',
+      columns: [
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [{
+            tag: 'button',
+            type: 'default',
+            size: 'small',
+            text: larkPlainText('从现在开始'),
+            behaviors: [{ type: 'callback', value: { action: MAXTAG_HISTORY_FROM_NOW_ACTION } }],
+          }],
+        },
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [{
+            tag: 'button',
+            type: 'default',
+            size: 'small',
+            text: larkPlainText('导入最近 30 天'),
+            behaviors: [{ type: 'callback', value: { action: MAXTAG_HISTORY_IMPORT_30_ACTION } }],
+            confirm: {
+              title: larkPlainText('导入这个群的历史？'),
+              text: larkPlainText('MaxTag 会读取最近 30 天消息并提炼待审核记忆；不会自动写入长期记忆。'),
+            },
+          }],
+        },
+      ],
+    });
+    elements.push({
+      tag: 'column_set',
+      flex_mode: 'stretch',
+      horizontal_spacing: 'small',
+      columns: [
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [{
+            tag: 'button',
+            type: 'primary',
+            size: 'small',
+            text: larkPlainText('导入最近 90 天'),
+            behaviors: [{ type: 'callback', value: { action: MAXTAG_HISTORY_IMPORT_90_ACTION } }],
+            confirm: {
+              title: larkPlainText('导入这个群的历史？'),
+              text: larkPlainText('MaxTag 会读取最近 90 天消息并提炼待审核记忆；不会自动写入长期记忆。'),
+            },
+          }],
+        },
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [{
+            tag: 'button',
+            type: 'default',
+            size: 'small',
+            text: larkPlainText('导入最近 180 天'),
+            behaviors: [{ type: 'callback', value: { action: MAXTAG_HISTORY_IMPORT_180_ACTION } }],
+            confirm: {
+              title: larkPlainText('导入这个群的历史？'),
+              text: larkPlainText('MaxTag 会读取最近 180 天消息并提炼待审核记忆；不会自动写入长期记忆。'),
+            },
+          }],
+        },
+      ],
+    });
+    elements.push({
+      tag: 'markdown',
+      content: '<font color="grey">需要指定日期时，可在 MaxTag 平台使用“自定义时间”。初始化完成后，可为 Project 启用绘图、文档分析等 Skills，绑定到该 Project 的群会共同复用。</font>',
+    });
+  }
+  return {
+    schema: '2.0',
+    config: {
+      width_mode: 'fill',
+      update_multi: true,
+      enable_forward_interaction: false,
+      summary: { content: 'MaxTag · 群聊接入' },
+    },
+    header: {
+      title: larkPlainText('MaxTag'),
+      subtitle: larkPlainText(selected ? '群聊接入已完成' : '首次接入'),
+      template: selected === 'history' ? 'blue' : selected ? 'green' : 'wathet',
+      icon: { tag: 'standard_icon', token: selected ? 'yes_outlined' : 'history_outlined' },
+    },
+    body: { direction: 'vertical', padding: '12px 16px 14px 16px', elements },
+  };
+}
+
+async function handleLarkHistoryOnboardingAction(
+  action: LarkCardAction,
+  inboundEventId: string,
+): Promise<LarkCardActionResponse> {
+  const receipt = await deliveryStore.getDeliveredOutboundByExternalId({
+    platform: 'lark',
+    externalId: action.cardMessageId,
+    kind: 'lark.card.create',
+  });
+  if (
+    !receipt ||
+    receipt.target.chatId !== action.chatId ||
+    receipt.payload.stage !== 'onboarding-card'
+  ) {
+    await deliveryStore.markInboundEventIgnored(
+      inboundEventId,
+      'invalid_lark_history_onboarding_receipt',
+      { metadata: { actorId: action.actorId, cardMessageId: action.cardMessageId } },
+    );
+    return larkCardActionResponse('warning', '这张接入卡已不可用。');
+  }
+  const jobs = await deliveryStore.listLarkHistoryImports({
+    channelId: action.chatId,
+    limit: 20,
+  });
+  const job = jobs.find((item) => item.status === 'awaiting_choice') || jobs[0];
+  if (!job) {
+    return larkCardActionResponse('warning', '没有找到对应的群聊接入记录。');
+  }
+  if (job.status !== 'awaiting_choice') {
+    return larkCardActionResponse('info', '这个群已经完成过初始化选择。');
+  }
+  const authorization = await accessStore.authorize({
+    workspaceId: job.workspaceId,
+    projectId: job.projectId,
+    platform: 'lark',
+    actor: { id: action.actorId, platformUserId: action.actorId },
+    capability: 'invoke_agent',
+  });
+  const managedMembership = Boolean(
+    authorization.member || authorization.projectMembership,
+  );
+  const mayInitialize =
+    authorization.allowed &&
+    (!managedMembership ||
+      authorization.member?.role === 'owner' ||
+      authorization.member?.role === 'admin' ||
+      authorization.projectMembership?.role === 'manager');
+  if (!mayInitialize) {
+    await deliveryStore.markInboundEventIgnored(inboundEventId, 'lark_history_import_admin_required', {
+      workspaceId: job.workspaceId,
+      projectId: job.projectId,
+      threadId: job.thread.id,
+      metadata: { actorId: action.actorId, authorization: actorAuthorizationPayload(authorization) },
+    });
+    return larkCardActionResponse('error', '请由公司管理员或项目管理员完成历史初始化。');
+  }
+  const historyDays = MAXTAG_HISTORY_ACTION_DAYS.get(action.action);
+  const history = typeof historyDays === 'number';
+  const until = new Date();
+  const configured = await deliveryStore.configureLarkHistoryImport(job.id, {
+    mode: history ? 'history' : 'from_now',
+    since: history
+      ? new Date(until.getTime() - historyDays * 24 * 60 * 60_000)
+      : undefined,
+    until: history ? until : undefined,
+    analyzeMemory: true,
+    requestedBy: `lark:${action.actorId}`,
+    cardMessageId: action.cardMessageId,
+  });
+  if (!configured) {
+    return larkCardActionResponse('warning', '群聊接入状态已变化，请刷新后重试。');
+  }
+  const transport = new TrackedLarkTransport(
+    createLarkTransportForRun().transport,
+    deliveryStore,
+  );
+  await transport.updateCard({
+    cardId: action.cardMessageId,
+    card: buildLarkHistoryOnboardingCard({
+      selected: history ? 'history' : 'from_now',
+      historyDays,
+      projectId: job.projectId,
+      channelTitle: job.channelTitle,
+    }),
+    metadata: { thread: job.thread, stage: 'onboarding-card' },
+  }).catch(() => undefined);
+  await deliveryStore.markInboundEventProcessed(inboundEventId, {
+    workspaceId: job.workspaceId,
+    projectId: job.projectId,
+    threadId: job.thread.id,
+    messageId: action.cardMessageId,
+    metadata: {
+      control: history ? 'lark_history_import_90_days' : 'lark_history_from_now',
+      actorId: action.actorId,
+      historyImportJobId: job.id,
+    },
+  });
+  if (history) {
+    setTimeout(() => {
+      void larkHistoryImportService.runPass().catch((error) => {
+        console.error('MaxTag Lark history import pass failed', error);
+      });
+    }, 0).unref?.();
+  }
+  return larkCardActionResponse(
+    'success',
+    history ? `已开始后台导入最近 ${historyDays} 天历史。` : '已从现在开始使用。',
+  );
+}
+
 async function handleLarkCardAction(
   body: LarkIncomingEvent & Record<string, unknown>,
   inboundEventId: string,
@@ -6453,6 +6741,13 @@ async function handleLarkCardAction(
       action.action === OPENTAG_REJECT_MEMORY_PROPOSAL_ACTION)
   ) {
     return handleLarkMemoryProposalAction(action, inboundEventId);
+  }
+  if (
+    action &&
+    (action.action === MAXTAG_HISTORY_FROM_NOW_ACTION ||
+      MAXTAG_HISTORY_ACTION_DAYS.has(action.action))
+  ) {
+    return handleLarkHistoryOnboardingAction(action, inboundEventId);
   }
   const isStopAction = action?.action === OPENTAG_STOP_RUN_ACTION;
   const isTakeOverAction = action?.action === OPENTAG_TAKE_OVER_RUN_ACTION;
@@ -7845,6 +8140,69 @@ interface AgentWorkerPassResult {
   runs: AgentRunRecord[];
 }
 
+async function ensureLarkHistoryOnboarding(input: {
+  thread: SourceThread;
+  message: SourceMessage;
+}): Promise<void> {
+  const { thread, message } = input;
+  if (
+    thread.platform !== 'lark' ||
+    thread.visibility === 'direct' ||
+    !thread.channelId ||
+    larkTransportStatus().mode !== 'http'
+  ) {
+    return;
+  }
+  const existing = await deliveryStore.listLarkHistoryImports({
+    workspaceId: thread.workspaceId,
+    channelId: thread.channelId,
+    limit: 20,
+  });
+  if (existing.some((job) => job.status !== 'cancelled')) return;
+  const mainThread: SourceThread = {
+    ...thread,
+    id: `lark:${thread.channelId}:main`,
+    externalId: `${thread.channelId}:main`,
+    rootMessageId: undefined,
+    topicId: undefined,
+    metadata: {
+      ...thread.metadata,
+      larkConversationMode: 'main',
+      historyInitialization: true,
+    },
+  };
+  const job = await deliveryStore.createLarkHistoryImport({
+    workspaceId: thread.workspaceId || 'dev-workspace',
+    projectId: thread.projectId || 'general',
+    channelId: thread.channelId,
+    channelTitle: thread.title,
+    thread: mainThread,
+    mode: 'awaiting_choice',
+    analyzeMemory: true,
+    requestedBy: `lark:${message.actor.id}`,
+  });
+  try {
+    const transport = new TrackedLarkTransport(
+      createLarkTransportForRun().transport,
+      deliveryStore,
+    );
+    await transport.createCard({
+      chatId: thread.channelId,
+      replyToMessageId: sourceReplyMessageId(message) || message.id,
+      card: buildLarkHistoryOnboardingCard({
+        projectId: job.projectId,
+        channelTitle: job.channelTitle,
+      }),
+      metadata: { thread: mainThread, stage: 'onboarding-card' },
+    });
+  } catch (error) {
+    await deliveryStore.cancelLarkHistoryImport(
+      job.id,
+      `onboarding_card_failed:${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 async function enqueueMessageRun(input: {
   thread: SourceThread;
   message: SourceMessage;
@@ -7879,6 +8237,9 @@ async function enqueueMessageRun(input: {
     projectId: routed.thread.projectId ?? 'general',
     activationMode: routed.binding?.activationMode,
     requireMention: routed.binding?.requireMention,
+  });
+  await ensureLarkHistoryOnboarding(routed).catch((error) => {
+    console.warn('MaxTag Lark history onboarding card failed', error);
   });
   const routeBinding = routed.binding ?? observedBinding;
   const larkTransport =
@@ -14633,6 +14994,175 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'GET' && url.pathname === '/v1/lark/history-imports') {
+      const selection = operatorCollectionWorkspace(
+        response,
+        operatorAuthentication!,
+        url.searchParams.get('workspaceId') || undefined,
+      );
+      if (!selection.ok) return;
+      const jobs = await deliveryStore.listLarkHistoryImports({
+        workspaceId: selection.workspaceId,
+        projectId: url.searchParams.get('projectId') || undefined,
+        channelId: url.searchParams.get('channelId') || undefined,
+        limit: numberValue(Object.fromEntries(url.searchParams.entries()), 'limit', 100),
+      });
+      sendJson(response, 200, {
+        workspaceId: selection.workspaceId,
+        status: await larkHistoryImportService.status(selection.workspaceId),
+        jobs,
+      });
+      return;
+    }
+
+    if (
+      request.method === 'POST' &&
+      (url.pathname === '/v1/lark/history-imports/preview' ||
+        url.pathname === '/v1/lark/history-imports')
+    ) {
+      const body = (await readJsonBody(request, 64 * 1024)) as Record<string, unknown>;
+      const workspaceId = stringValue(body, 'workspaceId');
+      const channelId = stringValue(body, 'channelId');
+      const sinceValue = isoDateValue(body.since);
+      const untilValue = isoDateValue(body.until) || new Date().toISOString();
+      if (!workspaceId || !channelId || !sinceValue) {
+        sendJson(response, 400, { error: 'lark_history_import_workspace_channel_range_required' });
+        return;
+      }
+      if (!requireOperatorWorkspace(response, operatorAuthentication!, workspaceId)) return;
+      const since = new Date(sinceValue);
+      const until = new Date(untilValue);
+      const maximumRangeMs = numberEnvironmentValue(
+        'OPENTAG_LARK_HISTORY_IMPORT_MAX_RANGE_MS',
+        5 * 365 * 24 * 60 * 60_000,
+      );
+      if (
+        since.getTime() >= until.getTime() ||
+        until.getTime() - since.getTime() > maximumRangeMs
+      ) {
+        sendJson(response, 400, {
+          error: 'lark_history_import_invalid_range',
+          maximumRangeMs,
+        });
+        return;
+      }
+      if (larkTransportStatus().mode !== 'http') {
+        sendJson(response, 503, { error: 'lark_http_transport_required' });
+        return;
+      }
+      const bindings = await deliveryStore.listThreadBindings(5_000, workspaceId);
+      const channelBinding =
+        bindings.find(
+          (binding) =>
+            binding.platform === 'lark' &&
+            binding.scope === 'channel' &&
+            binding.externalId === channelId,
+        ) ||
+        bindings.find(
+          (binding) =>
+            binding.platform === 'lark' && binding.channelId === channelId,
+        );
+      if (!channelBinding) {
+        sendJson(response, 404, { error: 'lark_history_import_channel_not_bound' });
+        return;
+      }
+      const requestedProjectId = stringValue(body, 'projectId');
+      if (requestedProjectId && requestedProjectId !== channelBinding.projectId) {
+        sendJson(response, 409, { error: 'lark_history_import_project_binding_mismatch' });
+        return;
+      }
+      const projectId = channelBinding.projectId;
+      let chat: LarkChatInfo | undefined;
+      try {
+        chat = await larkResourceTransport().getChat(channelId, {
+          signal: AbortSignal.timeout(larkChatInfoTimeoutMs),
+        });
+      } catch {
+        // The actual preview/import call below returns the precise Lark scope error.
+      }
+      const channelTitle = chat?.name || channelBinding.title || channelId;
+      if (url.pathname.endsWith('/preview')) {
+        try {
+          const preview = await larkHistoryImportService.preview({
+            workspaceId,
+            projectId,
+            channelId,
+            channelTitle,
+            since,
+            until,
+            maxMessages: Math.min(numberValue(body, 'maxMessages', 1_000) || 1_000, 5_000),
+          });
+          sendJson(response, preview.errors.length ? 207 : 200, { ...preview });
+        } catch (error) {
+          sendJson(response, 400, {
+            error: error instanceof Error ? error.message : 'lark_history_import_preview_failed',
+          });
+        }
+        return;
+      }
+      const thread: SourceThread = {
+        id: `lark:${channelId}:main`,
+        platform: 'lark',
+        externalId: `${channelId}:main`,
+        workspaceId,
+        projectId,
+        channelId,
+        title: channelTitle,
+        visibility: chat?.chatType === 'public' ? 'public' : 'private',
+        metadata: {
+          larkConversationMode: 'main',
+          larkChatMode: chat?.chatMode,
+          larkChatType: chat?.chatType,
+          historyInitialization: true,
+        },
+      };
+      try {
+        const job = await deliveryStore.createLarkHistoryImport({
+          workspaceId,
+          projectId,
+          channelId,
+          channelTitle,
+          thread,
+          mode: 'history',
+          since,
+          until,
+          analyzeMemory: booleanValue(body, 'analyzeMemory', true) ?? true,
+          requestedBy: operatorActor(operatorAuthentication!),
+        });
+        setTimeout(() => {
+          void larkHistoryImportService.runPass().catch((error) => {
+            console.error('MaxTag Lark history import pass failed', error);
+          });
+        }, 0).unref?.();
+        sendJson(response, 202, { accepted: true, job });
+      } catch (error) {
+        sendJson(response, 409, {
+          error: error instanceof Error ? error.message : 'lark_history_import_create_failed',
+        });
+      }
+      return;
+    }
+
+    const historyImportCancelMatch = /^\/v1\/lark\/history-imports\/([^/]+)\/cancel$/u.exec(
+      url.pathname,
+    );
+    if (request.method === 'POST' && historyImportCancelMatch) {
+      const job = await deliveryStore.getLarkHistoryImport(
+        decodeURIComponent(historyImportCancelMatch[1]),
+      );
+      if (!job) {
+        sendJson(response, 404, { error: 'lark_history_import_not_found' });
+        return;
+      }
+      if (!requireOperatorWorkspace(response, operatorAuthentication!, job.workspaceId)) return;
+      const cancelled = await deliveryStore.cancelLarkHistoryImport(
+        job.id,
+        `operator:${operatorActor(operatorAuthentication!)}:cancelled`,
+      );
+      sendJson(response, 200, { job: cancelled });
+      return;
+    }
+
     if (request.method === 'POST' && url.pathname === '/v1/lark/backfill') {
       const body = (await readJsonBody(request, 64 * 1024)) as Record<
         string,
@@ -15679,6 +16209,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (workflowCoordinatorInterval) clearInterval(workflowCoordinatorInterval);
   if (larkDocumentWatcherInterval) clearInterval(larkDocumentWatcherInterval);
   if (memoryWrapupInterval) clearInterval(memoryWrapupInterval);
+  if (larkHistoryImportInterval) clearInterval(larkHistoryImportInterval);
   if (knowledgeEnrichmentInterval) clearInterval(knowledgeEnrichmentInterval);
   if (knowledgeRefreshInterval) clearInterval(knowledgeRefreshInterval);
   if (delegatedAgentTaskInterval) clearInterval(delegatedAgentTaskInterval);
@@ -15688,10 +16219,12 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   workflowCoordinatorInterval = undefined;
   larkDocumentWatcherInterval = undefined;
   memoryWrapupInterval = undefined;
+  larkHistoryImportInterval = undefined;
   knowledgeEnrichmentInterval = undefined;
   knowledgeRefreshInterval = undefined;
   delegatedAgentTaskInterval = undefined;
   memoryWrapupService.beginShutdown();
+  larkHistoryImportService.beginShutdown();
   knowledgeEnrichmentService.beginShutdown();
   knowledgeSourceRefreshService.beginShutdown();
   delegatedAgentTaskService.beginShutdown();
@@ -15724,6 +16257,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       workflowCoordinator.waitForIdle(),
       larkDocumentWatcher.waitForIdle(),
       memoryWrapupService.waitForIdle(),
+      larkHistoryImportService.waitForIdle(),
       knowledgeEnrichmentService.waitForIdle(),
       knowledgeSourceRefreshService.waitForIdle(),
       delegatedAgentTaskService.waitForIdle(),
@@ -15830,6 +16364,17 @@ server.listen(port, host, () => {
       });
     }, memoryWrapupIntervalMs);
     memoryWrapupInterval.unref?.();
+  }
+  if (larkHistoryImportService.enabled) {
+    void larkHistoryImportService.runPass().catch((error) => {
+      console.error('MaxTag Lark history import startup pass failed', error);
+    });
+    larkHistoryImportInterval = setInterval(() => {
+      void larkHistoryImportService.runPass().catch((error) => {
+        console.error('MaxTag Lark history import pass failed', error);
+      });
+    }, larkHistoryImportIntervalMs);
+    larkHistoryImportInterval.unref?.();
   }
   if (knowledgeEnrichmentService.status().enabled) {
     void knowledgeEnrichmentService.runPass().catch((error) => {

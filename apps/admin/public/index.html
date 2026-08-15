@@ -953,6 +953,49 @@
 
               <div class="lark-readiness-list" id="lark-readiness-list"></div>
 
+              <section class="lark-history-card" id="lark-history-card">
+                <div class="executor-setup-head">
+                  <div>
+                    <strong>老群历史初始化</strong>
+                    <span>每个群独立选择时间范围；多个群可共享同一 Project 的记忆和 Skills。</span>
+                  </div>
+                  <span class="state-pill planned" id="lark-history-state">可选</span>
+                </div>
+                <form class="lark-history-form" id="lark-history-form">
+                  <label class="field">
+                    <span>飞书群</span>
+                    <select id="lark-history-channel" required></select>
+                  </label>
+                  <label class="field">
+                    <span>历史范围</span>
+                    <select id="lark-history-range">
+                      <option value="30">最近 30 天</option>
+                      <option value="90" selected>最近 90 天</option>
+                      <option value="180">最近 180 天</option>
+                      <option value="custom">自定义日期</option>
+                    </select>
+                  </label>
+                  <label class="field lark-history-custom" hidden>
+                    <span>开始日期</span>
+                    <input id="lark-history-since" type="date" />
+                  </label>
+                  <label class="field lark-history-custom" hidden>
+                    <span>结束日期</span>
+                    <input id="lark-history-until" type="date" />
+                  </label>
+                  <label class="toggle-field lark-history-memory-toggle">
+                    <input id="lark-history-analyze" type="checkbox" checked />
+                    <span>自动提炼候选记忆（仍需管理员审核）</span>
+                  </label>
+                  <div class="lark-credential-actions">
+                    <button class="secondary-button" id="preview-lark-history" type="button">预览数量</button>
+                    <button class="primary-button" id="start-lark-history" type="submit">后台导入</button>
+                  </div>
+                  <small id="lark-history-preview">旧消息先成为聊天档案，再提炼为待审核的项目/公司记忆；任务支持断点续传和失败重试。</small>
+                </form>
+                <div class="lark-history-jobs" id="lark-history-jobs"></div>
+              </section>
+
               <section class="executor-setup-card">
                 <div class="executor-setup-head">
                   <div>

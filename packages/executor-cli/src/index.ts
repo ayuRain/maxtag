@@ -702,6 +702,7 @@ export function memoryCandidateInstructions(request: AgentRunRequest): string {
       `Allowed scopes: ${scopes.join(', ')}. Return at most 12 decisions. Returning no lines is correct when nothing durable changed.`,
       'Use remember only for a new non-conflicting fact. Use replace when one approved fact is superseded. Use merge when two or more exact approved facts in one scope are duplicate, complementary, or jointly superseded and can be replaced by one tighter fact; selectors must contain every exact source fact and expectedDocumentVersion must match that scope document. Use forget only when the transcript explicitly invalidates an old fact. Use index to add retrieval aliases without changing approved text. Use skip for uncertain, transient, sensitive, or personal data.',
       'For remember, replace, merge, or index, add 2-6 short retrieval aliases that express likely future questions, synonyms, acronyms, or another language. Aliases are search hints, not new facts; do not include information absent from the approved fact.',
+      'In reason, cite the strongest supporting transcript item as [message:<id> @ <timestamp>] when message metadata is supplied. Keep the citation with the proposal so an operator can audit where the candidate came from.',
       'Never emit credentials, tokens, raw conversation, task progress, guesses, or facts learned only from assistant claims. One-off recall tests, temporary codes, test markers, arbitrary variable assignments, and short-lived values must be skipped. Prefer explicit durable user decisions and repeated verified outcomes.',
     ].join('\n');
   }
@@ -719,12 +720,17 @@ export function buildThreadTranscript(request: AgentRunRequest): string {
   if (request.providerSession?.sessionId) return '';
   const transcript = request.transcript;
   if (!transcript?.entries.length) return '';
+  const includeEvidenceIds =
+    request.purpose === 'memory_analysis' || request.purpose === 'memory_wrapup';
   const lines = transcript.entries.map((entry) => {
     const speaker =
       entry.role === 'assistant'
         ? entry.actor?.displayName || 'MaxTag'
         : entry.actor?.displayName || entry.actor?.id || 'User';
-    return `[${entry.at}] ${speaker} (${entry.role}):\n${entry.text}`;
+    const evidence = includeEvidenceIds && entry.messageId
+      ? ` message:${entry.messageId}`
+      : '';
+    return `[${entry.at}${evidence}] ${speaker} (${entry.role}):\n${entry.text}`;
   });
   return [
     `--- SHARED THREAD TRANSCRIPT (${transcript.entries.length}/${transcript.totalEntries} entries) ---`,

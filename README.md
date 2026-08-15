@@ -1414,6 +1414,25 @@ enable `im:message` or `im:message:readonly` and also the sensitive
 `im:message.group_msg` scope, then publish the app version so the permission is
 effective.
 
+Old groups use a separate operator-controlled initialization flow; this is not
+the disconnect backfill above. On the first group invocation MaxTag posts a
+one-time card with **Start now** and **Import the last 30/90/180 days**. The
+card shows the group's current Project binding; each group makes its own range
+choice, while any number of groups may share the same Project memory, assigned
+Skills, and agent policy. The same flow is available in Console → Connectors →
+Lark with a custom date range and bounded preview. Historical messages are archived directly as
+source-thread context and never replayed as agent requests, even when an old
+message mentions MaxTag. A durable job advances in
+`OPENTAG_LARK_HISTORY_IMPORT_WINDOW_MS` windows, checkpoints after each window,
+recovers stale claims after restart, de-duplicates source message ids, and
+retains failure state for operator retry. Optional Memory Analysis processes
+the group's canonical transcript in bounded batches while preserving the
+original group/topic/message provenance, with no dependency on a provider-owned session. It
+creates only Project/Company memory proposals; nothing enters approved memory
+until an operator accepts it. Proposal reasons include the supporting Lark
+message id and timestamp when the model supplies the requested evidence
+citation. The same Lark history scopes described above are required.
+
 Subscribe the app to message events through long connection or webhook. The
 progress-card Stop and Take over buttons are accepted only when their
 `open_message_id`, `open_chat_id`, and `run_id` match a delivered card receipt

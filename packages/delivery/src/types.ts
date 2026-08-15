@@ -575,6 +575,123 @@ export interface ThreadContextSyncRecord {
   metadata?: Record<string, unknown>;
 }
 
+export type LarkHistoryImportMode = 'awaiting_choice' | 'from_now' | 'history';
+
+export type LarkHistoryImportStatus =
+  | 'awaiting_choice'
+  | 'pending'
+  | 'claimed'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface LarkHistoryImportCursor {
+  windowSince: string;
+  analysisWindowSince?: string;
+  analysis: Record<string, ThreadTranscriptCursor>;
+}
+
+/**
+ * Durable, tenant-scoped state for one old-group initialization.  A job moves
+ * forward in bounded time windows so a process restart can safely repeat only
+ * the current window. Imported source-message ids are idempotent; pending
+ * memory proposals are content-deduplicated and the analysis cursor is durable.
+ */
+export interface LarkHistoryImportJobRecord {
+  id: string;
+  mode: LarkHistoryImportMode;
+  status: LarkHistoryImportStatus;
+  workspaceId: string;
+  projectId: string;
+  channelId: string;
+  channelTitle?: string;
+  thread: SourceThread;
+  since?: string;
+  until?: string;
+  cursor?: LarkHistoryImportCursor;
+  analyzeMemory: boolean;
+  attempts: number;
+  maxAttempts: number;
+  availableAt: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  claimedAt?: string;
+  claimedBy?: string;
+  completedAt?: string;
+  failedAt?: string;
+  cancelledAt?: string;
+  lastError?: string;
+  scannedMessages: number;
+  importedMessages: number;
+  duplicateMessages: number;
+  ignoredMessages: number;
+  discoveredThreads: number;
+  analyzedThreads: number;
+  proposalIds: string[];
+  cardMessageId?: string;
+  requestedBy?: string;
+}
+
+export interface CreateLarkHistoryImportInput {
+  workspaceId: string;
+  projectId: string;
+  channelId: string;
+  channelTitle?: string;
+  thread: SourceThread;
+  mode?: LarkHistoryImportMode;
+  since?: Date;
+  until?: Date;
+  analyzeMemory?: boolean;
+  maxAttempts?: number;
+  cardMessageId?: string;
+  requestedBy?: string;
+  now?: Date;
+}
+
+export interface ClaimLarkHistoryImportsOptions {
+  workerId: string;
+  limit?: number;
+  staleMs?: number;
+  now?: Date;
+}
+
+export interface ConfigureLarkHistoryImportInput {
+  mode: 'from_now' | 'history';
+  since?: Date;
+  until?: Date;
+  analyzeMemory?: boolean;
+  requestedBy?: string;
+  cardMessageId?: string;
+  now?: Date;
+}
+
+export interface UpdateLarkHistoryImportProgressInput {
+  cursor?: LarkHistoryImportCursor;
+  scannedMessages?: number;
+  importedMessages?: number;
+  duplicateMessages?: number;
+  ignoredMessages?: number;
+  discoveredThreads?: number;
+  analyzedThreads?: number;
+  proposalIds?: string[];
+  now?: Date;
+}
+
+export interface RetryLarkHistoryImportInput {
+  error: string;
+  retryDelayMs?: number;
+  now?: Date;
+}
+
+export interface ListLarkHistoryImportsOptions {
+  workspaceId?: string;
+  projectId?: string;
+  channelId?: string;
+  status?: LarkHistoryImportStatus;
+  limit?: number;
+}
+
 export interface RecordThreadContextSyncInput {
   thread: SourceThread;
   source: string;
@@ -937,6 +1054,7 @@ export interface FileDeliveryState {
   threadBindingAudit: ThreadBindingAuditRecord[];
   memoryWrapupJobs: MemoryWrapupJobRecord[];
   memoryWrapupCursors: MemoryWrapupCursorRecord[];
+  larkHistoryImportJobs: LarkHistoryImportJobRecord[];
   toolApprovals: ToolApprovalRecord[];
   dataLifecycleAudit: DataLifecycleAuditRecord[];
 }

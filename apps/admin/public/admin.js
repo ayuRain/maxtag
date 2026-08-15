@@ -9,6 +9,7 @@ const state = {
   health: null,
   capabilities: null,
   larkReadiness: null,
+  larkHistoryImports: null,
   larkConfig: null,
   executorConfig: null,
   mcpConnectors: null,
@@ -2124,6 +2125,192 @@ function renderLarkSetup() {
   $('#lark-test-result').textContent = readiness.checkedAt
     ? `${readiness.message || (ready ? '连接正常' : '仍有未完成项')} · ${formatTime(readiness.checkedAt, true)}`
     : '尚未验证';
+}
+
+function larkHistoryChannels() {
+  const channels = new Map();
+  for (const binding of state.bindings || []) {
+    if (binding.platform !== 'lark') continue;
+    const channelId = binding.channelId || (binding.scope === 'channel' ? binding.externalId : '');
+    if (!channelId) continue;
+    const current = channels.get(channelId);
+    const rank = (binding.scope === 'channel' ? 2 : 0) + (binding.source === 'configured' ? 1 : 0);
+    if (!current || rank > current.rank) {
+      channels.set(channelId, {
+        channelId,
+        title: binding.title || current?.title || channelId,
+        projectId: binding.projectId || current?.projectId || 'general',
+        rank,
+      });
+    }
+  }
+  return [...channels.values()].sort((a, b) => a.title.localeCompare(b.title));
+}
+
+function updateLarkHistoryRangeFields() {
+  const custom = $('#lark-history-range').value === 'custom';
+  for (const field of $$('.lark-history-custom')) field.hidden = !custom;
+  $('#lark-history-since').required = custom;
+  $('#lark-history-until').required = custom;
+}
+
+function larkHistoryRange() {
+  const range = $('#lark-history-range').value;
+  if (range === 'custom') {
+    const sinceText = $('#lark-history-since').value;
+    const untilText = $('#lark-history-until').value;
+    if (!sinceText || !untilText) throw new Error('请选择完整的开始和结束日期');
+    const since = new Date(`${sinceText}T00:00:00.000Z`);
+    const until = new Date(`${untilText}T23:59:59.999Z`);
+    if (since >= until) throw new Error('结束日期必须晚于开始日期');
+    return { since: since.toISOString(), until: until.toISOString() };
+  }
+  const days = Number(range || 90);
+  const until = new Date();
+  const since = new Date(until.getTime() - days * 24 * 60 * 60_000);
+  return { since: since.toISOString(), until: until.toISOString() };
+}
+
+function larkHistoryStatusLabel(status) {
+  return ({
+    awaiting_choice: '等待选择', pending: '等待导入', claimed: '正在导入',
+    completed: '已完成', failed: '失败', cancelled: '已取消',
+  })[status] || status;
+}
+
+function renderLarkHistoryImports() {
+  const form = $('#lark-history-form');
+  form.hidden = state.auth?.principal?.role === 'viewer';
+  const select = $('#lark-history-channel');
+  const selected = select.value;
+  const channels = larkHistoryChannels();
+  select.replaceChildren(...channels.map((channel) => {
+    const option = element('option', '', `${channel.title} · ${channel.projectId}`);
+    option.value = channel.channelId;
+    option.dataset.projectId = channel.projectId;
+    return option;
+  }));
+  if (channels.some((channel) => channel.channelId === selected)) select.value = selected;
+  const ready = state.capabilities?.larkTransport?.mode === 'http';
+  select.disabled = !channels.length || !ready;
+  $('#preview-lark-history').disabled = !channels.length || !ready;
+  $('#start-lark-history').disabled = !channels.length || !ready;
+  $('#lark-history-preview').textContent = !ready
+    ? '请先完成飞书消息连接。'
+    : !channels.length
+      ? '先把 MaxTag 拉进群并 @ 一次，群聊会自动出现在这里。'
+      : '先预览权限与数量；正式导入会在后台断点续传。';
+  updateLarkHistoryRangeFields();
+
+  const jobs = state.larkHistoryImports?.jobs || [];
+  const active = jobs.filter((job) => job.status === 'pending' || job.status === 'claimed').length;
+  const stateNode = $('#lark-history-state');
+  stateNode.className = `state-pill ${active ? 'running' : 'planned'}`;
+  stateNode.textContent = active ? `${active} 个进行中` : '可选';
+  const list = $('#lark-history-jobs');
+  list.replaceChildren();
+  if (!jobs.length) {
+    list.append(element('div', 'empty-state compact-empty', '尚未执行历史初始化'));
+    return;
+  }
+  for (const job of jobs.slice(0, 8)) {
+    const row = element('div', 'lark-history-job');
+    const identity = element('div');
+    identity.append(
+      element('strong', '', job.channelTitle || job.channelId),
+      element('small', '', `${job.projectId} · ${larkHistoryStatusLabel(job.status)}`),
+    );
+    const progress = element('div');
+    const since = Date.parse(job.since || job.createdAt);
+    const until = Date.parse(job.until || job.completedAt || job.updatedAt);
+    const cursor = Date.parse(job.cursor?.windowSince || job.completedAt || job.since || job.createdAt);
+    const percent = Number.isFinite(since) && Number.isFinite(until) && until > since
+      ? Math.max(0, Math.min(100, Math.round(((cursor - since) / (until - since)) * 100)))
+      : job.status === 'completed' ? 100 : 0;
+    const bar = element('div', 'lark-history-progress');
+    const fill = element('i');
+    fill.style.width = `${percent}%`;
+    bar.append(fill);
+    progress.append(
+      element('span', '', `扫描 ${job.scannedMessages} · 导入 ${job.importedMessages} · 待审核记忆 ${job.proposalIds?.length || 0}`),
+      bar,
+      element('small', '', job.lastError || `${percent}% · ${formatTime(job.updatedAt, true)}`),
+    );
+    const actions = element('div');
+    if (job.status === 'pending' || job.status === 'claimed' || job.status === 'awaiting_choice') {
+      const cancel = element('button', 'danger-text-button', '取消');
+      cancel.type = 'button';
+      cancel.addEventListener('click', () => void cancelLarkHistoryImport(job, cancel));
+      actions.append(cancel);
+    } else {
+      actions.append(statePill(job.status, larkHistoryStatusLabel(job.status)));
+    }
+    row.append(identity, progress, actions);
+    list.append(row);
+  }
+}
+
+async function previewLarkHistory(button = $('#preview-lark-history')) {
+  const option = $('#lark-history-channel').selectedOptions[0];
+  if (!option) return;
+  setButtonBusy(button, true, '正在预览', '预览数量');
+  try {
+    const range = larkHistoryRange();
+    const preview = await getJson('/v1/lark/history-imports/preview', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: currentWorkspaceId(), channelId: option.value,
+        projectId: option.dataset.projectId, ...range, maxMessages: 1000,
+      }),
+    });
+    $('#lark-history-preview').textContent = preview.truncated
+      ? `至少 ${preview.scannedMessages} 条消息、${preview.discoveredThreads} 个话题；数量较大，正式任务会分批导入。`
+      : `预计扫描 ${preview.scannedMessages} 条消息、${preview.discoveredThreads} 个话题。`;
+    if (preview.errors?.length) throw new Error(preview.errors[0].error);
+  } catch (error) {
+    $('#lark-history-preview').textContent = `预览失败：${error.message}`;
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '正在预览', '预览数量');
+  }
+}
+
+async function startLarkHistoryImport(event) {
+  event.preventDefault();
+  const button = $('#start-lark-history');
+  const option = $('#lark-history-channel').selectedOptions[0];
+  if (!option) return;
+  setButtonBusy(button, true, '正在创建', '后台导入');
+  try {
+    const range = larkHistoryRange();
+    await getJson('/v1/lark/history-imports', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: currentWorkspaceId(), channelId: option.value,
+        projectId: option.dataset.projectId, ...range,
+        analyzeMemory: $('#lark-history-analyze').checked,
+      }),
+    });
+    showToast('历史初始化已在后台开始，可离开此页面');
+    await refreshAll({ quiet: true });
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '正在创建', '后台导入');
+  }
+}
+
+async function cancelLarkHistoryImport(job, button) {
+  if (!window.confirm('取消这个历史导入任务？已导入的聊天档案和待审核记忆会保留。')) return;
+  setButtonBusy(button, true, '取消中', '取消');
+  try {
+    await getJson(`/v1/lark/history-imports/${encodeURIComponent(job.id)}/cancel`, { method: 'POST' });
+    await refreshAll({ quiet: true });
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '取消中', '取消');
+  }
 }
 
 function updateExecutorAuthFields() {
@@ -8249,6 +8436,7 @@ function renderAll() {
   fillProjectSelects();
   renderConnectorConsole();
   renderLarkSetup();
+  renderLarkHistoryImports();
   renderExecutorSetup();
   renderToolIdentities();
   renderOverviewRuns();
@@ -8297,6 +8485,7 @@ async function refreshAll({ quiet = false } = {}) {
       larkConfig,
       executorConfig,
       larkReadiness,
+      larkHistoryImports,
     ] =
       await Promise.all([
         getJson('/health'),
@@ -8327,6 +8516,7 @@ async function refreshAll({ quiet = false } = {}) {
           ? getJson('/v1/config/executor')
           : Promise.resolve(null),
         getJson('/v1/lark/readiness'),
+        getJson(`/v1/lark/history-imports?workspaceId=${workspaceId}`),
       ]);
     state.health = health;
     state.capabilities = capabilities;
@@ -8354,6 +8544,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.larkConfig = larkConfig;
     state.executorConfig = executorConfig;
     state.larkReadiness = larkReadiness;
+    state.larkHistoryImports = larkHistoryImports;
     const fallback = workspace.projects?.[0]?.projectId;
     state.selectedProjectId = projectById(state.selectedProjectId)?.projectId || fallback;
     state.selectedAccessProjectId =
@@ -8399,6 +8590,13 @@ $('#remove-executor-credentials').addEventListener('click', (event) =>
 );
 $('#executor-provider').addEventListener('change', renderExecutorSetup);
 $('#executor-auth-mode').addEventListener('change', updateExecutorAuthFields);
+$('#lark-history-range').addEventListener('change', updateLarkHistoryRangeFields);
+$('#lark-history-form').addEventListener('submit', (event) =>
+  void startLarkHistoryImport(event),
+);
+$('#preview-lark-history').addEventListener('click', (event) =>
+  void previewLarkHistory(event.currentTarget),
+);
 
 $('#assistant-project').addEventListener('change', (event) => {
   closeAssistantStream();

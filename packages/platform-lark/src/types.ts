@@ -8,6 +8,7 @@ export interface LarkDeliveryMetadata {
     | 'memory-proposal-card'
     | 'tool-approval-card'
     | 'thread-reply'
+    | 'onboarding-card'
     | 'routine-notification'
     | 'artifact';
   artifactId?: string;

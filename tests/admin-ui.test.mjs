@@ -65,6 +65,28 @@ test('admin presents Lark as a focused channel card with progressive disclosure'
   assert.match(server, /validateManagedLarkBotCredential/u);
 });
 
+test('admin initializes old Lark groups with previewed durable background imports', async () => {
+  const [html, script, styles, server] = await Promise.all([
+    fs.readFile('apps/admin/public/index.html', 'utf8'),
+    fs.readFile('apps/admin/public/admin.js', 'utf8'),
+    fs.readFile('apps/admin/public/admin.css', 'utf8'),
+    fs.readFile('apps/server/src/index.ts', 'utf8'),
+  ]);
+  assert.match(html, /老群历史初始化/u);
+  assert.match(html, /最近 30 天/u);
+  assert.match(html, /最近 90 天/u);
+  assert.match(html, /最近 180 天/u);
+  assert.match(html, /自动提炼候选记忆/u);
+  assert.match(script, /\/v1\/lark\/history-imports\/preview/u);
+  assert.match(script, /\/v1\/lark\/history-imports/u);
+  assert.match(script, /断点续传/u);
+  assert.match(styles, /\.lark-history-progress/u);
+  assert.match(server, /导入最近 30 天/u);
+  assert.match(server, /导入最近 90 天/u);
+  assert.match(server, /导入最近 180 天/u);
+  assert.match(server, /多个群可以共享同一个 Project 的记忆和 Skills/u);
+});
+
 test('admin configures a real local CLI executor with either CLI login or an encrypted API key', async () => {
   const [html, script, styles, server] = await Promise.all([
     fs.readFile('apps/admin/public/index.html', 'utf8'),

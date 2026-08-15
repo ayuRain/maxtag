@@ -57,6 +57,8 @@ export interface AnalyzeThreadMemoryInput {
   usageRecordKey?: string;
   afterCursor?: { at: string; entryId: string };
   transcriptOrder?: 'latest' | 'oldest';
+  /** Analyze this exact persisted thread even when it has no agent run yet. */
+  useProvidedThread?: boolean;
 }
 
 export interface MemoryAnalysisReport {
@@ -227,7 +229,9 @@ export class MemoryAnalysisService {
     };
   }
 
-  private async sourceRun(input: AnalyzeThreadMemoryInput): Promise<AgentRunRecord> {
+  private async sourceRun(
+    input: AnalyzeThreadMemoryInput,
+  ): Promise<AgentRunRecord | undefined> {
     if (input.runId) {
       const run = await this.options.deliveryStore.getAgentRun(input.runId);
       if (
@@ -251,11 +255,14 @@ export class MemoryAnalysisService {
         (!input.thread ||
           (candidate.thread.platform === input.thread.platform &&
             (candidate.thread.id === input.thread.id ||
-              (Boolean(input.thread.channelId) &&
+              (!input.useProvidedThread &&
+                Boolean(input.thread.channelId) &&
                 candidate.thread.channelId === input.thread.channelId) ||
               candidate.thread.externalId === input.thread.externalId))),
     );
-    if (!run?.thread) throw new Error('memory_analysis_source_run_not_found');
+    if (!run?.thread && !input.thread) {
+      throw new Error('memory_analysis_source_run_not_found');
+    }
     return run;
   }
 
@@ -263,20 +270,25 @@ export class MemoryAnalysisService {
     const startedAt = new Date().toISOString();
     const id = randomUUID();
     const sourceRun = await this.sourceRun(input);
-    const thread = sourceRun.thread!;
+    const thread = sourceRun?.thread ?? input.thread;
+    if (!thread) throw new Error('memory_analysis_source_thread_not_found');
+    const sourceRunId =
+      sourceRun?.id ?? input.usageRecordKey ?? `history-import:${id}`;
     const purpose = input.purpose ?? 'memory_analysis';
     const { executorId, executor, descriptor } = this.runner(purpose);
     if (!executor || !descriptor || descriptor.status !== 'ready') {
       throw new Error('memory_analysis_executor_not_ready');
     }
-    await this.options.deliveryStore.appendAgentRunEvent(
-      sourceRun.id,
-      'memory_analysis_started',
-      {
-        message: `Memory analysis started with ${descriptor.label}${descriptor.model ? ` / ${descriptor.model}` : ''}.`,
-        metadata: { analysisId: id, executor: descriptor },
-      },
-    );
+    if (sourceRun) {
+      await this.options.deliveryStore.appendAgentRunEvent(
+        sourceRun.id,
+        'memory_analysis_started',
+        {
+          message: `Memory analysis started with ${descriptor.label}${descriptor.model ? ` / ${descriptor.model}` : ''}.`,
+          metadata: { analysisId: id, executor: descriptor },
+        },
+      );
+    }
     try {
       const workspace = await this.options.threadConfigStore.getWorkspace?.(thread);
       const project = await this.options.threadConfigStore.getProject?.(
@@ -337,7 +349,7 @@ export class MemoryAnalysisService {
         transcript,
       });
       await this.options.deliveryStore.recordAgentRunUsage({
-        runId: sourceRun.id,
+        runId: sourceRunId,
         recordKey: input.usageRecordKey ?? `${purpose}:${id}`,
         purpose,
         thread,
@@ -486,25 +498,27 @@ export class MemoryAnalysisService {
         if (proposal.source === source) proposed.push(proposal);
       }
       const completedAt = new Date().toISOString();
-      await this.options.deliveryStore.appendAgentRunEvent(
-        sourceRun.id,
-        'memory_analysis_completed',
-        {
-          message: `Memory analysis queued ${proposed.length} proposal(s); ${skipped.length} decision(s) skipped.`,
-          metadata: {
-            analysisId: id,
-            proposalIds: proposed.map((proposal) => proposal.id),
-            decisions: decisions.length,
-            skipped: skipped.length,
-            transcriptEntries: transcript.entries.length,
-            transcriptOmittedEntries: transcript.omittedEntries,
+      if (sourceRun) {
+        await this.options.deliveryStore.appendAgentRunEvent(
+          sourceRun.id,
+          'memory_analysis_completed',
+          {
+            message: `Memory analysis queued ${proposed.length} proposal(s); ${skipped.length} decision(s) skipped.`,
+            metadata: {
+              analysisId: id,
+              proposalIds: proposed.map((proposal) => proposal.id),
+              decisions: decisions.length,
+              skipped: skipped.length,
+              transcriptEntries: transcript.entries.length,
+              transcriptOmittedEntries: transcript.omittedEntries,
+            },
           },
-        },
-      );
+        );
+      }
       return {
         id,
         status: 'completed',
-        sourceRunId: sourceRun.id,
+        sourceRunId,
         thread,
         executor: descriptor,
         transcript: {
@@ -522,15 +536,17 @@ export class MemoryAnalysisService {
         usage: result.usage,
       };
     } catch (error) {
-      await this.options.deliveryStore.appendAgentRunEvent(
-        sourceRun.id,
-        'memory_analysis_failed',
-        {
-          message:
-            error instanceof Error ? error.message : 'memory_analysis_failed',
-          metadata: { analysisId: id },
-        },
-      );
+      if (sourceRun) {
+        await this.options.deliveryStore.appendAgentRunEvent(
+          sourceRun.id,
+          'memory_analysis_failed',
+          {
+            message:
+              error instanceof Error ? error.message : 'memory_analysis_failed',
+            metadata: { analysisId: id },
+          },
+        );
+      }
       throw error;
     }
   }
@@ -542,7 +558,8 @@ export class MemoryAnalysisService {
     const startedAt = new Date().toISOString();
     const id = randomUUID();
     const sourceRun = await this.sourceRun(input);
-    const thread = sourceRun.thread!;
+    if (!sourceRun?.thread) throw new Error('memory_analysis_source_run_not_found');
+    const thread = sourceRun.thread;
     const { executorId, executor, descriptor } = this.runner('memory_query');
     if (!executor || !descriptor || descriptor.status !== 'ready') {
       throw new Error('memory_analysis_executor_not_ready');

@@ -70,6 +70,13 @@ import type {
   PruneMemoryWrapupsOptions,
   PruneMemoryWrapupsResult,
   RetryMemoryWrapupInput,
+  CreateLarkHistoryImportInput,
+  ClaimLarkHistoryImportsOptions,
+  ConfigureLarkHistoryImportInput,
+  UpdateLarkHistoryImportProgressInput,
+  RetryLarkHistoryImportInput,
+  ListLarkHistoryImportsOptions,
+  LarkHistoryImportJobRecord,
   ListThreadBindingAuditOptions,
   RemoveThreadBindingOptions,
   ThreadBinding,
@@ -123,12 +130,13 @@ const EMPTY_STATE: FileDeliveryState = {
   threadBindingAudit: [],
   memoryWrapupJobs: [],
   memoryWrapupCursors: [],
+  larkHistoryImportJobs: [],
   toolApprovals: [],
   dataLifecycleAudit: [],
 };
 
-const SOURCE_THREAD_CONTEXT_MAX_PER_THREAD = 200;
-const SOURCE_THREAD_CONTEXT_MAX_GLOBAL = 20_000;
+const SOURCE_THREAD_CONTEXT_MAX_PER_THREAD = 5_000;
+const SOURCE_THREAD_CONTEXT_MAX_GLOBAL = 100_000;
 const INBOUND_EVENT_MAX_RECORDS = 50_000;
 
 function now(): string {
@@ -179,6 +187,7 @@ export function createEmptyDeliveryState(): FileDeliveryState {
     threadBindingAudit: [],
     memoryWrapupJobs: [],
     memoryWrapupCursors: [],
+    larkHistoryImportJobs: [],
     toolApprovals: [],
     dataLifecycleAudit: [],
   };
@@ -223,6 +232,7 @@ export function normalizeDeliveryState(
     threadBindingAudit: parsed.threadBindingAudit ?? [],
     memoryWrapupJobs: parsed.memoryWrapupJobs ?? [],
     memoryWrapupCursors: parsed.memoryWrapupCursors ?? [],
+    larkHistoryImportJobs: parsed.larkHistoryImportJobs ?? [],
     toolApprovals: parsed.toolApprovals ?? [],
     dataLifecycleAudit: parsed.dataLifecycleAudit ?? [],
   };
@@ -394,6 +404,23 @@ function copyThreadContextSync(
   return {
     ...record,
     metadata: record.metadata ? { ...record.metadata } : undefined,
+  };
+}
+
+function copyLarkHistoryImport(
+  record: LarkHistoryImportJobRecord,
+): LarkHistoryImportJobRecord {
+  return {
+    ...record,
+    thread: structuredClone(record.thread),
+    cursor: record.cursor
+      ? {
+          windowSince: record.cursor.windowSince,
+          analysisWindowSince: record.cursor.analysisWindowSince,
+          analysis: structuredClone(record.cursor.analysis),
+        }
+      : undefined,
+    proposalIds: [...record.proposalIds],
   };
 }
 
@@ -3524,16 +3551,19 @@ export class FileDeliveryStore {
       record.recordedAt = recordedAt;
       record.metadata = input.metadata;
       if (!existing) state.usageRecords.push(record);
-      this.appendAgentRunEventInState(state, input.runId, 'usage_recorded', {
-        message: `Usage recorded: ${record.runs} run(s), $${record.costUsd.toFixed(4)}`,
-        metadata: {
-          period,
-          runs: record.runs,
-          costUsd: record.costUsd,
-          source: record.source,
-          purpose: record.purpose,
-        },
-      });
+      const hasRun = state.agentRuns.some((run) => run.id === input.runId);
+      if (hasRun) {
+        this.appendAgentRunEventInState(state, input.runId, 'usage_recorded', {
+          message: `Usage recorded: ${record.runs} run(s), $${record.costUsd.toFixed(4)}`,
+          metadata: {
+            period,
+            runs: record.runs,
+            costUsd: record.costUsd,
+            source: record.source,
+            purpose: record.purpose,
+          },
+        });
+      }
       const alerts = reconcileUsageAlertsInState(state, {
         runId: input.runId,
         thread: input.thread,
@@ -3542,6 +3572,7 @@ export class FileDeliveryStore {
         triggeredAt: recordedAt,
       });
       for (const alert of alerts) {
+        if (!hasRun) continue;
         this.appendAgentRunEventInState(state, input.runId, 'usage_threshold_alert', {
           message: `${alert.scope} ${alert.metric} usage reached ${alert.thresholdPercent}% of the monthly limit`,
           metadata: { ...alert },
@@ -4202,6 +4233,309 @@ export class FileDeliveryStore {
       },
     );
     return continuation;
+  }
+
+  async createLarkHistoryImport(
+    input: CreateLarkHistoryImportInput,
+  ): Promise<LarkHistoryImportJobRecord> {
+    return this.mutate((state) => {
+      const timestamp = (input.now ?? new Date()).toISOString();
+      const active = state.larkHistoryImportJobs.find(
+        (job) =>
+          job.workspaceId === input.workspaceId &&
+          job.channelId === input.channelId &&
+          (job.status === 'awaiting_choice' ||
+            job.status === 'pending' ||
+            job.status === 'claimed'),
+      );
+      if (active) return copyLarkHistoryImport(active);
+      const mode = input.mode ?? 'history';
+      if (
+        mode === 'history' &&
+        (!input.since ||
+          !input.until ||
+          input.since.getTime() >= input.until.getTime())
+      ) {
+        throw new Error('lark_history_import_bounded_range_required');
+      }
+      const completed = mode === 'from_now';
+      const job: LarkHistoryImportJobRecord = {
+        id: randomUUID(),
+        mode,
+        status:
+          mode === 'awaiting_choice'
+            ? 'awaiting_choice'
+            : completed
+              ? 'completed'
+              : 'pending',
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        channelId: input.channelId,
+        channelTitle: input.channelTitle,
+        thread: structuredClone(input.thread),
+        since: input.since?.toISOString(),
+        until: input.until?.toISOString(),
+        cursor: input.since
+          ? {
+              windowSince: input.since.toISOString(),
+              analysisWindowSince: input.since.toISOString(),
+              analysis: {},
+            }
+          : undefined,
+        analyzeMemory: input.analyzeMemory ?? true,
+        attempts: 0,
+        maxAttempts: Math.max(1, Math.min(input.maxAttempts ?? 5, 20)),
+        availableAt: timestamp,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: completed ? timestamp : undefined,
+        scannedMessages: 0,
+        importedMessages: 0,
+        duplicateMessages: 0,
+        ignoredMessages: 0,
+        discoveredThreads: 0,
+        analyzedThreads: 0,
+        proposalIds: [],
+        cardMessageId: input.cardMessageId,
+        requestedBy: input.requestedBy,
+      };
+      state.larkHistoryImportJobs.push(job);
+      if (state.larkHistoryImportJobs.length > 2_000) {
+        const terminal = state.larkHistoryImportJobs
+          .filter((item) =>
+            item.status === 'completed' ||
+            item.status === 'failed' ||
+            item.status === 'cancelled',
+          )
+          .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+        const remove = new Set(
+          terminal
+            .slice(0, Math.max(0, state.larkHistoryImportJobs.length - 2_000))
+            .map((item) => item.id),
+        );
+        state.larkHistoryImportJobs = state.larkHistoryImportJobs.filter(
+          (item) => !remove.has(item.id),
+        );
+      }
+      return copyLarkHistoryImport(job);
+    });
+  }
+
+  async configureLarkHistoryImport(
+    id: string,
+    input: ConfigureLarkHistoryImportInput,
+  ): Promise<LarkHistoryImportJobRecord | undefined> {
+    return this.mutate((state) => {
+      const job = state.larkHistoryImportJobs.find((item) => item.id === id);
+      if (!job) return undefined;
+      if (job.status !== 'awaiting_choice' && job.status !== 'failed') {
+        return copyLarkHistoryImport(job);
+      }
+      const timestamp = (input.now ?? new Date()).toISOString();
+      if (
+        input.mode === 'history' &&
+        (!input.since ||
+          !input.until ||
+          input.since.getTime() >= input.until.getTime())
+      ) {
+        throw new Error('lark_history_import_bounded_range_required');
+      }
+      job.mode = input.mode;
+      job.status = input.mode === 'from_now' ? 'completed' : 'pending';
+      job.since = input.since?.toISOString();
+      job.until = input.until?.toISOString();
+      job.cursor = input.since
+        ? {
+            windowSince: input.since.toISOString(),
+            analysisWindowSince: input.since.toISOString(),
+            analysis: {},
+          }
+        : undefined;
+      job.analyzeMemory = input.analyzeMemory ?? job.analyzeMemory;
+      job.requestedBy = input.requestedBy ?? job.requestedBy;
+      job.cardMessageId = input.cardMessageId ?? job.cardMessageId;
+      job.availableAt = timestamp;
+      job.updatedAt = timestamp;
+      job.completedAt = input.mode === 'from_now' ? timestamp : undefined;
+      job.failedAt = undefined;
+      job.lastError = undefined;
+      return copyLarkHistoryImport(job);
+    });
+  }
+
+  async claimLarkHistoryImports(
+    options: ClaimLarkHistoryImportsOptions,
+  ): Promise<LarkHistoryImportJobRecord[]> {
+    return this.mutate((state) => {
+      const current = options.now ?? new Date();
+      const timestamp = current.toISOString();
+      const staleBefore = new Date(
+        current.getTime() - Math.max(1_000, options.staleMs ?? 10 * 60_000),
+      ).toISOString();
+      for (const job of state.larkHistoryImportJobs) {
+        if (
+          job.status === 'claimed' &&
+          (job.claimedAt ?? job.updatedAt) <= staleBefore
+        ) {
+          job.status = 'pending';
+          job.claimedAt = undefined;
+          job.claimedBy = undefined;
+          job.availableAt = timestamp;
+          job.lastError = 'lark_history_import_stale_claim_recovered';
+          job.updatedAt = timestamp;
+        }
+      }
+      const limit = Math.max(1, Math.min(options.limit ?? 1, 10));
+      const claimed = state.larkHistoryImportJobs
+        .filter(
+          (job) => job.status === 'pending' && job.availableAt <= timestamp,
+        )
+        .sort(
+          (a, b) =>
+            a.availableAt.localeCompare(b.availableAt) ||
+            a.createdAt.localeCompare(b.createdAt),
+        )
+        .slice(0, limit);
+      for (const job of claimed) {
+        job.status = 'claimed';
+        job.attempts += 1;
+        job.claimedAt = timestamp;
+        job.claimedBy = options.workerId;
+        job.startedAt ??= timestamp;
+        job.updatedAt = timestamp;
+      }
+      return claimed.map(copyLarkHistoryImport);
+    });
+  }
+
+  async updateLarkHistoryImportProgress(
+    id: string,
+    input: UpdateLarkHistoryImportProgressInput,
+  ): Promise<LarkHistoryImportJobRecord | undefined> {
+    return this.mutate((state) => {
+      const job = state.larkHistoryImportJobs.find((item) => item.id === id);
+      if (!job || job.status !== 'claimed') return job ? copyLarkHistoryImport(job) : undefined;
+      const timestamp = (input.now ?? new Date()).toISOString();
+      if (input.cursor) job.cursor = structuredClone(input.cursor);
+      job.scannedMessages += Math.max(0, input.scannedMessages ?? 0);
+      job.importedMessages += Math.max(0, input.importedMessages ?? 0);
+      job.duplicateMessages += Math.max(0, input.duplicateMessages ?? 0);
+      job.ignoredMessages += Math.max(0, input.ignoredMessages ?? 0);
+      job.discoveredThreads += Math.max(0, input.discoveredThreads ?? 0);
+      job.analyzedThreads += Math.max(0, input.analyzedThreads ?? 0);
+      if (input.proposalIds?.length) {
+        job.proposalIds = [...new Set([...job.proposalIds, ...input.proposalIds])];
+      }
+      job.updatedAt = timestamp;
+      return copyLarkHistoryImport(job);
+    });
+  }
+
+  async releaseLarkHistoryImport(
+    id: string,
+    options?: { delayMs?: number; now?: Date },
+  ): Promise<LarkHistoryImportJobRecord | undefined> {
+    return this.mutate((state) => {
+      const job = state.larkHistoryImportJobs.find((item) => item.id === id);
+      if (!job || job.status !== 'claimed') return job ? copyLarkHistoryImport(job) : undefined;
+      const current = options?.now ?? new Date();
+      job.status = 'pending';
+      job.availableAt = new Date(
+        current.getTime() + Math.max(0, options?.delayMs ?? 0),
+      ).toISOString();
+      job.claimedAt = undefined;
+      job.claimedBy = undefined;
+      job.updatedAt = current.toISOString();
+      return copyLarkHistoryImport(job);
+    });
+  }
+
+  async completeLarkHistoryImport(
+    id: string,
+    options?: { now?: Date },
+  ): Promise<LarkHistoryImportJobRecord | undefined> {
+    return this.mutate((state) => {
+      const job = state.larkHistoryImportJobs.find((item) => item.id === id);
+      if (!job) return undefined;
+      if (job.status === 'cancelled') return copyLarkHistoryImport(job);
+      const timestamp = (options?.now ?? new Date()).toISOString();
+      job.status = 'completed';
+      job.completedAt = timestamp;
+      job.claimedAt = undefined;
+      job.claimedBy = undefined;
+      job.lastError = undefined;
+      job.updatedAt = timestamp;
+      return copyLarkHistoryImport(job);
+    });
+  }
+
+  async retryLarkHistoryImport(
+    id: string,
+    input: RetryLarkHistoryImportInput,
+  ): Promise<LarkHistoryImportJobRecord | undefined> {
+    return this.mutate((state) => {
+      const job = state.larkHistoryImportJobs.find((item) => item.id === id);
+      if (!job || job.status === 'cancelled' || job.status === 'completed') {
+        return job ? copyLarkHistoryImport(job) : undefined;
+      }
+      const current = input.now ?? new Date();
+      const terminal = job.attempts >= job.maxAttempts;
+      job.status = terminal ? 'failed' : 'pending';
+      job.availableAt = new Date(
+        current.getTime() + Math.max(0, input.retryDelayMs ?? 30_000),
+      ).toISOString();
+      job.failedAt = terminal ? current.toISOString() : undefined;
+      job.claimedAt = undefined;
+      job.claimedBy = undefined;
+      job.lastError = input.error;
+      job.updatedAt = current.toISOString();
+      return copyLarkHistoryImport(job);
+    });
+  }
+
+  async cancelLarkHistoryImport(
+    id: string,
+    reason = 'operator_cancelled',
+    nowValue = new Date(),
+  ): Promise<LarkHistoryImportJobRecord | undefined> {
+    return this.mutate((state) => {
+      const job = state.larkHistoryImportJobs.find((item) => item.id === id);
+      if (!job) return undefined;
+      if (job.status === 'completed' || job.status === 'cancelled') {
+        return copyLarkHistoryImport(job);
+      }
+      const timestamp = nowValue.toISOString();
+      job.status = 'cancelled';
+      job.cancelledAt = timestamp;
+      job.claimedAt = undefined;
+      job.claimedBy = undefined;
+      job.lastError = reason;
+      job.updatedAt = timestamp;
+      return copyLarkHistoryImport(job);
+    });
+  }
+
+  async getLarkHistoryImport(
+    id: string,
+  ): Promise<LarkHistoryImportJobRecord | undefined> {
+    const state = await this.readState();
+    const job = state.larkHistoryImportJobs.find((item) => item.id === id);
+    return job ? copyLarkHistoryImport(job) : undefined;
+  }
+
+  async listLarkHistoryImports(
+    options: ListLarkHistoryImportsOptions = {},
+  ): Promise<LarkHistoryImportJobRecord[]> {
+    const state = await this.readState();
+    const limit = Math.max(1, Math.min(options.limit ?? 100, 1_000));
+    return state.larkHistoryImportJobs
+      .filter((job) => !options.workspaceId || job.workspaceId === options.workspaceId)
+      .filter((job) => !options.projectId || job.projectId === options.projectId)
+      .filter((job) => !options.channelId || job.channelId === options.channelId)
+      .filter((job) => !options.status || job.status === options.status)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, limit)
+      .map(copyLarkHistoryImport);
   }
 
   private appendAgentRunEventInState(
