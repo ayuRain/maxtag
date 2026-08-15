@@ -135,6 +135,49 @@ test('old-group history import is durable, archive-only, and restart resumable',
   assert.doesNotMatch(JSON.stringify([...main, ...topicMessages]), /bot claim/u);
 });
 
+test('history import follows the selected Project even when an older channel binding remains', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'maxtag-history-route-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new FileDeliveryStore(root);
+  await store.configureThreadBinding({
+    platform: 'lark', externalId: 'oc_history', scope: 'channel', source: 'configured',
+    channelId: 'oc_history', workspaceId: 'workspace-1', projectId: 'project-old',
+  });
+  const transport = new MemoryLarkTransport();
+  transport.historyMessages.push({
+    message_id: 'om_selected_project', chat_id: 'oc_history', msg_type: 'text',
+    create_time: String(Date.parse('2026-08-14T00:10:00.000Z')),
+    sender: { id: 'ou_member', sender_type: 'user' },
+    body: { content: JSON.stringify({ text: 'This belongs to the newly selected project.' }) },
+  });
+  const selectedThread = { ...mainThread(), projectId: 'project-new' };
+  await store.createLarkHistoryImport({
+    workspaceId: 'workspace-1', projectId: 'project-new', channelId: 'oc_history',
+    thread: selectedThread, mode: 'history',
+    since: new Date('2026-08-14T00:00:00.000Z'),
+    until: new Date('2026-08-15T00:00:00.000Z'),
+    analyzeMemory: false,
+  });
+  const service = new LarkHistoryImportService({
+    deliveryStore: store,
+    memoryAnalysisService: { status: () => ({ enabled: false }) },
+    transport: () => transport,
+    workerId: 'history-route-worker',
+    intervalWindowMs: 24 * 60 * 60_000,
+    windowsPerPass: 1,
+  });
+  const pass = await service.runPass();
+  assert.equal(pass.completed, 1);
+  assert.deepEqual(
+    (await store.listSourceThreadMessages({ thread: selectedThread })).map((item) => item.message.id),
+    ['om_selected_project'],
+  );
+  assert.deepEqual(
+    await store.listSourceThreadMessages({ thread: { ...selectedThread, projectId: 'project-old' } }),
+    [],
+  );
+});
+
 test('first-use choice can complete from-now or activate a bounded import', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'maxtag-history-choice-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));

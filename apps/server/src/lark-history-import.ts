@@ -59,7 +59,18 @@ function channelBindings(
       (binding.channelId === job.channelId ||
         (binding.scope === 'channel' && binding.externalId === job.channelId)),
   );
-  if (scoped.length) return scoped;
+  if (scoped.length) {
+    return scoped.map((binding) => ({
+      ...binding,
+      workspaceId: job.workspaceId,
+      projectId: job.projectId,
+      metadata: {
+        ...binding.metadata,
+        historyImportJobId: job.id,
+        historyImportRouteOverride: true,
+      },
+    }));
+  }
   return [
     {
       id: `lark:${job.channelId}`,
