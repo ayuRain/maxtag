@@ -658,6 +658,21 @@ h3 {
   font-size: 10px;
   line-height: 1.5;
 }
+.lark-callback-config {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.lark-callback-config summary { cursor: pointer; font-size: 12px; font-weight: 700; }
+.lark-callback-config > p,
+.lark-callback-config > small { color: var(--muted); font-size: 10px; line-height: 1.55; }
+.lark-callback-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin: 12px 0 8px;
+}
+.lark-callback-url-field { grid-column: 1 / -1; }
 .lark-readiness-list { border-top: 1px solid var(--line); }
 .lark-readiness-row {
   min-height: 52px;
@@ -4979,6 +4994,8 @@ pre {
   .lark-credential-form { grid-template-columns: 1fr; }
   .lark-credential-actions,
   .lark-credential-form > small { grid-column: 1; }
+  .lark-callback-fields { grid-template-columns: 1fr; }
+  .lark-callback-url-field { grid-column: 1; }
   .lark-channel-actions { align-items: flex-start; }
   .lark-readiness-row {
     grid-template-columns: 22px minmax(0, 1fr) auto;

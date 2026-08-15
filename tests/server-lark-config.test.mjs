@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import http from 'node:http';
@@ -143,6 +144,8 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
     body: JSON.stringify({
       appId: 'cli_platform_managed',
       appSecret: 'platform-managed-secret-value',
+      verificationToken: 'platform-managed-verification-token',
+      encryptKey: 'platform-managed-encrypt-key',
       domain: 'feishu',
       expectedRevision: 0,
     }),
@@ -150,9 +153,13 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   assert.equal(save.status, 200);
   const savedText = await save.text();
   assert.equal(savedText.includes('platform-managed-secret-value'), false);
+  assert.equal(savedText.includes('platform-managed-verification-token'), false);
+  assert.equal(savedText.includes('platform-managed-encrypt-key'), false);
   const saved = JSON.parse(savedText);
   assert.equal(saved.config.configured, true);
   assert.equal(saved.config.revision, 1);
+  assert.equal(saved.config.verificationTokenConfigured, true);
+  assert.equal(saved.config.encryptionKeyConfigured, true);
   assert.equal(saved.reloadPending, true);
   assert.equal(requests.length, 1);
   assert.match(requests[0].url, /tenant_access_token\/internal/u);
@@ -160,6 +167,8 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   const persisted = await fs.readFile(path.join(dataDir, 'lark-bot.enc.json'), 'utf8');
   assert.equal(persisted.includes('cli_platform_managed'), false);
   assert.equal(persisted.includes('platform-managed-secret-value'), false);
+  assert.equal(persisted.includes('platform-managed-verification-token'), false);
+  assert.equal(persisted.includes('platform-managed-encrypt-key'), false);
 
   await stopServer(running.child);
   running = await startServer(
@@ -170,6 +179,8 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   assert.equal(running.health.clients.lark.mode, 'http');
   assert.equal(running.health.clients.lark.hasCredentials, true);
   assert.equal(running.health.clients.lark.credentialSource, 'managed');
+  assert.equal(running.health.clients.lark.verificationTokenConfigured, true);
+  assert.equal(running.health.clients.lark.encryptionKeyConfigured, true);
 
   const read = await fetch(`${running.baseUrl}/v1/config/lark`, {
     headers: { authorization: `Bearer ${ownerToken}` },
@@ -177,6 +188,8 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   assert.equal(read.status, 200);
   const readText = await read.text();
   assert.equal(readText.includes('platform-managed-secret-value'), false);
+  assert.equal(readText.includes('platform-managed-verification-token'), false);
+  assert.equal(readText.includes('platform-managed-encrypt-key'), false);
   assert.equal(JSON.parse(readText).config.appId, 'cli_platform_managed');
 
   const project = await fetch(`${running.baseUrl}/v1/projects`, {
@@ -285,24 +298,46 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   ).then((response) => response.json());
   assert.equal(repeatRuns.runs.length, 0);
 
-  const selectProject = await fetch(`${running.baseUrl}/v1/lark/card-actions`, {
+  const callbackBody = JSON.stringify({
+    schema: '2.0',
+    header: {
+      event_id: 'onboarding-select-project-1',
+      event_type: 'card.action.trigger',
+      token: 'platform-managed-verification-token',
+      tenant_key: 'dev-workspace',
+    },
+    event: {
+      operator: { open_id: 'ou-onboarding-owner', tenant_key: 'dev-workspace' },
+      action: {
+        tag: 'button',
+        value: {
+          action: 'maxtag.history.select_project',
+          project_id: 'second-project',
+        },
+      },
+      context: {
+        open_message_id: 'om_onboarding_card',
+        open_chat_id: 'oc_onboarding',
+      },
+      host: 'im_message',
+    },
+  });
+  const callbackTimestamp = String(Math.floor(Date.now() / 1000));
+  const callbackNonce = 'managed-callback-nonce';
+  const callbackSignature = createHash('sha256')
+    .update(
+      `${callbackTimestamp}${callbackNonce}platform-managed-encrypt-key${callbackBody}`,
+    )
+    .digest('hex');
+  const selectProject = await fetch(`${running.baseUrl}/v1/lark/events`, {
     method: 'POST',
     headers: {
-      authorization: 'Bearer managed-lark-client-ingress-token',
       'content-type': 'application/json',
+      'x-lark-request-timestamp': callbackTimestamp,
+      'x-lark-request-nonce': callbackNonce,
+      'x-lark-signature': callbackSignature,
     },
-    body: JSON.stringify({
-      type: 'card.action.trigger',
-      event_id: 'onboarding-select-project-1',
-      operator_id: 'ou-onboarding-owner',
-      message_id: 'om_onboarding_card',
-      chat_id: 'oc_onboarding',
-      action_tag: 'button',
-      action_value: JSON.stringify({
-        action: 'maxtag.history.select_project',
-        project_id: 'second-project',
-      }),
-    }),
+    body: callbackBody,
   });
   assert.equal(selectProject.status, 200);
   const projectAction = await selectProject.json();

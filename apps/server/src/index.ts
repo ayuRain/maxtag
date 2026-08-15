@@ -262,8 +262,11 @@ const larkAppSecret =
 const larkDomain = managedLarkBotCredential?.domain ||
   larkDomainValue(process.env.OPENTAG_LARK_DOMAIN);
 const larkBaseUrl = process.env.OPENTAG_LARK_BASE_URL;
-const larkVerificationToken = process.env.OPENTAG_LARK_VERIFICATION_TOKEN;
-const larkEncryptKey = process.env.OPENTAG_LARK_ENCRYPT_KEY;
+const larkVerificationToken =
+  managedLarkBotCredential?.verificationToken ||
+  process.env.OPENTAG_LARK_VERIFICATION_TOKEN;
+const larkEncryptKey =
+  managedLarkBotCredential?.encryptKey || process.env.OPENTAG_LARK_ENCRYPT_KEY;
 const larkEventMode = larkEventModeValue(process.env.OPENTAG_LARK_EVENT_MODE);
 const larkCallbackMaxSkewSeconds = Number(
   process.env.OPENTAG_LARK_CALLBACK_MAX_SKEW_SECONDS || 300,
@@ -1803,10 +1806,13 @@ async function larkReadinessSnapshot(): Promise<Record<string, unknown>> {
   const ingressReady = transport.eventMode === 'long-connection'
     ? bridgeReady
     : transport.verificationTokenConfigured || transport.encryptionKeyConfigured;
+  const cardActionsReady =
+    transport.verificationTokenConfigured || transport.encryptionKeyConfigured;
   const ready =
     transport.mode === 'http' &&
     transport.hasCredentials &&
     ingressReady &&
+    cardActionsReady &&
     executorReady &&
     transport.onboardingMode === 'add-bot-and-mention';
   return {
@@ -1814,9 +1820,10 @@ async function larkReadinessSnapshot(): Promise<Record<string, unknown>> {
     checkedAt: new Date().toISOString(),
     message: ready
       ? '飞书接入已就绪'
-      : '请完成应用凭据、消息连接和真实执行器配置',
+      : '请完成应用凭据、消息连接、卡片回调和真实执行器配置',
     credentialsReady: transport.hasCredentials && transport.mode === 'http',
     ingressReady,
+    cardActionsReady,
     executorReady,
     onboardingReady: transport.onboardingMode === 'add-bot-and-mention',
     eventMode: transport.eventMode,
@@ -10691,6 +10698,15 @@ const server = createServer(async (request, response) => {
       const providedSecret =
         typeof body.appSecret === 'string' ? body.appSecret.trim() : '';
       const appSecret = providedSecret || current?.appSecret;
+      const providedVerificationToken =
+        typeof body.verificationToken === 'string'
+          ? body.verificationToken.trim()
+          : '';
+      const verificationToken =
+        providedVerificationToken || current?.verificationToken;
+      const providedEncryptKey =
+        typeof body.encryptKey === 'string' ? body.encryptKey.trim() : '';
+      const encryptKey = providedEncryptKey || current?.encryptKey;
       const domainValue = stringValue(body, 'domain', current?.domain || 'feishu');
       const expectedRevision = numberValue(body, 'expectedRevision');
       if (!appId || !appSecret) {
@@ -10719,6 +10735,8 @@ const server = createServer(async (request, response) => {
           appId,
           appSecret,
           domain: domainValue,
+          verificationToken,
+          encryptKey,
           expectedRevision,
           actor: operatorActor(operatorAuthentication!),
         });
@@ -10728,7 +10746,9 @@ const server = createServer(async (request, response) => {
           {
             config,
             reloadPending: true,
-            message: '飞书凭据验证成功，连接服务正在重新加载',
+            message: verificationToken || encryptKey
+              ? '飞书凭据与卡片回调配置已保存，连接服务正在重新加载'
+              : '飞书凭据已保存；请继续配置卡片回调后再使用交互卡片',
           },
           { 'cache-control': 'no-store' },
         );
@@ -16370,8 +16390,8 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'POST' && url.pathname === '/v1/lark/events') {
-      if (larkEventMode !== 'webhook') {
-        sendJson(response, 404, { error: 'lark_webhook_disabled' });
+      if (!larkVerificationToken && !larkEncryptKey) {
+        sendJson(response, 503, { error: 'lark_card_callback_not_configured' });
         return;
       }
       const rawBody = await readTextBody(request, larkCallbackMaxBytes);
@@ -16432,6 +16452,18 @@ const server = createServer(async (request, response) => {
       if (typeof body.challenge === 'string') {
         await deliveryStore.markInboundEventProcessed(inbound.record.id);
         sendJson(response, 200, { challenge: body.challenge });
+        return;
+      }
+      if (larkEventMode !== 'webhook' && eventType !== 'card.action.trigger') {
+        await deliveryStore.markInboundEventIgnored(
+          inbound.record.id,
+          'lark_message_webhook_disabled',
+        );
+        sendJson(response, 200, {
+          accepted: true,
+          ignored: true,
+          reason: 'lark_message_webhook_disabled',
+        });
         return;
       }
       if (eventType === 'card.action.trigger') {

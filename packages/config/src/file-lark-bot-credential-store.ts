@@ -13,6 +13,8 @@ export interface ManagedLarkBotCredential {
   appId: string;
   appSecret: string;
   domain: ManagedLarkDomain;
+  verificationToken?: string;
+  encryptKey?: string;
   updatedAt: string;
   updatedBy: string;
 }
@@ -22,6 +24,8 @@ export interface ManagedLarkBotCredentialSummary {
   revision: number;
   appId?: string;
   domain: ManagedLarkDomain;
+  verificationTokenConfigured: boolean;
+  encryptionKeyConfigured: boolean;
   updatedAt?: string;
   updatedBy?: string;
 }
@@ -65,6 +69,19 @@ function normalizeAppSecret(value: string): string {
   return appSecret;
 }
 
+function normalizeOptionalCallbackSecret(
+  value: string | undefined,
+  errorCode: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const secret = value.trim();
+  if (!secret) return undefined;
+  if (secret.length > 512 || /[\0\r\n]/u.test(secret)) {
+    throw new Error(errorCode);
+  }
+  return secret;
+}
+
 function normalizeDomain(value: string | undefined): ManagedLarkDomain {
   if (!value || value === 'feishu') return 'feishu';
   if (value === 'lark') return 'lark';
@@ -95,6 +112,14 @@ function normalizeCredential(value: unknown): ManagedLarkBotCredential {
     appId: normalizeAppId(item.appId),
     appSecret: normalizeAppSecret(item.appSecret),
     domain: normalizeDomain(item.domain),
+    verificationToken: normalizeOptionalCallbackSecret(
+      item.verificationToken,
+      'lark_bot_invalid_verification_token',
+    ),
+    encryptKey: normalizeOptionalCallbackSecret(
+      item.encryptKey,
+      'lark_bot_invalid_encrypt_key',
+    ),
     updatedAt: new Date(item.updatedAt).toISOString(),
     updatedBy,
   };
@@ -109,10 +134,18 @@ function summary(
         revision: credential.revision,
         appId: credential.appId,
         domain: credential.domain,
+        verificationTokenConfigured: Boolean(credential.verificationToken),
+        encryptionKeyConfigured: Boolean(credential.encryptKey),
         updatedAt: credential.updatedAt,
         updatedBy: credential.updatedBy,
       }
-    : { configured: false, revision: 0, domain: 'feishu' };
+    : {
+        configured: false,
+        revision: 0,
+        domain: 'feishu',
+        verificationTokenConfigured: false,
+        encryptionKeyConfigured: false,
+      };
 }
 
 export class FileLarkBotCredentialStore {
@@ -216,6 +249,8 @@ export class FileLarkBotCredentialStore {
     appId: string;
     appSecret: string;
     domain?: ManagedLarkDomain;
+    verificationToken?: string;
+    encryptKey?: string;
     expectedRevision?: number;
     actor: string;
   }): Promise<ManagedLarkBotCredentialSummary> {
@@ -234,6 +269,8 @@ export class FileLarkBotCredentialStore {
         appId: input.appId,
         appSecret: input.appSecret,
         domain: input.domain,
+        verificationToken: input.verificationToken,
+        encryptKey: input.encryptKey,
         updatedAt: new Date().toISOString(),
         updatedBy: input.actor,
       });

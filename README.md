@@ -1271,14 +1271,17 @@ OPENTAG_LARK_ENCRYPT_KEY=xxx
 Use `OPENTAG_LARK_DOMAIN=lark` for `open.larksuite.com`, or
 `OPENTAG_LARK_BASE_URL=https://...` for a custom OpenAPI host.
 
-For Feishu/Lark, the preferred production ingress is the platform long
-connection event channel. It does not require a public callback URL. The
+For Feishu/Lark, the preferred production message ingress is the platform long
+connection event channel. Message delivery does not require a public callback URL. The
 supervised `opentag-lark-bridge` service consumes events as the app bot and
-posts them to the loopback MaxTag server. Set
-`OPENTAG_LARK_EVENT_MODE=webhook` only for deployments that want HTTP callbacks;
-otherwise `/v1/lark/events` remains disabled. Webhook mode refuses to start
-without a Verification Token or Encrypt Key. Register
-`https://your-host/v1/lark/events` as the event callback. When an
+posts them to the loopback MaxTag server. Interactive-card actions still use
+Feishu's authenticated HTTP callback: register
+`https://your-host/v1/lark/events` as the card callback and save its Verification
+Token and Encrypt Key in the Connectors console. In long-connection mode this
+endpoint accepts URL verification and card actions only; message callbacks are
+acknowledged and ignored to prevent duplicate runs. Set
+`OPENTAG_LARK_EVENT_MODE=webhook` only when HTTP should carry message events too.
+Webhook mode refuses to start without a Verification Token or Encrypt Key. When an
 Encrypt Key is configured, MaxTag verifies
 `X-Lark-Signature` against the untouched request body before decrypting it.
 Encrypted URL-verification challenges without signature headers are accepted
@@ -1332,7 +1335,8 @@ The bridge consumes `im.message.receive_v1` with `lark-cli event consume --as bo
 and posts normalized source-thread events to `/v1/client/events`, so message
 testing does not need a public HTTPS callback. Lark long connections carry event
 subscriptions only; interactive-card callbacks use the separately authenticated
-`/v1/lark/card-actions` webhook endpoint. In supervised
+public `/v1/lark/events` endpoint. `/v1/lark/card-actions` remains an internal,
+Bearer-authenticated normalized-event bridge for trusted adapters. In supervised
 deployments set `OPENTAG_SERVER_URL=http://127.0.0.1:3077`,
 `OPENTAG_LARK_BRIDGE_EVENT_KEYS=im.message.receive_v1`, and
 `OPENTAG_LARK_BRIDGE_OBSERVABILITY_PORT=3080`. When

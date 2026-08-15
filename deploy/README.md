@@ -67,12 +67,14 @@ systemd state directory, and an optional writable `/srv/opentag/workspaces`.
 Adjust the paths or hardening only when the executor genuinely needs another
 host resource.
 
-Expose port `3077` only through a TLS reverse proxy when HTTP callbacks or the
-operator console need external access. Long-connection Lark ingress can keep all
-event flow on loopback. The server refuses a non-loopback bind when operator
+Expose port `3077` only through a TLS reverse proxy for the operator console and
+authenticated interactive-card callback at `/v1/lark/events`. Long-connection
+message ingress stays on loopback. The server refuses a non-loopback bind when operator
 authentication is disabled. Set `OPENTAG_LARK_EVENT_MODE=webhook` and configure
-a Verification Token or Encrypt Key before routing Lark callbacks to
-`/v1/lark/events`; the endpoint is disabled in long-connection mode.
+a Verification Token or Encrypt Key when HTTP should also carry message events.
+In the preferred long-connection mode, save those callback secrets in the
+Connectors console; `/v1/lark/events` then accepts URL verification and card
+actions but never queues duplicate message callbacks.
 keep `3078`, `3079`, and `3080` loopback-only. Production deployments should
 configure random operator, session, ingress, callback, and metrics credentials
 before startup.

@@ -2061,11 +2061,20 @@ function renderLarkSetup() {
     $('#lark-app-id').value = managed?.appId || '';
     $('#lark-app-secret').value = '';
     $('#lark-domain').value = managed?.domain || 'feishu';
+    $('#lark-verification-token').value = '';
+    $('#lark-encrypt-key').value = '';
   }
+  $('#lark-callback-url').value = `${window.location.origin}/v1/lark/events`;
   $('#lark-app-secret').required = !managed?.configured;
   $('#lark-app-secret').placeholder = managed?.configured
     ? '已加密保存；留空保持不变'
     : '输入 App Secret';
+  $('#lark-verification-token').placeholder = managed?.verificationTokenConfigured
+    ? '已加密保存；留空保持不变'
+    : '粘贴飞书 Verification Token';
+  $('#lark-encrypt-key').placeholder = managed?.encryptionKeyConfigured
+    ? '已加密保存；留空保持不变'
+    : '粘贴飞书 Encrypt Key';
   $('#remove-lark-credentials').hidden = !managed?.configured;
   $('#lark-credential-hint').textContent = managed?.configured
     ? `已加密保存 · 版本 ${managed.revision} · ${formatTime(managed.updatedAt, true)}；修改后连接服务会自动重载。`
@@ -2082,6 +2091,13 @@ function renderLarkSetup() {
       label: '消息连接',
       description: '群聊和私聊消息能够进入 MaxTag',
       ready: Boolean(readiness.ingressReady),
+    },
+    {
+      label: '卡片交互',
+      description: readiness.cardActionsReady
+        ? '按钮与输入框回调已通过平台密钥保护'
+        : '请配置回调地址、Verification Token 或 Encrypt Key',
+      ready: Boolean(readiness.cardActionsReady),
     },
     {
       label: '真实执行器',
@@ -2421,12 +2437,16 @@ async function saveLarkCredentials(event) {
       body: JSON.stringify({
         appId: $('#lark-app-id').value.trim(),
         appSecret: $('#lark-app-secret').value,
+        verificationToken: $('#lark-verification-token').value,
+        encryptKey: $('#lark-encrypt-key').value,
         domain: $('#lark-domain').value,
         expectedRevision: current?.revision || 0,
       }),
     });
     state.larkConfig = { config: result.config, active: state.larkConfig?.active };
     $('#lark-app-secret').value = '';
+    $('#lark-verification-token').value = '';
+    $('#lark-encrypt-key').value = '';
     renderLarkSetup();
     showToast(result.message || '凭据已保存，正在连接飞书');
     await new Promise((resolve) => setTimeout(resolve, 4_000));

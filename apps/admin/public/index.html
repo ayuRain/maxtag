@@ -944,6 +944,25 @@
                     <option value="lark">Lark（国际版）</option>
                   </select>
                 </label>
+                <details class="lark-callback-config" open>
+                  <summary>卡片交互回调（必填）</summary>
+                  <p>在飞书开放平台的「事件与回调 → 回调配置」中填写下面的地址，并把同页的 Verification Token / Encrypt Key 保存到这里。群内选 Project、创建 Project 等按钮才能生效。</p>
+                  <div class="lark-callback-fields">
+                    <label class="field lark-callback-url-field">
+                      <span>请求地址</span>
+                      <input id="lark-callback-url" readonly />
+                    </label>
+                    <label class="field">
+                      <span>Verification Token</span>
+                      <input id="lark-verification-token" type="password" autocomplete="new-password" placeholder="已保存时留空可保持不变" />
+                    </label>
+                    <label class="field">
+                      <span>Encrypt Key</span>
+                      <input id="lark-encrypt-key" type="password" autocomplete="new-password" placeholder="已保存时留空可保持不变" />
+                    </label>
+                  </div>
+                  <small>至少配置 Verification Token 或 Encrypt Key；推荐两项都配置。密钥只会加密保存在服务端，不会在页面回显。</small>
+                </details>
                 <div class="lark-credential-actions">
                   <button class="primary-button" id="save-lark-credentials" type="submit">保存并连接</button>
                   <button class="danger-text-button" id="remove-lark-credentials" type="button" hidden>停用 Bot</button>
