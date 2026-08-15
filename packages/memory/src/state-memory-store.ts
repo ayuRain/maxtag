@@ -1382,6 +1382,7 @@ export abstract class StateMemoryStore implements MemoryStore {
         (item) => item.key === proposal.documentKey,
       );
       if (
+        proposal.action !== 'remember' &&
         proposal.expectedDocumentVersion !== undefined &&
         (current?.version ?? 0) !== proposal.expectedDocumentVersion
       ) {

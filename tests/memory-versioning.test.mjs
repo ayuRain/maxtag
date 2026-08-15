@@ -454,6 +454,46 @@ test('memory replace proposals merge atomically and reject stale versions', asyn
   );
 });
 
+test('remember proposals from the same analysis can be approved sequentially', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-memory-remember-batch-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new ScopedFileMemoryStore(root);
+  const project = query('workspace-a', 'project-a');
+  const before = await store.getMemoryHistory({ ...project, scope: 'project' });
+
+  const first = await store.proposeMemory({
+    ...project,
+    scope: 'project',
+    action: 'remember',
+    value: 'The production database is Postgres.',
+    expectedDocumentVersion: before.document?.version ?? 0,
+    actorId: 'memory-runner:codex',
+  });
+  const second = await store.proposeMemory({
+    ...project,
+    scope: 'project',
+    action: 'remember',
+    value: 'Database backups are retained for 30 days.',
+    expectedDocumentVersion: before.document?.version ?? 0,
+    actorId: 'memory-runner:codex',
+  });
+
+  await store.approveMemoryProposal({
+    id: first.id,
+    actorId: 'operator:owner',
+  });
+  const approved = await store.approveMemoryProposal({
+    id: second.id,
+    actorId: 'operator:owner',
+  });
+  assert.equal(approved.status, 'approved');
+
+  const after = await store.getMemoryHistory({ ...project, scope: 'project' });
+  assert.match(after.document.content, /production database is Postgres/u);
+  assert.match(after.document.content, /backups are retained for 30 days/u);
+  assert.equal(after.document.version, (before.document?.version ?? 0) + 2);
+});
+
 test('memory merge proposals collapse multiple approved facts in one atomic revision', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-memory-merge-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));
