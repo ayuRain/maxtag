@@ -656,6 +656,66 @@ test('Lark adapter mirrors AgentDock OnIt acknowledgement lifecycle', async () =
   assert.deepEqual(memory.reactions, []);
 });
 
+test('transient Lark progress timeouts do not fail work or replay stale card state', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-progress-timeout-'));
+  try {
+    class FlakyUpdateTransport extends MemoryLarkTransport {
+      failNextUpdate = true;
+
+      async updateCard(input) {
+        if (this.failNextUpdate) {
+          this.failNextUpdate = false;
+          throw new Error('Lark API request failed with HTTP 504.');
+        }
+        return super.updateCard(input);
+      }
+    }
+
+    const store = new FileDeliveryStore(root);
+    const memory = new FlakyUpdateTransport();
+    const adapter = new LarkPlatformAdapter(
+      new TrackedLarkTransport(memory, store),
+    );
+    const thread = {
+      id: 'lark:chat-timeout:main',
+      platform: 'lark',
+      externalId: 'chat-timeout:main',
+      workspaceId: 'acme',
+      projectId: 'payments',
+      channelId: 'chat-timeout',
+      visibility: 'private',
+    };
+    const progress = adapter.createProgressSurface(thread);
+    const initial = {
+      runId: 'run-progress-timeout',
+      title: 'Working on MaxTag',
+      status: 'running',
+      checklist: [{ id: 'work', label: 'Run Codex', status: 'running' }],
+      updatedAt: new Date().toISOString(),
+    };
+    const { surfaceId } = await progress.create(initial);
+
+    await progress.update(surfaceId, initial);
+    await progress.update(surfaceId, {
+      ...initial,
+      checklist: [{ id: 'work', label: 'Run Codex', status: 'done' }],
+    });
+
+    const updates = (await store.listOutbox({
+      runId: initial.runId,
+      limit: 20,
+    }))
+      .filter((item) => item.kind === 'lark.card.update')
+      .sort((left, right) => left.sequence - right.sequence);
+    assert.equal(updates.length, 2);
+    assert.equal(updates[0].status, 'cancelled');
+    assert.equal(updates[0].lastError, 'superseded_by_newer_card_update');
+    assert.equal(updates[1].status, 'delivered');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('successful Lark runs remove the transient progress card after the reply is delivered', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-progress-'));
   try {

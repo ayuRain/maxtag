@@ -40,15 +40,21 @@ class LarkProgressSurface implements ProgressSurface {
   }
 
   async update(surfaceId: string, state: ProgressState): Promise<void> {
-    await this.transport.updateCard({
-      cardId: surfaceId,
-      card: buildLarkProgressCard(state) as unknown as Record<string, unknown>,
-      metadata: {
-        runId: state.runId,
-        thread: this.thread,
-        stage: 'progress-card',
-      },
-    });
+    try {
+      await this.transport.updateCard({
+        cardId: surfaceId,
+        card: buildLarkProgressCard(state) as unknown as Record<string, unknown>,
+        metadata: {
+          runId: state.runId,
+          thread: this.thread,
+          stage: 'progress-card',
+        },
+      });
+    } catch {
+      // Progress is replaceable UI state. Tracked transport keeps the newest
+      // failed update in the durable outbox; a transient Lark timeout must not
+      // abort the executor or prevent the final reply.
+    }
   }
 
   async complete(surfaceId: string, state: ProgressState): Promise<void> {

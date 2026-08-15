@@ -1234,6 +1234,31 @@ export class FileDeliveryStore {
   async enqueue(input: CreateOutboundInput): Promise<OutboundEnvelope> {
     return this.mutate((state) => {
       const timestamp = now();
+      // Card updates are replaceable state snapshots, not append-only events.
+      // If a transient API error left an older snapshot queued, retrying it
+      // after a newer snapshot would move the visible card backwards. Keep
+      // only the newest pending update for an exact card target.
+      if (input.kind === 'lark.card.update' && input.target.cardId) {
+        for (const previous of state.outbox) {
+          if (
+            previous.kind !== input.kind ||
+            previous.target.platform !== input.target.platform ||
+            previous.target.cardId !== input.target.cardId ||
+            previous.status !== 'pending'
+          ) {
+            continue;
+          }
+          previous.status = 'cancelled';
+          previous.lastError = 'superseded_by_newer_card_update';
+          previous.updatedAt = timestamp;
+          this.updateTurnDelivery(
+            state,
+            previous.id,
+            'cancelled',
+            previous.lastError,
+          );
+        }
+      }
       const envelope: OutboundEnvelope = {
         id: randomUUID(),
         sequence: state.nextSequence,
