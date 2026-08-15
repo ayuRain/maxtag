@@ -72,6 +72,7 @@ export interface LarkIncomingEvent {
     action?: {
       tag?: string;
       value?: unknown;
+      input_value?: string;
       option?: string;
       name?: string;
     };
@@ -141,6 +142,7 @@ export interface LarkCardAction {
   proposalId?: string;
   approvalId?: string;
   projectId?: string;
+  inputValue?: string;
   actorId: string;
   cardMessageId: string;
   chatId: string;

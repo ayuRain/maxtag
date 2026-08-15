@@ -1419,7 +1419,9 @@ the disconnect backfill above. On the first group invocation MaxTag posts a
 one-time card with **Start now** and **Import the last 30/90/180 days**. The
 first mention is reserved for onboarding and does not also enqueue an Agent
 run. The card shows the group's current Project binding and lets an authorized
-workspace/project administrator change it before choosing a history range;
+workspace/project administrator change it before choosing a history range. A
+workspace owner or administrator can also enter a new Project name directly in
+the card; MaxTag creates an inherited Project policy and binds the group to it;
 each group makes its own range choice, while any number of groups may share the
 same Project memory, assigned Skills, and agent policy. The same flow is available in Console → Connectors →
 Lark with a custom date range and bounded preview. Historical messages are archived directly as

@@ -6482,6 +6482,7 @@ const MAXTAG_HISTORY_IMPORT_30_ACTION = 'maxtag.history.import_30_days';
 const MAXTAG_HISTORY_IMPORT_90_ACTION = 'maxtag.history.import_90_days';
 const MAXTAG_HISTORY_IMPORT_180_ACTION = 'maxtag.history.import_180_days';
 const MAXTAG_HISTORY_SELECT_PROJECT_ACTION = 'maxtag.history.select_project';
+const MAXTAG_HISTORY_CREATE_PROJECT_ACTION = 'maxtag.history.create_project';
 
 const MAXTAG_HISTORY_ACTION_DAYS = new Map<string, number>([
   [MAXTAG_HISTORY_IMPORT_30_ACTION, 30],
@@ -6551,6 +6552,19 @@ function buildLarkHistoryOnboardingCard(input?: {
         });
       }
     }
+    elements.push({
+      tag: 'input',
+      element_id: 'new_project_name',
+      width: 'fill',
+      max_length: 80,
+      input_type: 'text',
+      label: larkPlainText('新建 Project（输入名称后点击右侧发送）'),
+      placeholder: larkPlainText('例如：移动端重构'),
+      behaviors: [{
+        type: 'callback',
+        value: { action: MAXTAG_HISTORY_CREATE_PROJECT_ACTION },
+      }],
+    });
     elements.push({
       tag: 'markdown',
       content: '**再选择这个群从什么时候开始积累上下文**',
@@ -6650,6 +6664,58 @@ function buildLarkHistoryOnboardingCard(input?: {
     },
     body: { direction: 'vertical', padding: '12px 16px 14px 16px', elements },
   };
+}
+
+function larkProjectIdForName(
+  name: string,
+  existingProjectIds: Set<string>,
+): string {
+  const base = name
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 54);
+  let candidate = base || `project-${randomUUID().slice(0, 8)}`;
+  while (existingProjectIds.has(candidate)) {
+    candidate = `${base || 'project'}-${randomUUID().slice(0, 8)}`.slice(0, 63);
+  }
+  return candidate;
+}
+
+async function bindLarkHistoryOnboardingProject(
+  job: LarkHistoryImportJobRecord,
+  action: LarkCardAction,
+  projectId: string,
+): Promise<LarkHistoryImportJobRecord | undefined> {
+  const currentBinding = await deliveryStore.getThreadBindingForThread({
+    platform: 'lark',
+    externalId: job.channelId,
+    channelId: job.channelId,
+  });
+  await deliveryStore.configureThreadBinding({
+    platform: 'lark',
+    externalId: job.channelId,
+    scope: 'channel',
+    source: 'configured',
+    channelId: job.channelId,
+    workspaceId: job.workspaceId,
+    projectId,
+    title: job.channelTitle,
+    activationMode: currentBinding?.activationMode ?? 'mention',
+    requireMention: currentBinding?.requireMention ?? true,
+    actor: `lark:${action.actorId}`,
+    reason: 'lark_history_onboarding_project_selected',
+    metadata: {
+      ...currentBinding?.metadata,
+      historyImportJobId: job.id,
+      configuredBy: `lark:${action.actorId}`,
+    },
+  });
+  return deliveryStore.updateLarkHistoryImportOnboarding(job.id, {
+    projectId,
+    cardMessageId: action.cardMessageId,
+  });
 }
 
 async function larkHistoryProjectOptions(
@@ -6764,34 +6830,11 @@ async function handleLarkHistoryOnboardingAction(
     if (!maySelectTarget) {
       return larkCardActionResponse('error', '你没有管理目标 Project 的权限。');
     }
-    const currentBinding = await deliveryStore.getThreadBindingForThread({
-      platform: 'lark',
-      externalId: job.channelId,
-      channelId: job.channelId,
-    });
-    await deliveryStore.configureThreadBinding({
-      platform: 'lark',
-      externalId: job.channelId,
-      scope: 'channel',
-      source: 'configured',
-      channelId: job.channelId,
-      workspaceId: job.workspaceId,
-      projectId: target.projectId,
-      title: job.channelTitle,
-      activationMode: currentBinding?.activationMode ?? 'mention',
-      requireMention: currentBinding?.requireMention ?? true,
-      actor: `lark:${action.actorId}`,
-      reason: 'lark_history_onboarding_project_selected',
-      metadata: {
-        ...currentBinding?.metadata,
-        historyImportJobId: job.id,
-        configuredBy: `lark:${action.actorId}`,
-      },
-    });
-    const updated = await deliveryStore.updateLarkHistoryImportOnboarding(job.id, {
-      projectId: target.projectId,
-      cardMessageId: action.cardMessageId,
-    });
+    const updated = await bindLarkHistoryOnboardingProject(
+      job,
+      action,
+      target.projectId,
+    );
     if (!updated || updated.status !== 'awaiting_choice') {
       return larkCardActionResponse('warning', '群聊接入状态已变化，请刷新后重试。');
     }
@@ -6823,6 +6866,91 @@ async function handleLarkHistoryOnboardingAction(
       },
     });
     return larkCardActionResponse('success', `已切换到 Project：${target.name}。`);
+  }
+  if (action.action === MAXTAG_HISTORY_CREATE_PROJECT_ACTION) {
+    const mayCreateProject =
+      authorization.allowed &&
+      (!managedMembership ||
+        authorization.member?.role === 'owner' ||
+        authorization.member?.role === 'admin');
+    if (!mayCreateProject) {
+      return larkCardActionResponse('error', '请由公司 Owner 或管理员新建 Project。');
+    }
+    const projectName = (action.inputValue || '')
+      .normalize('NFKC')
+      .replace(/\s+/gu, ' ')
+      .trim();
+    if (!projectName) {
+      return larkCardActionResponse('warning', '请输入 Project 名称。');
+    }
+    if (
+      Array.from(projectName).length > 80 ||
+      /[\u0000-\u001f\u007f]/u.test(projectName)
+    ) {
+      return larkCardActionResponse('error', 'Project 名称需为 1–80 个可见字符。');
+    }
+    const projects = await threadConfigStore.listProjectPolicies(job.workspaceId);
+    const duplicate = projects.find(
+      (project) =>
+        project.name.normalize('NFKC').toLocaleLowerCase() ===
+        projectName.toLocaleLowerCase(),
+    );
+    if (duplicate) {
+      return larkCardActionResponse('warning', `Project「${duplicate.name}」已存在，请直接选择。`);
+    }
+    const projectId = larkProjectIdForName(
+      projectName,
+      new Set(projects.map((project) => project.projectId)),
+    );
+    const created = await threadConfigStore.upsertProjectPolicy({
+      workspaceId: job.workspaceId,
+      projectId,
+      name: projectName,
+      agentMode: 'inherit',
+      capabilityMode: 'inherit',
+      memoryMode: 'workspace',
+      actor: `lark:${action.actorId}`,
+    });
+    const updated = await bindLarkHistoryOnboardingProject(
+      job,
+      action,
+      created.projectId,
+    );
+    if (!updated || updated.status !== 'awaiting_choice') {
+      return larkCardActionResponse('warning', 'Project 已创建，但群聊接入状态已变化。');
+    }
+    const transport = new TrackedLarkTransport(
+      createLarkTransportForRun().transport,
+      deliveryStore,
+    );
+    await transport.updateCard({
+      cardId: action.cardMessageId,
+      card: buildLarkHistoryOnboardingCard({
+        projectId: updated.projectId,
+        channelTitle: updated.channelTitle,
+        projects: await larkHistoryProjectOptions(
+          updated.workspaceId,
+          updated.projectId,
+        ),
+      }),
+      metadata: { thread: updated.thread, stage: 'onboarding-card' },
+    }).catch(() => undefined);
+    await deliveryStore.markInboundEventProcessed(inboundEventId, {
+      workspaceId: updated.workspaceId,
+      projectId: updated.projectId,
+      threadId: updated.thread.id,
+      messageId: action.cardMessageId,
+      metadata: {
+        control: 'lark_history_project_created',
+        actorId: action.actorId,
+        historyImportJobId: updated.id,
+        createdProjectId: created.projectId,
+      },
+    });
+    return larkCardActionResponse(
+      'success',
+      `已创建并绑定 Project：${created.name}。`,
+    );
   }
   const historyDays = MAXTAG_HISTORY_ACTION_DAYS.get(action.action);
   const history = typeof historyDays === 'number';
@@ -6901,6 +7029,7 @@ async function handleLarkCardAction(
     action &&
     (action.action === MAXTAG_HISTORY_FROM_NOW_ACTION ||
       action.action === MAXTAG_HISTORY_SELECT_PROJECT_ACTION ||
+      action.action === MAXTAG_HISTORY_CREATE_PROJECT_ACTION ||
       MAXTAG_HISTORY_ACTION_DAYS.has(action.action))
   ) {
     return handleLarkHistoryOnboardingAction(action, inboundEventId);

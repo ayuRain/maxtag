@@ -232,6 +232,8 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   );
   assert.ok(cardRequest);
   assert.match(cardRequest.body, /maxtag\.history\.select_project/u);
+  assert.match(cardRequest.body, /maxtag\.history\.create_project/u);
+  assert.match(cardRequest.body, /new_project_name/u);
   assert.match(cardRequest.body, /second-project/u);
 
   const runs = await fetch(
@@ -274,6 +276,44 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
       (request) =>
         request.url === '/open-apis/im/v1/messages/om_onboarding_card' &&
         request.body.includes('Second project'),
+    ),
+  );
+
+  const createProject = await fetch(`${running.baseUrl}/v1/lark/card-actions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer managed-lark-client-ingress-token',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'card.action.trigger',
+      event_id: 'onboarding-create-project-1',
+      operator_id: 'ou-onboarding-owner',
+      message_id: 'om_onboarding_card',
+      chat_id: 'oc_onboarding',
+      action_tag: 'input',
+      action_value: JSON.stringify({
+        action: 'maxtag.history.create_project',
+      }),
+      input_value: 'Mobile Rebuild',
+    }),
+  });
+  assert.equal(createProject.status, 200);
+  const createAction = await createProject.json();
+  assert.equal(createAction.toast.type, 'success');
+  assert.match(createAction.toast.content, /Mobile Rebuild/u);
+
+  const createdImports = await fetch(
+    `${running.baseUrl}/v1/lark/history-imports?workspaceId=dev-workspace`,
+    { headers: { authorization: `Bearer ${ownerToken}` } },
+  ).then((response) => response.json());
+  assert.equal(createdImports.jobs[0].status, 'awaiting_choice');
+  assert.equal(createdImports.jobs[0].projectId, 'mobile-rebuild');
+  assert.ok(
+    requests.some(
+      (request) =>
+        request.url === '/open-apis/im/v1/messages/om_onboarding_card' &&
+        request.body.includes('Mobile Rebuild'),
     ),
   );
 });

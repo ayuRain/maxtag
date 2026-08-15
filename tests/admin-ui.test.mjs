@@ -86,6 +86,8 @@ test('admin initializes old Lark groups with previewed durable background import
   assert.match(server, /导入最近 180 天/u);
   assert.match(server, /多个群可以共享同一个 Project 的记忆和 Skills/u);
   assert.match(server, /maxtag\.history\.select_project/u);
+  assert.match(server, /maxtag\.history\.create_project/u);
+  assert.match(server, /新建 Project/u);
   assert.match(server, /lark_history_onboarding_required/u);
 });
 

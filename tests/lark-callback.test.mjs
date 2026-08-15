@@ -336,6 +336,37 @@ test('Lark onboarding card actions preserve the selected Project', () => {
   assert.equal(flat.projectId, 'project-2');
 });
 
+test('Lark onboarding input actions preserve the new Project name', () => {
+  const v2 = normalizeLarkCardAction({
+    schema: '2.0',
+    header: { event_type: 'card.action.trigger' },
+    event: {
+      operator: { open_id: 'ou-owner' },
+      action: {
+        tag: 'input',
+        input_value: '移动端重构',
+        value: { action: 'maxtag.history.create_project' },
+      },
+      context: {
+        open_message_id: 'om-onboarding',
+        open_chat_id: 'oc-group',
+      },
+    },
+  });
+  assert.equal(v2.inputValue, '移动端重构');
+
+  const flat = normalizeFlatLarkCardAction({
+    type: 'card.action.trigger',
+    operator_id: 'ou-owner',
+    message_id: 'om-onboarding',
+    chat_id: 'oc-group',
+    action_tag: 'input',
+    action_value: JSON.stringify({ action: 'maxtag.history.create_project' }),
+    input_value: '移动端重构',
+  });
+  assert.equal(flat.inputValue, '移动端重构');
+});
+
 test('Lark memory proposal card actions normalize the proposal receipt scope', () => {
   const v2 = normalizeLarkCardAction({
     schema: '2.0',

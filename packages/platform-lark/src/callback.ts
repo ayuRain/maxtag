@@ -315,12 +315,17 @@ export function normalizeLarkCardAction(
     typeof record.approval_id === 'string' ? record.approval_id.trim() : '';
   const projectId =
     typeof record.project_id === 'string' ? record.project_id.trim() : '';
+  const inputValue =
+    typeof event.action?.input_value === 'string'
+      ? event.action.input_value.trim()
+      : '';
   return {
     action,
     runId: runId || undefined,
     ...(proposalId ? { proposalId } : {}),
     ...(approvalId ? { approvalId } : {}),
     ...(projectId ? { projectId } : {}),
+    ...(inputValue ? { inputValue } : {}),
     actorId,
     cardMessageId,
     chatId,
@@ -369,12 +374,14 @@ export function normalizeFlatLarkCardAction(
     typeof record?.approval_id === 'string' ? record.approval_id.trim() : '';
   const projectId =
     typeof record?.project_id === 'string' ? record.project_id.trim() : '';
+  const inputValue = flatString(body, 'input_value') || '';
   return {
     action,
     runId: runId || undefined,
     ...(proposalId ? { proposalId } : {}),
     ...(approvalId ? { approvalId } : {}),
     ...(projectId ? { projectId } : {}),
+    ...(inputValue ? { inputValue } : {}),
     actorId,
     cardMessageId,
     chatId,
