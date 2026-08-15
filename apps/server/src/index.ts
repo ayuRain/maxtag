@@ -1158,17 +1158,7 @@ const larkHistoryImportService = new LarkHistoryImportService({
     }
   },
   botOpenId,
-  onStatus: async (job) => {
-    if (!job.cardMessageId) return;
-    await larkResourceTransport().updateCard({
-      cardId: job.cardMessageId,
-      card: buildLarkHistoryImportStatusCard(job),
-      metadata: {
-        thread: job.thread,
-        stage: 'onboarding-card',
-      },
-    });
-  },
+  onStatus: updateLarkHistoryImportStatusCard,
   onTerminal: async (job) => {
     if (job.cardMessageId) return;
     const platform = createPlatformForRun(job.thread).platform;
@@ -6775,6 +6765,29 @@ function buildLarkHistoryImportStatusCard(
     },
     body: { direction: 'vertical', padding: '12px 16px 14px 16px', elements },
   };
+}
+
+async function updateLarkHistoryImportStatusCard(
+  job: LarkHistoryImportJobRecord,
+): Promise<void> {
+  if (!job.cardMessageId) return;
+  await larkResourceTransport().updateCard({
+    cardId: job.cardMessageId,
+    card: buildLarkHistoryImportStatusCard(job),
+    metadata: { thread: job.thread, stage: 'onboarding-card' },
+  });
+}
+
+async function refreshActiveLarkHistoryImportStatusCards(): Promise<void> {
+  const jobs = await deliveryStore.listLarkHistoryImports({ limit: 500 });
+  await Promise.allSettled(
+    jobs
+      .filter((job) =>
+        Boolean(job.cardMessageId) &&
+        (job.status === 'pending' || job.status === 'claimed'),
+      )
+      .map((job) => updateLarkHistoryImportStatusCard(job)),
+  );
 }
 
 function larkProjectIdForName(
@@ -16916,6 +16929,9 @@ server.listen(port, host, () => {
   if (larkHistoryImportService.enabled) {
     void refreshLarkHistoryOnboardingCards().catch((error) => {
       console.error('MaxTag Lark onboarding card startup refresh failed', error);
+    });
+    void refreshActiveLarkHistoryImportStatusCards().catch((error) => {
+      console.error('MaxTag Lark history status card startup refresh failed', error);
     });
     void larkHistoryImportService.runPass().catch((error) => {
       console.error('MaxTag Lark history import startup pass failed', error);
