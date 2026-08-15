@@ -70,7 +70,12 @@ test(
 import fs from 'node:fs/promises';
 for await (const _chunk of process.stdin) {}
 await fs.writeFile('result.txt', 'durable artifact\\n');
-const text = ['Finished artifact run.', 'OPENTAG_ARTIFACT: {"path":"result.txt","title":"Durable result","kind":"report"}'].join('\\n');
+await fs.writeFile('live-report.html', '<!doctype html><title>Live report</title><h1>Healthy</h1>');
+const text = [
+  'Finished artifact run.',
+  'OPENTAG_ARTIFACT: {"path":"result.txt","title":"Durable result","kind":"report"}',
+  'OPENTAG_ARTIFACT: {"path":"live-report.html","title":"Live report","kind":"report","reportKey":"live-health"}',
+].join('\\n');
 console.log(JSON.stringify({ type: 'thread.started', thread_id: 'server-artifact-session' }));
 console.log(JSON.stringify({ type: 'item.completed', item: { id: 'message', type: 'agent_message', text } }));
 console.log(JSON.stringify({ type: 'turn.completed' }));
@@ -91,6 +96,7 @@ console.log(JSON.stringify({ type: 'turn.completed' }));
         OPENTAG_CLIENT_INGRESS_TOKEN: ingressToken,
         OPENTAG_EXECUTOR_MODE: 'local-cli',
         OPENTAG_EXECUTOR_WORKSPACE_ROOT: workspaceRoot,
+        OPENTAG_HOSTED_REPORT_BASE_URL: `http://127.0.0.1:${port}`,
         OPENTAG_CODEX_COMMAND: fakeCli,
         OPENTAG_AGENT_WORKER: 'inline',
         OPENTAG_ROUTINES_ENABLED: 'false',
@@ -142,24 +148,78 @@ console.log(JSON.stringify({ type: 'turn.completed' }));
     const detail = await waitForArtifact(baseUrl, queued.run.id, adminToken);
 
     assert.equal(detail.run.summary, 'Finished artifact run.');
-    assert.equal(detail.artifacts.length, 1);
-    assert.equal(detail.artifacts[0].title, 'Durable result');
-    assert.equal(detail.artifacts[0].path, undefined);
-    assert.match(detail.artifacts[0].downloadUrl, /\/artifacts\//u);
+    assert.equal(detail.artifacts.length, 2);
+    const durableArtifact = detail.artifacts.find(
+      (artifact) => artifact.title === 'Durable result',
+    );
+    const liveReport = detail.artifacts.find(
+      (artifact) => artifact.title === 'Live report',
+    );
+    assert.equal(durableArtifact.path, undefined);
+    assert.match(durableArtifact.downloadUrl, /\/artifacts\//u);
+    const liveReportUrl = new URL(liveReport.url);
+    assert.equal(liveReportUrl.origin, baseUrl);
+    assert.match(liveReportUrl.pathname, /^\/r\/[0-9a-f]{32}$/u);
+    assert.equal(liveReport.metadata.hostedReportRevision, 1);
     assert.ok(detail.events.some((event) => event.type === 'artifact'));
 
-    const anonymous = await fetch(`${baseUrl}${detail.artifacts[0].downloadUrl}`);
+    const anonymous = await fetch(`${baseUrl}${durableArtifact.downloadUrl}`);
     assert.equal(anonymous.status, 401);
-    const download = await fetch(`${baseUrl}${detail.artifacts[0].downloadUrl}`, {
+    const download = await fetch(`${baseUrl}${durableArtifact.downloadUrl}`, {
       headers: { authorization: `Bearer ${adminToken}` },
     });
     assert.equal(download.status, 200);
     assert.equal(await download.text(), 'durable artifact\n');
     assert.match(download.headers.get('content-disposition') || '', /filename\*/u);
 
+    const hosted = await fetch(liveReport.url);
+    assert.equal(hosted.status, 200);
+    assert.equal(hosted.headers.get('x-maxtag-report-revision'), '1');
+    assert.match(hosted.headers.get('content-security-policy') || '', /connect-src 'none'/u);
+    assert.match(await hosted.text(), /<h1>Healthy<\/h1>/u);
+
+    const revised = await fetch(`${baseUrl}/v1/client/events`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${ingressToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        platform: 'custom-chat',
+        eventId: 'artifact-event-2',
+        thread: {
+          externalId: 'artifact-room',
+          channelId: 'artifact-room',
+          workspaceId: 'dev-workspace',
+          projectId: 'opentag',
+          visibility: 'public',
+        },
+        message: {
+          id: 'artifact-message-2',
+          text: '/opentag refresh the report',
+          actor: { id: 'artifact-user' },
+          mentionsAgent: true,
+        },
+      }),
+    });
+    assert.equal(revised.status, 202);
+    const revisedRun = await revised.json();
+    const revisedDetail = await waitForArtifact(
+      baseUrl,
+      revisedRun.run.id,
+      adminToken,
+    );
+    const revisedReport = revisedDetail.artifacts.find(
+      (artifact) => artifact.title === 'Live report',
+    );
+    assert.equal(revisedReport.url, liveReport.url);
+    assert.equal(revisedReport.metadata.hostedReportRevision, 2);
+    const hostedRevision = await fetch(revisedReport.url);
+    assert.equal(hostedRevision.headers.get('x-maxtag-report-revision'), '2');
+
     const artifactEvent = detail.events.find((event) => event.type === 'artifact');
     await fs.writeFile(artifactEvent.metadata.artifact.path, 'tampered');
-    const tampered = await fetch(`${baseUrl}${detail.artifacts[0].downloadUrl}`, {
+    const tampered = await fetch(`${baseUrl}${durableArtifact.downloadUrl}`, {
       headers: { authorization: `Bearer ${adminToken}` },
     });
     assert.equal(tampered.status, 404);

@@ -15,6 +15,7 @@
     "@opentag/core": "0.1.0",
     "@opentag/delivery": "0.1.0",
     "@opentag/executor-claude": "0.1.0",
+    "@opentag/executor-cli": "0.1.0",
     "@opentag/executor-codex": "0.1.0",
     "@opentag/memory": "0.1.0",
     "@opentag/platform-github": "0.1.0",

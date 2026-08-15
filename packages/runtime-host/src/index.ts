@@ -195,6 +195,7 @@ export interface RuntimeHostExecutorConfig {
   transcriptMaxEntries?: number;
   transcriptMaxChars?: number;
   artifactRoot?: string;
+  hostedReportBaseUrl?: string;
   maxArtifactBytes?: number;
   maxArtifacts?: number;
   defaultExecutorId?: 'codex' | 'claude';
@@ -214,6 +215,7 @@ export function createDefaultExecutorRegistry(
     inheritEnv: config.inheritEnv,
     sessionMode: config.sessionMode,
     artifactRoot: config.artifactRoot,
+    hostedReportBaseUrl: config.hostedReportBaseUrl,
     maxArtifactBytes: config.maxArtifactBytes,
     maxArtifacts: config.maxArtifacts,
     toolSessions,
@@ -1318,6 +1320,7 @@ export class OpenTagWorkerHost {
       artifactRoot: path.resolve(
         config.artifactRoot || path.join(this.config.dataDir, 'artifacts'),
       ),
+      hostedReportBaseUrl: config.hostedReportBaseUrl,
       maxArtifactBytes: config.maxArtifactBytes ?? 30 * 1024 * 1024,
       maxArtifacts: config.maxArtifacts ?? 10,
       defaultExecutorId: this.executorRegistry.defaultExecutorId,

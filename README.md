@@ -206,9 +206,10 @@ acceptance backlog.
 
 - Instruction-level resumable checkpoints when a provider turn itself cannot
   be resumed.
-- Hosted interactive reports. First-class PR/link artifact declarations are
-  implemented locally with public-HTTPS validation, durable run evidence, and
-  client-native link delivery; hosted report rendering remains.
+- Hosted interactive reports are implemented with project-scoped,
+  unguessable stable URLs, atomic revisions, hash validation, a network-blocking
+  CSP, and client-native link delivery. Production rendering and same-URL
+  refresh are covered by the server artifact acceptance test.
 - GitHub App installation-token exchange is implemented locally for comment
   delivery and brokered tools, with short-lived cached tokens and automatic
   refresh. Live App installation proof remains.
@@ -965,6 +966,7 @@ OPENTAG_EXECUTOR_MODE=local-cli
 OPENTAG_EXECUTOR_WORKSPACE_ROOT=/srv/opentag/workspaces
 OPENTAG_EXECUTOR_TIMEOUT_MS=1200000
 OPENTAG_ARTIFACT_ROOT=/srv/opentag/data/artifacts
+OPENTAG_HOSTED_REPORT_BASE_URL=https://maxtag.example.com
 OPENTAG_MAX_ARTIFACT_BYTES=31457280
 OPENTAG_MAX_ARTIFACTS=10
 OPENTAG_EXECUTOR_SESSION_MODE=provider
@@ -1147,6 +1149,20 @@ same artifact root for file artifacts (the default is
 `<OPENTAG_DATA_DIR>/artifacts`). Activity never turns an arbitrary host path
 into a download; it serves only managed, hash-matching file artifacts to an
 authorized operator.
+
+For a self-contained HTML report that should keep one link while later runs
+refresh its content, the CLI declares a stable, project-local `reportKey`:
+
+```text
+OPENTAG_ARTIFACT: {"path":"reports/release-health.html","title":"Release health","kind":"report","reportKey":"release-health"}
+```
+
+MaxTag publishes it at `/r/<unguessable-token>`. Reusing the same `reportKey`
+inside the same workspace and Project atomically advances the revision without
+changing the URL; another Project receives a different URL. Hosted HTML is
+served with no storage or operator credential in the URL, `no-store`, strict
+MIME checks, and a CSP that blocks network requests while permitting inline
+scripts and styles for local interaction.
 
 Provider session continuity is enabled by default. MaxTag records the Codex
 thread id or Claude session id against the platform/workspace/project/thread and

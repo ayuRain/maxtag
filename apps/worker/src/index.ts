@@ -220,6 +220,9 @@ async function main(): Promise<void> {
         'OPENTAG_THREAD_CONTEXT_MAX_CHARS',
       ),
       artifactRoot: process.env.OPENTAG_ARTIFACT_ROOT,
+      hostedReportBaseUrl:
+        process.env.OPENTAG_HOSTED_REPORT_BASE_URL ||
+        process.env.OPENTAG_PUBLIC_BASE_URL,
       maxArtifactBytes: optionalNumberEnv('OPENTAG_MAX_ARTIFACT_BYTES'),
       maxArtifacts: optionalNumberEnv('OPENTAG_MAX_ARTIFACTS'),
       defaultExecutorId: managedExecutor?.defaultExecutorId,

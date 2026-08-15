@@ -29,6 +29,7 @@ export interface CliExecutorOptions {
   inheritEnv?: string[];
   environment?: Record<string, string>;
   artifactRoot?: string;
+  hostedReportBaseUrl?: string;
   maxArtifactBytes?: number;
   maxArtifacts?: number;
   toolSessions?: CliToolSessionFactory;
@@ -672,7 +673,9 @@ export function artifactInstructions(enabled: boolean): string {
     'OPENTAG_ARTIFACT: {"path":"relative/path.ext","title":"Human title","kind":"file"}',
     'For each external reference, use:',
     'OPENTAG_ARTIFACT: {"url":"https://example.com/item","title":"Human title","kind":"link"}',
-    'The path must be relative to the current project directory. File kinds are file, report, chart, and patch. Reference kinds are link and pull-request; pull-request URLs must end in /pull/<number>.',
+    'For a self-contained HTML report that should keep one stable MaxTag URL across later updates, use kind report and a stable reportKey:',
+    'OPENTAG_ARTIFACT: {"path":"reports/release-health.html","title":"Release health","kind":"report","reportKey":"release-health"}',
+    'The path must be relative to the current project directory. File kinds are file, report, chart, and patch. Reference kinds are link and pull-request; pull-request URLs must end in /pull/<number>. reportKey must use 1-64 lowercase letters, numbers, or hyphens. Hosted HTML must be self-contained; MaxTag blocks network access but allows inline interaction.',
     'MaxTag removes these declaration lines from the visible reply, validates files and public HTTPS references, and publishes durable managed artifacts.',
   ].join('\n');
 }
@@ -1324,6 +1327,237 @@ async function writeArtifactImmutable(
   }
 }
 
+const HOSTED_REPORT_KEY = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
+const HOSTED_REPORT_TOKEN = /^[0-9a-f]{32}$/u;
+
+interface HostedReportIdentity {
+  token: string;
+  workspaceId: string;
+  projectId: string;
+  reportKey: string;
+  createdAt: string;
+}
+
+interface HostedReportManifest extends HostedReportIdentity {
+  title: string;
+  filename: string;
+  mimeType: string;
+  sha256: string;
+  sizeBytes: number;
+  sourceRunId: string;
+  revision: number;
+  updatedAt: string;
+}
+
+export interface HostedReportDocument {
+  bytes: Buffer;
+  title: string;
+  filename: string;
+  mimeType: string;
+  sha256: string;
+  revision: number;
+  updatedAt: string;
+}
+
+function normalizedHostedReportBaseUrl(value: string): string {
+  const parsed = new URL(value);
+  const loopback =
+    parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+  if (parsed.protocol !== 'https:' && !(loopback && parsed.protocol === 'http:')) {
+    throw new Error('hosted_report_base_url_must_use_https');
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('hosted_report_base_url_invalid');
+  }
+  parsed.pathname = parsed.pathname.replace(/\/+$/u, '');
+  return parsed.toString().replace(/\/$/u, '');
+}
+
+async function writeJsonAtomic(
+  target: string,
+  value: Record<string, unknown>,
+): Promise<void> {
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  await fs.rename(temporary, target);
+}
+
+async function hostedReportIdentity(
+  directory: string,
+  input: { workspaceId: string; projectId: string; reportKey: string },
+): Promise<HostedReportIdentity> {
+  const identityPath = path.join(directory, 'identity.json');
+  const proposed: HostedReportIdentity = {
+    token: createHash('sha256')
+      .update(`${randomUUID()}:${randomUUID()}`)
+      .digest('hex')
+      .slice(0, 32),
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    reportKey: input.reportKey,
+    createdAt: new Date().toISOString(),
+  };
+  try {
+    await fs.writeFile(identityPath, `${JSON.stringify(proposed, null, 2)}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    return proposed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  const existing = JSON.parse(await fs.readFile(identityPath, 'utf8')) as Partial<
+    HostedReportIdentity
+  >;
+  if (
+    !HOSTED_REPORT_TOKEN.test(existing.token || '') ||
+    existing.workspaceId !== input.workspaceId ||
+    existing.projectId !== input.projectId ||
+    existing.reportKey !== input.reportKey
+  ) {
+    throw new Error('hosted_report_identity_mismatch');
+  }
+  return existing as HostedReportIdentity;
+}
+
+async function publishHostedReport(input: {
+  artifactRoot: string;
+  baseUrl: string;
+  workspaceId: string;
+  projectId: string;
+  reportKey: string;
+  runId: string;
+  title: string;
+  filename: string;
+  mimeType: string;
+  bytes: Buffer;
+  sha256: string;
+}): Promise<{ url: string; token: string; revision: number }> {
+  if (!HOSTED_REPORT_KEY.test(input.reportKey)) {
+    throw new Error('hosted_report_key_invalid');
+  }
+  if (input.mimeType !== 'text/html') {
+    throw new Error('hosted_report_must_be_html');
+  }
+  const root = await fs.realpath(input.artifactRoot);
+  const hostedRoot = path.join(root, 'hosted-reports');
+  await fs.mkdir(hostedRoot, { recursive: true, mode: 0o700 });
+  const hostedRootReal = await fs.realpath(hostedRoot);
+  if (!pathWithin(root, hostedRootReal)) {
+    throw new Error('hosted_report_directory_escape');
+  }
+  const routeKey = `${input.workspaceId}:${input.projectId}:${input.reportKey}`;
+  const reportDirectory = path.join(hostedRootReal, artifactSegment(routeKey));
+  await fs.mkdir(reportDirectory, { recursive: true, mode: 0o700 });
+  const reportDirectoryReal = await fs.realpath(reportDirectory);
+  if (!pathWithin(hostedRootReal, reportDirectoryReal)) {
+    throw new Error('hosted_report_directory_escape');
+  }
+  const identity = await hostedReportIdentity(reportDirectoryReal, input);
+  const manifestPath = path.join(reportDirectoryReal, 'manifest.json');
+  let priorRevision = 0;
+  try {
+    const prior = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as Partial<
+      HostedReportManifest
+    >;
+    if (prior.token === identity.token && Number.isInteger(prior.revision)) {
+      priorRevision = Number(prior.revision);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const filename = `${input.sha256}.html`;
+  const contentPath = path.join(reportDirectoryReal, filename);
+  await writeArtifactImmutable(contentPath, input.bytes, input.sha256);
+  const revision = priorRevision + 1;
+  const manifest: HostedReportManifest = {
+    ...identity,
+    title: input.title,
+    filename,
+    mimeType: input.mimeType,
+    sha256: input.sha256,
+    sizeBytes: input.bytes.byteLength,
+    sourceRunId: input.runId,
+    revision,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeJsonAtomic(manifestPath, manifest as unknown as Record<string, unknown>);
+  return {
+    url: `${normalizedHostedReportBaseUrl(input.baseUrl)}/r/${identity.token}`,
+    token: identity.token,
+    revision,
+  };
+}
+
+export async function resolveHostedReportByToken(input: {
+  artifactRoot: string;
+  token: string;
+  maxBytes?: number;
+}): Promise<HostedReportDocument | undefined> {
+  if (!HOSTED_REPORT_TOKEN.test(input.token)) return undefined;
+  let root: string;
+  try {
+    root = await fs.realpath(path.join(path.resolve(input.artifactRoot), 'hosted-reports'));
+  } catch {
+    return undefined;
+  }
+  const entries = (await fs.readdir(root, { withFileTypes: true })).slice(0, 10_000);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const directory = path.join(root, entry.name);
+    let manifest: HostedReportManifest;
+    try {
+      manifest = JSON.parse(
+        await fs.readFile(path.join(directory, 'manifest.json'), 'utf8'),
+      ) as HostedReportManifest;
+    } catch {
+      continue;
+    }
+    if (
+      manifest.token !== input.token ||
+      manifest.filename !== `${manifest.sha256}.html` ||
+      !/^[0-9a-f]{64}\.html$/u.test(manifest.filename)
+    ) {
+      continue;
+    }
+    const candidate = path.join(directory, manifest.filename);
+    let resolved: string;
+    try {
+      resolved = await fs.realpath(candidate);
+    } catch {
+      return undefined;
+    }
+    if (!pathWithin(root, resolved)) return undefined;
+    const maxBytes = Math.max(1, input.maxBytes ?? DEFAULT_MAX_ARTIFACT_BYTES);
+    let bytes: Buffer;
+    try {
+      bytes = await readArtifactFile(resolved, maxBytes);
+    } catch {
+      return undefined;
+    }
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    if (
+      sha256 !== manifest.sha256 ||
+      bytes.byteLength !== manifest.sizeBytes ||
+      manifest.mimeType !== 'text/html'
+    ) {
+      return undefined;
+    }
+    return {
+      bytes,
+      title: manifest.title,
+      filename: manifest.filename,
+      mimeType: manifest.mimeType,
+      sha256,
+      revision: manifest.revision,
+      updatedAt: manifest.updatedAt,
+    };
+  }
+  return undefined;
+}
+
 export async function collectCliArtifacts(input: {
   finalMessage: string;
   cwd: string;
@@ -1331,6 +1565,11 @@ export async function collectCliArtifacts(input: {
   runId: string;
   maxArtifactBytes?: number;
   maxArtifacts?: number;
+  hostedReport?: {
+    baseUrl: string;
+    workspaceId: string;
+    projectId: string;
+  };
 }): Promise<CollectedCliArtifacts> {
   const declarations: string[] = [];
   const memoryDeclarations: string[] = [];
@@ -1535,10 +1774,45 @@ export async function collectCliArtifacts(input: {
       typeof parsed.title === 'string' && parsed.title.trim()
         ? parsed.title.trim().slice(0, 200)
         : filename;
+    const reportKey =
+      typeof parsed.reportKey === 'string' ? parsed.reportKey.trim() : '';
+    let hosted: { url: string; token: string; revision: number } | undefined;
+    if (reportKey) {
+      if (kind !== 'report') {
+        warnings.push(
+          `Artifact declaration ${index + 1} reportKey requires kind report.`,
+        );
+      } else if (!input.hostedReport || !input.artifactRoot) {
+        warnings.push(
+          `Artifact declaration ${index + 1} requested a hosted report but hosted report delivery is not configured.`,
+        );
+      } else {
+        try {
+          hosted = await publishHostedReport({
+            artifactRoot: input.artifactRoot,
+            baseUrl: input.hostedReport.baseUrl,
+            workspaceId: input.hostedReport.workspaceId,
+            projectId: input.hostedReport.projectId,
+            reportKey,
+            runId: input.runId,
+            title,
+            filename,
+            mimeType: artifactMimeType(filename),
+            bytes,
+            sha256: digest,
+          });
+        } catch (error) {
+          warnings.push(
+            `Artifact declaration ${index + 1} could not publish its hosted report: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    }
     artifacts.push({
       id: `artifact:${digest.slice(0, 24)}:${index + 1}`,
       kind,
       title,
+      url: hosted?.url,
       path: managedPath,
       metadata: {
         managed: true,
@@ -1549,6 +1823,13 @@ export async function collectCliArtifacts(input: {
         filename,
         sourceRelativePath: path.relative(cwdReal, source),
         collectedAt: new Date().toISOString(),
+        ...(hosted
+          ? {
+              hostedReportKey: reportKey,
+              hostedReportRevision: hosted.revision,
+              stableUrl: true,
+            }
+          : {}),
       },
     });
   }

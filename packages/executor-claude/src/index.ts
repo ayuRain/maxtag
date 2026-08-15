@@ -641,6 +641,14 @@ export class ClaudeExecutor implements Executor {
       runId: request.runId,
       maxArtifactBytes: this.options.maxArtifactBytes,
       maxArtifacts: this.options.maxArtifacts,
+      hostedReport:
+        this.options.hostedReportBaseUrl && request.workspace?.id && request.project
+          ? {
+              baseUrl: this.options.hostedReportBaseUrl,
+              workspaceId: request.workspace.id,
+              projectId: request.project.key || request.project.id,
+            }
+          : undefined,
     });
     for (const warning of collected.warnings) {
       await request.onEvent?.({ type: 'log', level: 'warn', message: warning });

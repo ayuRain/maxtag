@@ -3,7 +3,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { collectCliArtifacts } from '@opentag/executor-cli';
+import {
+  collectCliArtifacts,
+  resolveHostedReportByToken,
+} from '@opentag/executor-cli';
 import {
   ManagedContentError,
   ManagedContentStore,
@@ -296,6 +299,105 @@ test('CLI artifact collection keeps link references when file storage is unavail
     assert.equal(result.artifacts[0].kind, 'link');
     assert.equal(result.artifacts[0].url, 'https://example.com/result');
     assert.ok(result.warnings.some((warning) => warning.includes('no managed artifact root')));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('hosted HTML reports keep a stable project-scoped URL across revisions', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-hosted-report-'));
+  const cwd = path.join(root, 'project');
+  const artifactRoot = path.join(root, 'managed');
+  const declaration =
+    'OPENTAG_ARTIFACT: {"path":"release-health.html","title":"Release health","kind":"report","reportKey":"release-health"}';
+  try {
+    await fs.mkdir(cwd);
+    await fs.writeFile(
+      path.join(cwd, 'release-health.html'),
+      '<!doctype html><title>Revision 1</title><h1>Healthy</h1>',
+    );
+    const first = await collectCliArtifacts({
+      finalMessage: `Report ready.\n${declaration}`,
+      cwd,
+      artifactRoot,
+      runId: 'run-report-1',
+      hostedReport: {
+        baseUrl: 'http://127.0.0.1:3077',
+        workspaceId: 'workspace-a',
+        projectId: 'project-a',
+      },
+    });
+    assert.equal(first.warnings.length, 0);
+    assert.equal(first.artifacts.length, 1);
+    assert.match(first.artifacts[0].url, /^http:\/\/127\.0\.0\.1:3077\/r\/[0-9a-f]{32}$/u);
+    assert.equal(first.artifacts[0].metadata.hostedReportRevision, 1);
+    assert.equal(first.artifacts[0].metadata.stableUrl, true);
+
+    await fs.writeFile(
+      path.join(cwd, 'release-health.html'),
+      '<!doctype html><title>Revision 2</title><h1>Still healthy</h1>',
+    );
+    const second = await collectCliArtifacts({
+      finalMessage: declaration,
+      cwd,
+      artifactRoot,
+      runId: 'run-report-2',
+      hostedReport: {
+        baseUrl: 'http://127.0.0.1:3077',
+        workspaceId: 'workspace-a',
+        projectId: 'project-a',
+      },
+    });
+    assert.equal(second.artifacts[0].url, first.artifacts[0].url);
+    assert.equal(second.artifacts[0].metadata.hostedReportRevision, 2);
+    const token = new URL(second.artifacts[0].url).pathname.split('/').at(-1);
+    const resolved = await resolveHostedReportByToken({
+      artifactRoot,
+      token,
+    });
+    assert.equal(resolved.revision, 2);
+    assert.match(resolved.bytes.toString('utf8'), /Still healthy/u);
+
+    const isolated = await collectCliArtifacts({
+      finalMessage: declaration,
+      cwd,
+      artifactRoot,
+      runId: 'run-report-isolated',
+      hostedReport: {
+        baseUrl: 'http://127.0.0.1:3077',
+        workspaceId: 'workspace-a',
+        projectId: 'project-b',
+      },
+    });
+    assert.notEqual(isolated.artifacts[0].url, first.artifacts[0].url);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('hosted report publishing rejects invalid keys and non-HTML files', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-hosted-report-errors-'));
+  const artifactRoot = path.join(root, 'managed');
+  try {
+    await fs.writeFile(path.join(root, 'report.txt'), 'not html');
+    const result = await collectCliArtifacts({
+      finalMessage: [
+        'OPENTAG_ARTIFACT: {"path":"report.txt","kind":"report","reportKey":"Invalid key"}',
+        'OPENTAG_ARTIFACT: {"path":"report.txt","kind":"report","reportKey":"valid-key"}',
+      ].join('\n'),
+      cwd: root,
+      artifactRoot,
+      runId: 'run-report-errors',
+      hostedReport: {
+        baseUrl: 'https://reports.example.com',
+        workspaceId: 'workspace-a',
+        projectId: 'project-a',
+      },
+    });
+    assert.equal(result.artifacts.length, 2);
+    assert.ok(result.artifacts.every((artifact) => artifact.url === undefined));
+    assert.ok(result.warnings.some((warning) => warning.includes('hosted_report_key_invalid')));
+    assert.ok(result.warnings.some((warning) => warning.includes('hosted_report_must_be_html')));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

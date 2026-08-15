@@ -10,6 +10,7 @@
     { "path": "../../packages/core" },
     { "path": "../../packages/delivery" },
     { "path": "../../packages/executor-claude" },
+    { "path": "../../packages/executor-cli" },
     { "path": "../../packages/executor-codex" },
     { "path": "../../packages/memory" },
     { "path": "../../packages/platform-github" },

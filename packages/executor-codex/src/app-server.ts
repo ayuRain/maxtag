@@ -496,6 +496,12 @@ export class CodexAppServerSession {
     if (!turnId) throw new Error('codex_app_server_missing_turn_id');
     this.activeTurnId = turnId;
     options.onStarted?.();
+    if (options.signal?.aborted) {
+      // Cancellation can race with the turn/start response. Once the provider
+      // reveals the exact turn id, still interrupt that turn before unwinding.
+      await this.interrupt();
+      throw abortError(options.signal);
+    }
 
     while (true) {
       const notification = await this.notifications.next(options.signal);

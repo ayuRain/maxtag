@@ -254,7 +254,7 @@ export class LarkPlatformAdapter implements PlatformAdapter {
       chatId: thread.channelId || thread.externalId,
       rootId: thread.rootMessageId,
       replyToMessageId: options?.replyToMessageId,
-      text: artifactLines ? `${text}\n\nArtifacts:\n${artifactLines}` : text,
+      text: artifactLines ? `${text}\n\n产物：\n${artifactLines}` : text,
       metadata: {
         runId: options?.runId,
         thread,
@@ -264,6 +264,13 @@ export class LarkPlatformAdapter implements PlatformAdapter {
     });
 
     for (const artifact of artifacts || []) {
+      if (
+        artifact.kind === 'report' &&
+        artifact.url &&
+        artifact.metadata?.stableUrl === true
+      ) {
+        continue;
+      }
       if (!artifact.path) continue;
       await this.transport.sendFile({
         chatId: thread.channelId || thread.externalId,

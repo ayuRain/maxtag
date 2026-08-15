@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
+import { resolveHostedReportByToken } from '@opentag/executor-cli';
 import {
   memoryScopeGranted,
   memoryExpiryForAccess,
@@ -403,6 +404,9 @@ const executorMaxOutputBytes = numberEnvironmentValue(
 );
 const executorArtifactRoot =
   process.env.OPENTAG_ARTIFACT_ROOT || path.join(dataDir, 'artifacts');
+const hostedReportBaseUrl =
+  process.env.OPENTAG_HOSTED_REPORT_BASE_URL ||
+  process.env.OPENTAG_PUBLIC_BASE_URL;
 const executorMaxArtifactBytes = numberEnvironmentValue(
   'OPENTAG_MAX_ARTIFACT_BYTES',
   30 * 1024 * 1024,
@@ -1012,6 +1016,7 @@ const executorRegistry = createDefaultExecutorRegistry(
     inheritEnv: executorInheritEnv,
     sessionMode: executorSessionMode,
     artifactRoot: executorArtifactRoot,
+    hostedReportBaseUrl,
     maxArtifactBytes: executorMaxArtifactBytes,
     maxArtifacts: executorMaxArtifacts,
     codexCommand,
@@ -10282,6 +10287,53 @@ const server = createServer(async (request, response) => {
           },
         },
       });
+      return;
+    }
+
+    const hostedReportMatch =
+      request.method === 'GET'
+        ? /^\/r\/([0-9a-f]{32})$/u.exec(url.pathname)
+        : undefined;
+    if (hostedReportMatch) {
+      const report = await resolveHostedReportByToken({
+        artifactRoot: executorArtifactRoot,
+        token: hostedReportMatch[1]!,
+        maxBytes: executorMaxArtifactBytes,
+      });
+      if (!report) {
+        response.writeHead(404, {
+          'content-type': 'text/plain; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        response.end('Report not found\n');
+        return;
+      }
+      response.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'content-length': String(report.bytes.byteLength),
+        'cache-control': 'no-store',
+        'content-disposition': 'inline',
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'no-referrer',
+        'x-frame-options': 'DENY',
+        'x-maxtag-report-revision': String(report.revision),
+        'content-security-policy': [
+          "default-src 'none'",
+          "script-src 'unsafe-inline'",
+          "style-src 'unsafe-inline'",
+          "img-src 'self' data:",
+          "font-src 'self' data:",
+          "connect-src 'none'",
+          "media-src 'self' data:",
+          "object-src 'none'",
+          "frame-src 'none'",
+          "frame-ancestors 'none'",
+          "base-uri 'none'",
+          "form-action 'none'",
+          'sandbox allow-scripts',
+        ].join('; '),
+      });
+      response.end(report.bytes);
       return;
     }
 

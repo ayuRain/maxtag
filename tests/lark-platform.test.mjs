@@ -620,12 +620,26 @@ test('Lark adapter sends managed artifacts through tracked file delivery', async
           path: '/managed/report.csv',
           metadata: { mimeType: 'text/csv' },
         },
+        {
+          id: 'artifact-2',
+          kind: 'report',
+          title: 'Live report',
+          path: '/managed/live-report.html',
+          url: 'https://reports.example.com/r/1234567890abcdef1234567890abcdef',
+          metadata: {
+            mimeType: 'text/html',
+            stableUrl: true,
+            hostedReportRevision: 2,
+          },
+        },
       ],
       { runId: 'run-1', replyToMessageId: 'message-1' },
     );
 
     assert.equal(memory.texts.length, 1);
     assert.equal(memory.files.length, 1);
+    assert.match(memory.texts[0].text, /产物：/u);
+    assert.match(memory.texts[0].text, /Live report: https:\/\/reports\.example\.com\/r\//u);
     assert.equal(memory.files[0].metadata.artifactId, 'artifact-1');
     assert.equal(memory.files[0].replyToMessageId, 'message-1');
     const outbox = await store.listOutbox({ runId: 'run-1', limit: 20 });
