@@ -53,6 +53,24 @@ class LarkProgressSurface implements ProgressSurface {
 
   async complete(surfaceId: string, state: ProgressState): Promise<void> {
     await this.update(surfaceId, state);
+    // The final answer is delivered as its own thread reply. Successful
+    // progress cards have served their purpose and should not leave a second,
+    // technical-looking result surface behind.
+    if (state.status === 'completed' && this.transport.deleteCard) {
+      try {
+        await this.transport.deleteCard({
+          cardId: surfaceId,
+          metadata: {
+            runId: state.runId,
+            thread: this.thread,
+            stage: 'progress-card',
+          },
+        });
+      } catch {
+        // Delivery already succeeded; a cosmetic cleanup failure must never
+        // turn the completed agent run into a failed run.
+      }
+    }
   }
 }
 

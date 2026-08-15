@@ -27,31 +27,45 @@ function progressState(status) {
   };
 }
 
+function cardButtons(card) {
+  const buttons = [];
+  const visit = (value) => {
+    if (!value || typeof value !== 'object') return;
+    if (value.tag === 'button') buttons.push(value);
+    for (const child of Object.values(value)) {
+      if (Array.isArray(child)) child.forEach(visit);
+      else visit(child);
+    }
+  };
+  visit(card.body);
+  return buttons;
+}
+
 test('active Lark progress cards expose run-scoped takeover and Stop actions', () => {
   const card = buildLarkProgressCard(progressState('running'));
-  const actionBlock = card.elements.find((element) => element.tag === 'action');
+  const buttons = cardButtons(card);
 
-  assert.ok(actionBlock);
-  assert.equal(actionBlock.actions.length, 2);
-  assert.deepEqual(actionBlock.actions[0].value, {
+  assert.equal(card.schema, '2.0');
+  assert.equal(card.config.width_mode, 'fill');
+  assert.equal(buttons.length, 2);
+  assert.deepEqual(buttons[0].behaviors[0].value, {
     action: OPENTAG_TAKE_OVER_RUN_ACTION,
     run_id: 'run-card-control',
   });
-  assert.equal(actionBlock.actions[0].type, 'primary');
-  assert.deepEqual(actionBlock.actions[1].value, {
+  assert.equal(buttons[0].type, 'default');
+  assert.deepEqual(buttons[1].behaviors[0].value, {
     action: OPENTAG_STOP_RUN_ACTION,
     run_id: 'run-card-control',
   });
-  assert.equal(actionBlock.actions[1].type, 'danger');
+  assert.equal(buttons[1].type, 'danger');
+  assert.match(JSON.stringify(card), /处理中/u);
+  assert.match(JSON.stringify(card), /执行详情/u);
 });
 
 for (const status of ['completed', 'failed', 'cancelled']) {
   test(`terminal ${status} Lark progress cards remove task controls`, () => {
     const card = buildLarkProgressCard(progressState(status));
-    assert.equal(
-      card.elements.some((element) => element.tag === 'action'),
-      false,
-    );
+    assert.equal(cardButtons(card).length, 0);
   });
 }
 
@@ -91,26 +105,12 @@ function memoryProposal(status = 'pending') {
   };
 }
 
-function cardButtons(card) {
-  const buttons = [];
-  const visit = (value) => {
-    if (!value || typeof value !== 'object') return;
-    if (value.tag === 'button') buttons.push(value);
-    for (const child of Object.values(value)) {
-      if (Array.isArray(child)) child.forEach(visit);
-      else visit(child);
-    }
-  };
-  visit(card.body);
-  return buttons;
-}
-
 test('pending Lark memory proposal cards use Card 2.0 receipt-scoped actions', () => {
   const card = buildLarkMemoryProposalCard(memoryProposal());
   const buttons = cardButtons(card);
 
   assert.equal(card.schema, '2.0');
-  assert.equal(card.config.width_mode, 'default');
+  assert.equal(card.config.width_mode, 'fill');
   assert.equal(card.config.enable_forward, false);
   assert.equal(card.header.template, 'blue');
   assert.equal(buttons.length, 2);
@@ -218,7 +218,7 @@ test('pending Lark tool approval card binds exact approval actions', () => {
     ],
   );
   assert.match(JSON.stringify(card), /Investigate retry spike/u);
-  assert.match(JSON.stringify(card), /Exact arguments/u);
+  assert.match(JSON.stringify(card), /查看操作参数/u);
 });
 
 test('Lark tool approval card disables blind approval for unreviewable arguments', () => {
@@ -234,7 +234,7 @@ test('Lark tool approval card disables blind approval for unreviewable arguments
     [OPENTAG_REJECT_TOOL_ACTION],
   );
   assert.doesNotMatch(JSON.stringify(card), /must-not-be-rendered/u);
-  assert.match(JSON.stringify(card), /MaxTag console/u);
+  assert.match(JSON.stringify(card), /MaxTag 管理台/u);
 });
 
 test('terminal Lark tool approval card removes controls and shows result', () => {

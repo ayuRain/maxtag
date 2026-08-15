@@ -609,6 +609,70 @@ test('Lark adapter sends managed artifacts through tracked file delivery', async
   }
 });
 
+test('successful Lark runs remove the transient progress card after the reply is delivered', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-progress-'));
+  try {
+    const store = new FileDeliveryStore(root);
+    const memory = new MemoryLarkTransport();
+    const adapter = new LarkPlatformAdapter(new TrackedLarkTransport(memory, store));
+    const thread = {
+      id: 'lark:chat-progress:main',
+      platform: 'lark',
+      externalId: 'chat-progress:main',
+      workspaceId: 'acme',
+      projectId: 'payments',
+      channelId: 'chat-progress',
+      visibility: 'public',
+    };
+    const progress = adapter.createProgressSurface(thread);
+    const initial = {
+      runId: 'run-progress-cleanup',
+      title: 'Working on MaxTag',
+      status: 'running',
+      checklist: [{ id: 'work', label: 'Run Codex', status: 'running' }],
+      updatedAt: new Date().toISOString(),
+    };
+    const { surfaceId } = await progress.create(initial);
+    assert.equal(memory.cards.length, 1);
+    await progress.complete(surfaceId, {
+      ...initial,
+      status: 'completed',
+      checklist: [{ id: 'work', label: 'Run Codex', status: 'done' }],
+    });
+    assert.equal(memory.cards.length, 0);
+    const outbox = await store.listOutbox({ runId: initial.runId, limit: 20 });
+    assert.ok(outbox.some((item) => item.kind === 'lark.card.delete'));
+    assert.ok(outbox.every((item) => item.status === 'delivered'));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('failed Lark runs keep a concise diagnostic card', async () => {
+  const memory = new MemoryLarkTransport();
+  const adapter = new LarkPlatformAdapter(memory);
+  const thread = {
+    id: 'lark:chat-progress-failed:main',
+    platform: 'lark',
+    externalId: 'chat-progress-failed:main',
+    channelId: 'chat-progress-failed',
+    visibility: 'public',
+  };
+  const progress = adapter.createProgressSurface(thread);
+  const state = {
+    runId: 'run-progress-failed',
+    title: 'Working on MaxTag',
+    status: 'failed',
+    summary: 'Provider unavailable.',
+    checklist: [{ id: 'work', label: 'Run Codex', status: 'failed' }],
+    updatedAt: new Date().toISOString(),
+  };
+  const { surfaceId } = await progress.create({ ...state, status: 'running' });
+  await progress.complete(surfaceId, state);
+  assert.equal(memory.cards.length, 1);
+  assert.match(JSON.stringify(memory.cards[0].card), /执行失败/u);
+});
+
 test('tracked Lark cards persist an exact external receipt for action callbacks', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-receipt-'));
   try {

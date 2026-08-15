@@ -181,6 +181,10 @@ export interface LarkTransport {
     card: Record<string, unknown>;
     metadata?: LarkDeliveryMetadata;
   }): Promise<void>;
+  deleteCard?(input: {
+    cardId: string;
+    metadata?: LarkDeliveryMetadata;
+  }): Promise<void>;
   sendFile(input: {
     chatId: string;
     file: LarkFileInput;

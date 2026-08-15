@@ -330,6 +330,16 @@ export class HttpLarkTransport implements LarkTransport {
     );
   }
 
+  async deleteCard(input: {
+    cardId: string;
+    metadata?: LarkDeliveryMetadata;
+  }): Promise<void> {
+    await this.request<Record<string, never>>(
+      `/open-apis/im/v1/messages/${encodeURIComponent(input.cardId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
   async sendFile(input: {
     chatId: string;
     file: LarkFileInput;

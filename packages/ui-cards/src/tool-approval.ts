@@ -9,8 +9,11 @@ function plainText(content: string): Record<string, unknown> {
   return { tag: 'plain_text', content };
 }
 
-function markdown(content: string): Record<string, unknown> {
-  return { tag: 'markdown', content };
+function markdown(
+  content: string,
+  extra?: Record<string, unknown>,
+): Record<string, unknown> {
+  return { tag: 'markdown', content, ...extra };
 }
 
 function bounded(value: unknown, maxLength = 700): string {
@@ -36,24 +39,24 @@ function statusPresentation(approval: ToolApprovalRecord): {
 } {
   switch (approval.status) {
     case 'pending':
-      return { label: 'Pending', color: 'orange', background: 'orange-50' };
+      return { label: '等待确认', color: 'orange', background: 'orange-50' };
     case 'approved':
     case 'executing':
-      return { label: 'Executing', color: 'blue', background: 'blue-50' };
+      return { label: '执行中', color: 'blue', background: 'blue-50' };
     case 'succeeded':
-      return { label: 'Succeeded', color: 'green', background: 'green-50' };
+      return { label: '已完成', color: 'green', background: 'green-50' };
     case 'rejected':
-      return { label: 'Rejected', color: 'red', background: 'red-50' };
+      return { label: '已拒绝', color: 'red', background: 'red-50' };
     case 'expired':
-      return { label: 'Expired', color: 'grey', background: 'grey-50' };
+      return { label: '已过期', color: 'grey', background: 'grey-50' };
     default:
-      return { label: 'Failed', color: 'red', background: 'red-50' };
+      return { label: '执行失败', color: 'red', background: 'red-50' };
   }
 }
 
 function argumentLines(approval: ToolApprovalRecord): string {
   const entries = Object.entries(approval.argumentSummary);
-  if (!entries.length) return '(no arguments)';
+  if (!entries.length) return '无额外参数';
   return entries
     .map(([key, value]) => `**${escaped(key)}:** ${escaped(value)}`)
     .join('\n');
@@ -90,8 +93,8 @@ function reviewArguments(approval: ToolApprovalRecord): {
       content: argumentLines(approval),
       reviewable: false,
       reason: containsSensitiveKey
-        ? 'Sensitive-looking fields are hidden. Review the exact JSON in the MaxTag console before approving.'
-        : 'The exact arguments are too large for a safe card review. Review them in the MaxTag console before approving.',
+        ? '参数中包含敏感字段，请在 MaxTag 管理台核对后再批准。'
+        : '参数过长，无法在卡片中安全展示；请在 MaxTag 管理台核对。',
     };
   }
   return {
@@ -106,7 +109,7 @@ function reviewArguments(approval: ToolApprovalRecord): {
 function rejectAction(approval: ToolApprovalRecord): Record<string, unknown> {
   return {
     tag: 'button',
-    text: plainText('Reject'),
+    text: plainText('拒绝'),
     type: 'danger',
     width: 'fill',
     behaviors: [
@@ -151,7 +154,7 @@ function pendingActions(
         elements: [
           {
             tag: 'button',
-            text: plainText('Approve and run'),
+            text: plainText('批准并执行'),
             type: 'primary_filled',
             width: 'fill',
             behaviors: [
@@ -164,10 +167,8 @@ function pendingActions(
               },
             ],
             confirm: {
-              title: plainText(`Run ${approval.title}?`),
-              text: plainText(
-                'MaxTag will execute this one operation with the exact arguments shown.',
-              ),
+              title: plainText('批准这次操作？'),
+              text: plainText('MaxTag 只会按卡片中展示的参数执行这一次操作。'),
             },
           },
         ],
@@ -191,23 +192,23 @@ export function buildLarkToolApprovalCard(
   const argumentsReview = reviewArguments(approval);
   const terminalDetail =
     approval.status === 'succeeded'
-      ? approval.resultPreview || 'Operation completed.'
+      ? approval.resultPreview || '操作已完成。'
       : approval.error ||
         (approval.status === 'rejected'
-          ? `Rejected by ${approval.rejectedBy || 'reviewer'}.`
+          ? `由 ${approval.rejectedBy || '审批人'} 拒绝。`
           : approval.status === 'expired'
-            ? 'The approval window expired.'
-            : `Status: ${approval.status}`);
+            ? '该审批已超时，未执行任何操作。'
+            : `当前状态：${approval.status}`);
   return {
     schema: '2.0',
     config: {
       update_multi: true,
-      width_mode: 'default',
+      width_mode: 'fill',
       enable_forward: false,
       summary: { content: `${approval.title}: ${status.label}` },
     },
     header: {
-      title: plainText('Tool approval'),
+      title: plainText('需要你的确认'),
       subtitle: plainText(approval.title),
       template: status.color,
       icon: { tag: 'standard_icon', token: 'approve_colorful' },
@@ -224,6 +225,9 @@ export function buildLarkToolApprovalCard(
       padding: '12px 12px 20px 12px',
       vertical_spacing: 'large',
       elements: [
+        ...(approval.status === 'pending'
+          ? [markdown('MaxTag 即将执行一个外部操作。请核对内容后决定是否继续。')]
+          : []),
         {
           tag: 'column_set',
           flex_mode: 'bisect',
@@ -235,7 +239,7 @@ export function buildLarkToolApprovalCard(
               width: 'weighted',
               weight: 1,
               padding: '10px',
-              elements: [markdown(`**Tool**\n${escaped(approval.toolName)}`)],
+              elements: [markdown(`**操作**\n${escaped(approval.toolName)}`)],
             },
             {
               tag: 'column',
@@ -244,35 +248,43 @@ export function buildLarkToolApprovalCard(
               padding: '10px',
               elements: [
                 markdown(
-                  `**Project**\n${escaped(approval.projectId || approval.workspaceId || 'MaxTag')}`,
+                  `**项目**\n${escaped(approval.projectId || approval.workspaceId || 'MaxTag')}`,
                 ),
               ],
             },
           ],
         },
         {
-          tag: 'column_set',
-          flex_mode: 'stretch',
-          columns: [
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              padding: '10px',
-              elements: [
-                markdown(
-                  `**${argumentsReview.reviewable ? 'Exact arguments' : 'Argument summary'}**\n${argumentsReview.content}`,
-                ),
-                ...(argumentsReview.reason
-                  ? [markdown(`<font color='orange'>${escaped(argumentsReview.reason)}</font>`)]
-                  : []),
-              ],
-            },
+          tag: 'collapsible_panel',
+          expanded: true,
+          border: { color: 'grey', corner_radius: '6px' },
+          header: {
+            title: plainText(argumentsReview.reviewable ? '查看操作参数' : '查看参数摘要'),
+            icon: { tag: 'standard_icon', token: 'file_outlined' },
+            icon_position: 'left',
+            padding: '8px 10px 8px 10px',
+          },
+          padding: '8px 10px 10px 10px',
+          elements: [
+            markdown(argumentsReview.content, { text_size: 'notation' }),
+            ...(argumentsReview.reason
+              ? [markdown(`<font color='orange'>${escaped(argumentsReview.reason)}</font>`)]
+              : []),
           ],
         },
-        markdown(
-          `<font color='grey'>Requested ${escaped(approval.requestedAt)} · Expires ${escaped(approval.expiresAt)} · digest ${escaped(approval.argumentDigest.slice(0, 12))}</font>`,
-        ),
+        {
+          tag: 'collapsible_panel',
+          expanded: false,
+          border: { color: 'grey', corner_radius: '6px' },
+          header: {
+            title: plainText('审计信息'),
+            icon: { tag: 'standard_icon', token: 'history_outlined' },
+            icon_position: 'left',
+            padding: '8px 10px 8px 10px',
+          },
+          padding: '8px 10px 10px 10px',
+          elements: [markdown(`申请时间：${escaped(approval.requestedAt)}  \n过期时间：${escaped(approval.expiresAt)}  \n参数摘要：${escaped(approval.argumentDigest.slice(0, 12))}`, { text_size: 'notation' })],
+        },
         ...(approval.status === 'pending'
           ? [pendingActions(approval, argumentsReview.reviewable)]
           : [

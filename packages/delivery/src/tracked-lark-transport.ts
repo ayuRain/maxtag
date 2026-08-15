@@ -159,6 +159,31 @@ export class TrackedLarkTransport implements LarkTransport {
     }
   }
 
+  async deleteCard(input: {
+    cardId: string;
+    metadata?: LarkDeliveryMetadata;
+  }): Promise<void> {
+    if (!this.delegate.deleteCard) return;
+    const envelope = await this.store.enqueue({
+      kind: 'lark.card.delete',
+      target: metadataTarget(
+        { platform: 'lark', cardId: input.cardId },
+        input.metadata,
+      ),
+      payload: { stage: input.metadata?.stage },
+      runId: input.metadata?.runId,
+      thread: input.metadata?.thread,
+    });
+    await this.store.markSending(envelope.id);
+    try {
+      await this.delegate.deleteCard(input);
+      await this.store.markDelivered(envelope.id, input.cardId);
+    } catch (error) {
+      await this.store.markFailed(envelope.id, errorMessage(error));
+      throw error;
+    }
+  }
+
   async sendFile(input: {
     chatId: string;
     file: LarkFileInput;

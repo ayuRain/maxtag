@@ -167,7 +167,7 @@ console.log(JSON.stringify({ type: 'turn.completed' }));
       afterRestartOutbox.some(
         (item) =>
           item.kind === 'lark.card.update' &&
-          JSON.stringify(item.payload).includes('**Status:** blocked'),
+          JSON.stringify(item.payload).includes('服务正在恢复'),
       ),
     );
     const initialCard = afterRestartOutbox.find(
@@ -213,7 +213,7 @@ console.log(JSON.stringify({ type: 'turn.completed' }));
       finalOutbox.some(
         (item) =>
           item.kind === 'lark.card.update' &&
-          JSON.stringify(item.payload).includes('**Status:** completed'),
+          JSON.stringify(item.payload).includes('结果已发送'),
       ),
     );
     assert.equal(
@@ -230,5 +230,6 @@ console.log(JSON.stringify({ type: 'turn.completed' }));
         ),
     );
     assert.ok(finalOutbox.some((item) => item.kind === 'lark.text'));
+    assert.ok(finalOutbox.some((item) => item.kind === 'lark.card.delete'));
   },
 );

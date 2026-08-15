@@ -110,6 +110,14 @@ export class MemoryLarkTransport implements LarkTransport {
     this.cards.push({ id: input.cardId, card: input.card });
   }
 
+  async deleteCard(input: {
+    cardId: string;
+    metadata?: LarkDeliveryMetadata;
+  }): Promise<void> {
+    const index = this.cards.findIndex((card) => card.id === input.cardId);
+    if (index !== -1) this.cards.splice(index, 1);
+  }
+
   async sendFile(input: {
     chatId: string;
     file: LarkFileInput;

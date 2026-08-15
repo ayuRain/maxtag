@@ -20,8 +20,11 @@ function plainText(content: string): Record<string, unknown> {
   return { tag: 'plain_text', content };
 }
 
-function markdown(content: string): Record<string, unknown> {
-  return { tag: 'markdown', content };
+function markdown(
+  content: string,
+  extra?: Record<string, unknown>,
+): Record<string, unknown> {
+  return { tag: 'markdown', content, ...extra };
 }
 
 function boundedText(value: string, maxLength = 1_000): string {
@@ -62,45 +65,6 @@ function scopeLabel(proposal: MemoryProposal): string {
   return target ? `${scope} · ${target}` : scope;
 }
 
-function fieldBlock(proposal: MemoryProposal): Record<string, unknown> {
-  return {
-    tag: 'column_set',
-    flex_mode: 'bisect',
-    horizontal_spacing: 'medium',
-    background_style: 'blue-50',
-    columns: [
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 1,
-        padding: '10px',
-        elements: [
-          markdown(
-            `**操作**\n${
-              proposal.action === 'remember'
-                ? '记住'
-                : proposal.action === 'replace'
-                  ? '替换'
-                  : proposal.action === 'merge'
-                    ? '合并'
-                  : proposal.action === 'index'
-                    ? '添加检索索引'
-                    : '忘记'
-            }`,
-          ),
-        ],
-      },
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 1,
-        padding: '10px',
-        elements: [markdown(`**生效范围**\n${escapeMarkdown(scopeLabel(proposal))}`)],
-      },
-    ],
-  };
-}
-
 function proposalContent(proposal: MemoryProposal): Record<string, unknown> {
   const label =
     proposal.action === 'remember'
@@ -112,51 +76,43 @@ function proposalContent(proposal: MemoryProposal): Record<string, unknown> {
         : proposal.action === 'index'
           ? '要添加检索索引的记忆'
         : '要删除的记忆';
-  return {
-    tag: 'column_set',
-    flex_mode: 'stretch',
-    background_style: 'grey-50',
-    columns: [
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 1,
-        padding: '10px',
-        elements: [
-          markdown(
-            proposal.action === 'replace'
-              ? `**当前记忆**\n${escapeMarkdown(proposal.selector || '(缺少原内容)')}\n\n**替换后的记忆**\n${escapeMarkdown(proposal.value)}\n\n<font color='grey'>预期文档版本：v${proposal.expectedDocumentVersion ?? '?'}</font>`
-              : proposal.action === 'merge'
-                ? `**当前记忆**\n${escapeMarkdown((proposal.selectors || []).join('\n'))}\n\n**合并后的记忆**\n${escapeMarkdown(proposal.value)}\n\n<font color='grey'>预期文档版本：v${proposal.expectedDocumentVersion ?? '?'}</font>`
-              : proposal.action === 'index'
-                ? `**${label}**\n${escapeMarkdown(proposal.selector || proposal.value)}\n\n**检索别名**\n${escapeMarkdown((proposal.searchAliases || []).join('\n'))}\n\n<font color='grey'>预期文档版本：v${proposal.expectedDocumentVersion ?? '?'}</font>`
-              : `**${label}**\n${escapeMarkdown(proposal.value)}`,
-          ),
-        ],
-      },
-    ],
-  };
+  return markdown(
+    proposal.action === 'replace'
+      ? `**当前记忆**\n${escapeMarkdown(proposal.selector || '(缺少原内容)')}\n\n**替换为**\n${escapeMarkdown(proposal.value)}`
+      : proposal.action === 'merge'
+        ? `**当前记忆**\n${escapeMarkdown((proposal.selectors || []).join('\n'))}\n\n**合并为**\n${escapeMarkdown(proposal.value)}`
+      : proposal.action === 'index'
+        ? `**${label}**\n${escapeMarkdown(proposal.selector || proposal.value)}\n\n**检索别名**\n${escapeMarkdown((proposal.searchAliases || []).join('\n'))}`
+        : `**${label}**\n${escapeMarkdown(proposal.value)}`,
+  );
 }
 
 function proposalAudit(proposal: MemoryProposal): Record<string, unknown> {
   const actor = proposal.actorId || 'unknown';
   return {
-    tag: 'column_set',
-    flex_mode: 'stretch',
-    columns: [
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 1,
-        padding: '0 2px',
-        elements: [
-          markdown(
-            `<font color='grey'>由 ${escapeMarkdown(actor)} 提议 · ${escapeMarkdown(proposal.createdAt)}</font>`,
-          ),
-        ],
-      },
-    ],
+    tag: 'collapsible_panel',
+    expanded: false,
+    border: { color: 'grey', corner_radius: '6px' },
+    header: {
+      title: plainText('审计信息'),
+      icon: { tag: 'standard_icon', token: 'history_outlined' },
+      icon_position: 'left',
+      padding: '8px 10px 8px 10px',
+    },
+    padding: '8px 10px 10px 10px',
+    elements: [markdown(`提议人：${escapeMarkdown(actor)}  \n提议时间：${escapeMarkdown(proposal.createdAt)}${proposal.expectedDocumentVersion === undefined ? '' : `  \n预期版本：v${proposal.expectedDocumentVersion}`}`, { text_size: 'notation' })],
   };
+}
+
+function cardTitle(proposal: MemoryProposal): string {
+  if (proposal.status !== 'pending') return '长期记忆';
+  switch (proposal.action) {
+    case 'remember': return '是否记住这条信息？';
+    case 'forget': return '是否忘记这条信息？';
+    case 'replace': return '是否更新这条记忆？';
+    case 'merge': return '是否合并这些记忆？';
+    default: return '是否完善这条记忆的检索？';
+  }
 }
 
 function approvalActions(proposal: MemoryProposal): Record<string, unknown> {
@@ -264,12 +220,12 @@ export function buildLarkMemoryProposalCard(
     schema: '2.0',
     config: {
       update_multi: true,
-      width_mode: 'default',
+      width_mode: 'fill',
       enable_forward: false,
       summary: { content: `记忆变更：${statusLabel}` },
     },
     header: {
-      title: plainText('长期记忆确认'),
+      title: plainText(cardTitle(proposal)),
       subtitle: plainText(scopeLabel(proposal)),
       template: pending ? 'blue' : statusColor,
       icon: { tag: 'standard_icon', token: 'approve_colorful' },
@@ -286,8 +242,10 @@ export function buildLarkMemoryProposalCard(
       padding: '12px 12px 20px 12px',
       vertical_spacing: 'large',
       elements: [
-        fieldBlock(proposal),
         proposalContent(proposal),
+        ...(pending
+          ? [markdown(`<font color='grey'>批准后，MaxTag 会在「${escapeMarkdown(scopeLabel(proposal))}」中持续使用这条信息。</font>`, { text_size: 'notation' })]
+          : []),
         proposalAudit(proposal),
         ...(pending ? [approvalActions(proposal)] : [terminalDecision(proposal)]),
       ],
