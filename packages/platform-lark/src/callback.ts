@@ -148,24 +148,31 @@ export function decryptLarkCallbackPayload(
 function validateTimestamp(
   headers: IncomingHttpHeaders,
   options: LarkCallbackValidationOptions,
+  body: Record<string, unknown>,
 ): LarkCallbackValidationResult {
   if (!options.maxTimestampSkewSeconds) return { ok: true };
-  const raw = headerValue(headers, 'x-lark-request-timestamp');
-  if (!raw) return { ok: false, statusCode: 401, reason: 'stale_request' };
-  let seconds = Number(raw);
-  if (!Number.isFinite(seconds) || seconds <= 0) {
-    return { ok: false, statusCode: 401, reason: 'stale_request' };
-  }
-  // Lark callback families have emitted epoch timestamps in seconds,
-  // milliseconds, and microseconds. Normalize sub-second units before
-  // applying one strict replay window; the original header string remains
-  // untouched for signature verification.
-  while (seconds > 100_000_000_000) seconds /= 1_000;
   const nowSeconds = Math.floor((options.now ?? new Date()).getTime() / 1000);
-  if (Math.abs(nowSeconds - seconds) > options.maxTimestampSkewSeconds) {
-    return { ok: false, statusCode: 401, reason: 'stale_request' };
+  const bodyCreateTime = headerRecord(body)?.create_time;
+  const candidates = [
+    headerValue(headers, 'x-lark-request-timestamp'),
+    typeof bodyCreateTime === 'string' || typeof bodyCreateTime === 'number'
+      ? String(bodyCreateTime)
+      : undefined,
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    let seconds = Number(raw);
+    if (!Number.isFinite(seconds) || seconds <= 0) continue;
+    // Lark callback families have emitted epoch timestamps in seconds,
+    // milliseconds, and microseconds. Normalize sub-second units before
+    // applying one strict replay window; the original request header remains
+    // untouched for signature verification.
+    while (seconds > 100_000_000_000) seconds /= 1_000;
+    if (Math.abs(nowSeconds - seconds) <= options.maxTimestampSkewSeconds) {
+      return { ok: true };
+    }
   }
-  return { ok: true };
+  return { ok: false, statusCode: 401, reason: 'stale_request' };
 }
 
 function validateVerificationToken(
@@ -274,7 +281,7 @@ export function parseAndValidateLarkCallback(
     return { body, validation: { ok: true } };
   }
 
-  const timestamp = validateTimestamp(headers, options);
+  const timestamp = validateTimestamp(headers, options, body);
   if (!timestamp.ok) return { body, validation: timestamp };
 
   return { body, validation: { ok: true } };
