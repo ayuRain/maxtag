@@ -119,14 +119,12 @@ function threadFor(
 ): SourceThread {
   const configuredChatType = metadataString(route.fallback.metadata, 'chatType');
   const direct = route.chat?.chatMode === 'p2p' || configuredChatType === 'p2p';
-  const rootId = direct
-    ? undefined
-    : message.root_id ||
-      message.parent_id ||
-      message.message_id;
+  const larkRootId = message.root_id || message.parent_id;
+  const threaded = !direct && Boolean(message.thread_id);
+  const rootId = direct ? undefined : larkRootId || message.message_id;
   const externalId = direct
     ? route.channelId
-    : `${route.channelId}:${rootId}`;
+    : `${route.channelId}:${threaded ? rootId : 'main'}`;
   const topicExternalId =
     !direct && message.thread_id
       ? `${route.channelId}:${message.thread_id}`
@@ -151,13 +149,14 @@ function threadFor(
     projectId: binding.projectId,
     channelId: route.channelId,
     rootMessageId: rootId,
-    topicId: direct ? undefined : message.thread_id || rootId,
+    topicId: threaded ? message.thread_id || rootId : undefined,
     visibility,
     title: route.chat?.name || binding.title || `Lark ${route.channelId}`,
     metadata: {
       ingress: 'lark-long-connection-backfill',
       larkThreadId: message.thread_id,
       larkRootId: message.root_id,
+      larkConversationMode: direct ? 'direct' : threaded ? 'thread' : 'main',
       larkChatInfoStatus: route.chat ? 'resolved' : 'unavailable',
       larkChatMode: route.chat?.chatMode,
       larkChatType: route.chat?.chatType,

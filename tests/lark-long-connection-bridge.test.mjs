@@ -278,6 +278,7 @@ test('Lark long-connection topic root and reply keep one canonical thread identi
     chat_id: 'oc_topic',
     chat_type: 'group',
     message_id: 'om_topic_root',
+    thread_id: 'omt_topic',
     sender_id: 'ou_user',
     content: '@MaxTag audit this',
   });
@@ -297,6 +298,50 @@ test('Lark long-connection topic root and reply keep one canonical thread identi
   assert.equal(reply.thread.id, root.thread.id);
   assert.equal(reply.thread.rootMessageId, 'om_topic_root');
   assert.equal(reply.thread.topicId, 'omt_topic');
+});
+
+test('Lark long-connection top-level group messages share the main conversation', () => {
+  const event = (messageId) => larkEventToClientEvent({
+    event_id: `event-${messageId}`,
+    chat_id: 'oc_regular_group',
+    chat_type: 'group',
+    message_id: messageId,
+    sender_id: 'ou_user',
+    content: '@MaxTag continue',
+  });
+  const first = event('om_first');
+  const second = event('om_second');
+
+  assert.equal(first.thread.id, 'lark:oc_regular_group:main');
+  assert.equal(second.thread.id, first.thread.id);
+  assert.equal(first.thread.externalId, 'oc_regular_group:main');
+  assert.equal(first.thread.rootMessageId, 'om_first');
+  assert.equal(second.thread.rootMessageId, 'om_second');
+  assert.equal(first.thread.topicId, undefined);
+  assert.equal(first.thread.metadata.larkConversationMode, 'main');
+});
+
+test('Lark regular group replies without thread_id stay in the main conversation', () => {
+  const root = larkEventToClientEvent({
+    chat_id: 'oc_regular_group',
+    chat_type: 'group',
+    message_id: 'om_root',
+    sender_id: 'ou_user',
+    content: '@MaxTag start',
+  });
+  const reply = larkEventToClientEvent({
+    chat_id: 'oc_regular_group',
+    chat_type: 'group',
+    message_id: 'om_reply',
+    root_id: 'om_root',
+    reply_to: 'om_root',
+    sender_id: 'ou_user',
+    content: '@MaxTag continue',
+  });
+
+  assert.equal(reply.thread.id, root.thread.id);
+  assert.equal(reply.thread.topicId, undefined);
+  assert.equal(reply.thread.rootMessageId, 'om_root');
 });
 
 test('Lark long-connection bridge recognizes MaxTag and legacy text mentions', () => {

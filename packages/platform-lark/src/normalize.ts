@@ -158,11 +158,13 @@ export function normalizeLarkEvent(
   if (!message?.message_id || !message.chat_id) return null;
 
   const isDirect = message.chat_type === 'p2p';
-  const rootId = message.root_id || message.parent_id || message.message_id;
-  const topicId = message.thread_id || rootId;
+  const larkRootId = message.root_id || message.parent_id;
+  const isThreaded = !isDirect && Boolean(message.thread_id);
+  const rootId = larkRootId || message.message_id;
+  const topicId = isThreaded ? message.thread_id || rootId : undefined;
   const threadExternalId = isDirect
     ? message.chat_id
-    : `${message.chat_id}:${rootId}`;
+    : `${message.chat_id}:${isThreaded ? rootId : 'main'}`;
   const senderId =
     body.event?.sender?.sender_id?.open_id ||
     body.event?.sender?.sender_id?.user_id ||
@@ -189,6 +191,12 @@ export function normalizeLarkEvent(
       chatType: message.chat_type,
       eventId: body.header?.event_id || body.event_id,
       larkThreadId: message.thread_id,
+      larkRootId: message.root_id,
+      larkConversationMode: isDirect
+        ? 'direct'
+        : isThreaded
+          ? 'thread'
+          : 'main',
     },
   };
 

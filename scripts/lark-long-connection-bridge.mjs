@@ -365,13 +365,22 @@ export function larkEventToClientEvent(event, options = {}) {
   if (!chatId || !messageId) {
     throw new Error('lark_chat_id_and_message_id_required');
   }
-  const rootId =
+  const larkThreadId = cleanString(event.thread_id);
+  const larkRootId =
     cleanString(event.root_id) ||
-    cleanString(event.reply_to) ||
-    messageId;
+    cleanString(event.reply_to);
   const chatType = cleanString(event.chat_type);
   const isDirect = chatType === 'p2p';
-  const externalId = isDirect ? chatId : `${chatId}:${rootId}`;
+  // thread_id is the authoritative signal for a real Lark topic. A regular
+  // group reply can have root_id/reply_to but still belongs to the main chat.
+  const isThreaded = !isDirect && Boolean(larkThreadId);
+  const rootId = larkRootId || messageId;
+  // A regular group timeline has no thread_id. Treat it as one stable
+  // conversation instead of creating a fresh provider session per message.
+  // Real Lark topics and replies remain isolated by their canonical root.
+  const externalId = isDirect
+    ? chatId
+    : `${chatId}:${isThreaded ? rootId : 'main'}`;
   const text = cleanString(event.content) || '';
   const mentions = parseMentions(event.mentions);
   const botOpenId = options.botOpenId;
@@ -394,14 +403,19 @@ export function larkEventToClientEvent(event, options = {}) {
       projectId: options.projectId,
       channelId: chatId,
       rootMessageId: isDirect ? undefined : rootId,
-      topicId: isDirect ? undefined : cleanString(event.thread_id) || rootId,
+      topicId: isThreaded ? larkThreadId || rootId : undefined,
       visibility: isDirect ? 'direct' : 'public',
       title: `Lark ${chatId}`,
       metadata: {
         ingress: 'lark-long-connection',
         chatType,
-        larkThreadId: cleanString(event.thread_id),
+        larkThreadId,
         larkRootId: cleanString(event.root_id),
+        larkConversationMode: isDirect
+          ? 'direct'
+          : isThreaded
+            ? 'thread'
+            : 'main',
       },
     },
     message: {

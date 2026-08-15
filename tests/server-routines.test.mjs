@@ -371,7 +371,7 @@ test(
       (routine) => routine.name === 'Summarize channel incidents',
     );
     assert.equal(standing.createdBy, 'ou_channel_operator');
-    assert.equal(standing.destination.externalId, 'oc_standing_work:om_standing_root');
+    assert.equal(standing.destination.externalId, 'oc_standing_work:main');
     assert.equal(standing.destination.rootMessageId, 'om_standing_root');
 
     const listCommandResponse = await fetch(`${baseUrl}/v1/lark/events`, {

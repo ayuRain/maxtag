@@ -200,6 +200,10 @@ test('Lark history backfill keeps project routes isolated across channels', asyn
       ['oc_beta', 'beta', 'ou_beta'],
     ],
   );
+  assert.deepEqual(
+    ingested.map((event) => event.thread.id),
+    ['lark:oc_alpha:main', 'lark:oc_beta:main'],
+  );
 });
 
 async function bridgeReceiver(handler) {

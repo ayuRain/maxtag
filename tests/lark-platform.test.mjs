@@ -169,7 +169,7 @@ test('Lark topic root and later replies share one canonical MaxTag thread', () =
         sender: { sender_id: { open_id: 'user-1' } },
       },
     });
-  const root = event({ message_id: 'om_root' });
+  const root = event({ message_id: 'om_root', thread_id: 'omt_topic' });
   const reply = event({
     message_id: 'om_reply',
     root_id: 'om_root',
@@ -183,6 +183,59 @@ test('Lark topic root and later replies share one canonical MaxTag thread', () =
   assert.equal(reply.thread.id, root.thread.id);
   assert.equal(reply.thread.rootMessageId, 'om_root');
   assert.equal(reply.thread.topicId, 'omt_topic');
+});
+
+test('Lark webhook top-level group messages share one stable main conversation', () => {
+  const event = (messageId) =>
+    normalizeLarkEvent({
+      event: {
+        message: {
+          message_id: messageId,
+          chat_id: 'chat-group',
+          chat_type: 'group',
+          message_type: 'text',
+          content: JSON.stringify({ text: '@MaxTag continue' }),
+        },
+        sender: { sender_id: { open_id: 'user-1' } },
+      },
+    });
+  const first = event('om_first');
+  const second = event('om_second');
+
+  assert.ok(first);
+  assert.ok(second);
+  assert.equal(first.thread.id, 'lark:chat-group:main');
+  assert.equal(second.thread.id, first.thread.id);
+  assert.equal(first.thread.rootMessageId, 'om_first');
+  assert.equal(second.thread.rootMessageId, 'om_second');
+  assert.equal(first.thread.topicId, undefined);
+});
+
+test('Lark webhook regular group replies without thread_id stay in main', () => {
+  const event = (message) => normalizeLarkEvent({
+    event: {
+      message: {
+        chat_id: 'chat-group',
+        chat_type: 'group',
+        message_type: 'text',
+        content: JSON.stringify({ text: '@MaxTag continue' }),
+        ...message,
+      },
+      sender: { sender_id: { open_id: 'user-1' } },
+    },
+  });
+  const root = event({ message_id: 'om_root' });
+  const reply = event({
+    message_id: 'om_reply',
+    root_id: 'om_root',
+    parent_id: 'om_root',
+  });
+
+  assert.ok(root);
+  assert.ok(reply);
+  assert.equal(reply.thread.id, root.thread.id);
+  assert.equal(reply.thread.topicId, undefined);
+  assert.equal(reply.thread.rootMessageId, 'om_root');
 });
 
 test('Lark p2p events share one stable chat thread across messages', () => {
