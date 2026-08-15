@@ -735,6 +735,8 @@ export const OPENTAG_REJECT_MEMORY_PROPOSAL_ACTION =
   'opentag.memory_proposal.reject';
 export const OPENTAG_APPROVE_TOOL_ACTION = 'opentag.tool_approval.approve';
 export const OPENTAG_REJECT_TOOL_ACTION = 'opentag.tool_approval.reject';
+export const OPENTAG_SET_THREAD_ACTIVATION_ACTION =
+  'opentag.thread_activation.set';
 export const OPENTAG_REQUEUE_RUN_ABORT_REASON = 'opentag.run_requeue';
 export const OPENTAG_LEASE_LOST_ABORT_REASON = 'opentag.run_lease_lost';
 
@@ -1176,6 +1178,19 @@ export interface PlatformAdapter {
     active: boolean,
   ): Promise<void>;
   createProgressSurface(thread: SourceThread): ProgressSurface;
+  /**
+   * Publish a platform-native card for a control/status surface. Callers must
+   * fall back to sendMessage when the adapter does not support rich cards.
+   */
+  sendCard?(
+    thread: SourceThread,
+    card: Record<string, unknown>,
+    options?: {
+      runId?: string;
+      replyToMessageId?: string;
+      stage?: 'thread-status-card';
+    },
+  ): Promise<{ cardId: string }>;
   sendMessage(
     thread: SourceThread,
     text: string,

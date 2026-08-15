@@ -336,6 +336,12 @@ export function normalizeLarkCardAction(
     typeof record.approval_id === 'string' ? record.approval_id.trim() : '';
   const projectId =
     typeof record.project_id === 'string' ? record.project_id.trim() : '';
+  const activationMode =
+    record.activation_mode === 'mention' ||
+    record.activation_mode === 'questions' ||
+    record.activation_mode === 'always'
+      ? record.activation_mode
+      : undefined;
   const inputValue =
     typeof event.action?.input_value === 'string'
       ? event.action.input_value.trim()
@@ -346,6 +352,7 @@ export function normalizeLarkCardAction(
     ...(proposalId ? { proposalId } : {}),
     ...(approvalId ? { approvalId } : {}),
     ...(projectId ? { projectId } : {}),
+    ...(activationMode ? { activationMode } : {}),
     ...(inputValue ? { inputValue } : {}),
     actorId,
     cardMessageId,
@@ -395,6 +402,12 @@ export function normalizeFlatLarkCardAction(
     typeof record?.approval_id === 'string' ? record.approval_id.trim() : '';
   const projectId =
     typeof record?.project_id === 'string' ? record.project_id.trim() : '';
+  const activationMode =
+    record?.activation_mode === 'mention' ||
+    record?.activation_mode === 'questions' ||
+    record?.activation_mode === 'always'
+      ? record.activation_mode
+      : undefined;
   const inputValue = flatString(body, 'input_value') || '';
   return {
     action,
@@ -402,6 +415,7 @@ export function normalizeFlatLarkCardAction(
     ...(proposalId ? { proposalId } : {}),
     ...(approvalId ? { approvalId } : {}),
     ...(projectId ? { projectId } : {}),
+    ...(activationMode ? { activationMode } : {}),
     ...(inputValue ? { inputValue } : {}),
     actorId,
     cardMessageId,

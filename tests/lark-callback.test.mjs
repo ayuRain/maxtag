@@ -376,6 +376,41 @@ test('Lark onboarding card actions preserve the selected Project', () => {
   assert.equal(flat.projectId, 'project-2');
 });
 
+test('Lark thread status actions preserve the selected activation mode', () => {
+  const v2 = normalizeLarkCardAction({
+    schema: '2.0',
+    header: { event_type: 'card.action.trigger' },
+    event: {
+      operator: { open_id: 'ou-manager' },
+      action: {
+        tag: 'button',
+        value: {
+          action: 'opentag.thread_activation.set',
+          activation_mode: 'questions',
+        },
+      },
+      context: {
+        open_message_id: 'om-status-card',
+        open_chat_id: 'oc-group',
+      },
+    },
+  });
+  assert.equal(v2.activationMode, 'questions');
+
+  const flat = normalizeFlatLarkCardAction({
+    type: 'card.action.trigger',
+    operator_id: 'ou-manager',
+    message_id: 'om-status-card',
+    chat_id: 'oc-group',
+    action_tag: 'button',
+    action_value: JSON.stringify({
+      action: 'opentag.thread_activation.set',
+      activation_mode: 'always',
+    }),
+  });
+  assert.equal(flat.activationMode, 'always');
+});
+
 test('Lark onboarding input actions preserve the new Project name', () => {
   const v2 = normalizeLarkCardAction({
     schema: '2.0',

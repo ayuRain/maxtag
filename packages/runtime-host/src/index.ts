@@ -1696,12 +1696,27 @@ export class OpenTagWorkerHost {
             nextModelRunAllowed: commandResult.budget.allowed,
           },
         });
-        await runPlatform.platform.sendMessage(
-          initialRun.thread,
-          commandResult.summary,
-          [],
-          { runId, replyToMessageId: sourceReplyMessageId(initialRun.message) },
-        );
+        if (
+          runPlatform.platform.kind === 'lark' &&
+          runPlatform.platform.sendCard
+        ) {
+          await runPlatform.platform.sendCard(
+            initialRun.thread,
+            commandResult.card,
+            {
+              runId,
+              replyToMessageId: sourceReplyMessageId(initialRun.message),
+              stage: 'thread-status-card',
+            },
+          );
+        } else {
+          await runPlatform.platform.sendMessage(
+            initialRun.thread,
+            commandResult.summary,
+            [],
+            { runId, replyToMessageId: sourceReplyMessageId(initialRun.message) },
+          );
+        }
         await this.markRunInboundProcessed(initialRun);
         await this.deliveryStore.markAgentRunCompleted(
           runId,

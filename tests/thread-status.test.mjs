@@ -257,16 +257,16 @@ test('standalone worker reports only current-thread capabilities even when model
     assert.equal(statusPass.completed, 1);
     assert.equal(statusPass.failed, 0);
     const summary = statusPass.runs[0].summary;
-    assert.match(summary, /MaxTag thread status/);
-    assert.match(summary, /Workspace: Development Workspace \[dev-workspace\]/);
-    assert.match(summary, /Project: MaxTag \[opentag\]/);
+    assert.match(summary, /MaxTag · 群内设置/);
+    assert.match(summary, /工作区：Development Workspace \[dev-workspace\]/);
+    assert.match(summary, /Project：MaxTag \[opentag\]/);
     assert.match(summary, /Release Review/);
     assert.match(summary, /Release Checker/);
     assert.match(summary, /Release Runbook/);
     assert.match(summary, /Release repository \(github\)/);
-    assert.match(summary, /Standing work: 1 active/);
-    assert.match(summary, /Next model run: blocked/);
-    assert.match(summary, /This status check uses no model run/);
+    assert.match(summary, /持续任务：1 个运行中/);
+    assert.match(summary, /下一次模型调用：已阻止/);
+    assert.match(summary, /查看本卡片不消耗模型调用/);
     assert.doesNotMatch(summary, /Secret Planning/);
     assert.doesNotMatch(summary, /Secret Researcher/);
     assert.doesNotMatch(summary, /Secret Notes/);
@@ -275,6 +275,22 @@ test('standalone worker reports only current-thread capabilities even when model
       'thread-status-run',
     );
     assert.ok(statusEvents.some((event) => event.type === 'thread_status'));
+    const statusOutbox = await host.deliveryStore.listOutbox({
+      runId: 'thread-status-run',
+      limit: 10,
+    });
+    const statusCard = statusOutbox.find(
+      (item) => item.kind === 'lark.card.create',
+    );
+    assert.ok(statusCard);
+    assert.match(
+      JSON.stringify(statusCard.payload.card),
+      /群内设置/u,
+    );
+    assert.equal(
+      statusOutbox.filter((item) => item.kind === 'lark.text').length,
+      0,
+    );
     const afterStatusUsage = await host.deliveryStore.usageSnapshot({
       workspaceId: 'dev-workspace',
     });

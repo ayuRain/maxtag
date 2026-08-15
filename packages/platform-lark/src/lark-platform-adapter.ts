@@ -123,6 +123,28 @@ export class LarkPlatformAdapter implements PlatformAdapter {
     return new LarkProgressSurface(thread, this.transport);
   }
 
+  async sendCard(
+    thread: SourceThread,
+    card: Record<string, unknown>,
+    options?: {
+      runId?: string;
+      replyToMessageId?: string;
+      stage?: 'thread-status-card';
+    },
+  ): Promise<{ cardId: string }> {
+    return this.transport.createCard({
+      chatId: thread.channelId || thread.externalId,
+      rootId: thread.rootMessageId,
+      replyToMessageId: options?.replyToMessageId,
+      card,
+      metadata: {
+        runId: options?.runId,
+        thread,
+        stage: options?.stage,
+      },
+    });
+  }
+
   async sendMemoryProposalCard(
     thread: SourceThread,
     proposal: MemoryProposal,

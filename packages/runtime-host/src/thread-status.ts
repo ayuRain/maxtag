@@ -14,10 +14,15 @@ import type {
 } from '@opentag/config';
 import type {
   DeliveryStore,
+  ThreadActivationMode,
   UsageBudgetCheckResult,
   UsageBudgetLine,
 } from '@opentag/delivery';
 import type { RoutineCommandService } from '@opentag/routines';
+import {
+  buildLarkThreadStatusCard,
+  type ThreadStatusCardModel,
+} from '@opentag/ui-cards';
 
 export interface ParsedThreadStatusCommand {
   kind: 'status';
@@ -33,6 +38,9 @@ export interface ThreadStatusResult {
   knowledgeSourceIds: string[];
   routineIds: string[];
   budget: UsageBudgetCheckResult;
+  activationMode: ThreadActivationMode;
+  bindingId?: string;
+  card: Record<string, unknown>;
 }
 
 interface ThreadStatusAuthorization {
@@ -48,7 +56,10 @@ export interface ThreadStatusServiceOptions {
   delegatedAgentStore: Pick<FileDelegatedAgentStore, 'list'>;
   knowledgeSourceStore: Pick<FileKnowledgeSourceStore, 'list'>;
   routineCommandService: Pick<RoutineCommandService, 'listForThread'>;
-  deliveryStore: Pick<DeliveryStore, 'checkUsageBudget'>;
+  deliveryStore: Pick<
+    DeliveryStore,
+    'checkUsageBudget' | 'getThreadBindingForThread'
+  >;
 }
 
 function stripAddressing(text: string): string {
@@ -109,6 +120,21 @@ function boundedList(values: string[], empty = 'none', limit = 6): string {
   return `${visible.join(', ')}${suffix}`;
 }
 
+const memoryScopeLabels: Record<MemoryScopeKind, string> = {
+  global: '安装',
+  workspace: '公司',
+  project: '项目',
+  channel: '群聊',
+  thread: '话题',
+};
+
+function memoryScopeLabelsFor(
+  access: AccessBundle,
+  permission: 'read' | 'write',
+): string[] {
+  return memoryScopes(access, permission).map((scope) => memoryScopeLabels[scope]);
+}
+
 function memoryScopes(
   access: AccessBundle,
   permission: 'read' | 'write',
@@ -151,41 +177,86 @@ function budgetPolicyLabel(
   const currentCost = line?.costUsd ?? 0;
   const limits: string[] = [];
   if (typeof policy.maxRunsPerMonth === 'number') {
-    limits.push(
-      `runs ${numberLabel(currentRuns)}/${numberLabel(policy.maxRunsPerMonth)}`,
-    );
+    limits.push(`调用 ${numberLabel(currentRuns)}/${numberLabel(policy.maxRunsPerMonth)}`);
   }
   if (typeof policy.maxCostUsdPerMonth === 'number') {
     limits.push(
-      `cost $${currentCost.toFixed(2)}/$${policy.maxCostUsdPerMonth.toFixed(2)}`,
+      `费用 $${currentCost.toFixed(2)}/$${policy.maxCostUsdPerMonth.toFixed(2)}`,
     );
   }
-  return `${policy.scope ?? 'project'} ${limits.join(', ') || 'uncapped'}`;
+  const scope = memoryScopeLabels[(policy.scope ?? 'project') as MemoryScopeKind] ??
+    (policy.scope ?? '项目');
+  return `${scope} ${limits.join('，') || '不限额'}`;
 }
 
 function accessLabel(authorization: ThreadStatusAuthorization): string {
+  const workspaceRoles: Record<string, string> = {
+    owner: '所有者',
+    admin: '管理员',
+    member: '成员',
+    guest: '访客',
+  };
+  const projectRoles: Record<string, string> = {
+    manager: '管理员',
+    contributor: '协作者',
+    viewer: '查看者',
+  };
+  const capabilityLabels: Record<string, string> = {
+    invoke_agent: '调用智能体',
+    write_memory: '写入记忆',
+    manage_routines: '管理持续任务',
+    manage_workflows: '管理工作流',
+  };
   const roles = [
     authorization.workspaceRole
-      ? `workspace ${authorization.workspaceRole}`
+      ? `工作区${workspaceRoles[authorization.workspaceRole] || authorization.workspaceRole}`
       : undefined,
-    authorization.projectRole ? `project ${authorization.projectRole}` : undefined,
+    authorization.projectRole
+      ? `Project ${projectRoles[authorization.projectRole] || authorization.projectRole}`
+      : undefined,
   ].filter((value): value is string => Boolean(value));
   const principal = roles.length
     ? roles.join(', ')
     : authorization.mode
       ? authorization.mode
-      : 'authorized ingress';
-  return `${principal}; ${boundedList(authorization.capabilities ?? [], 'invoke only')}`;
+      : '已授权入口';
+  return `${principal}；${boundedList(
+    (authorization.capabilities ?? []).map(
+      (capability) => capabilityLabels[capability] || capability,
+    ),
+    '仅可调用',
+  )}`;
 }
 
 function budgetBlockedLabel(check: UsageBudgetCheckResult): string {
   if (check.reason === 'runs_budget_exceeded') {
-    return 'blocked (monthly run limit reached)';
+    return '已阻止（月度调用次数已用完）';
   }
   if (check.reason === 'cost_budget_exceeded') {
-    return 'blocked (monthly cost limit reached)';
+    return '已阻止（月度费用额度已用完）';
   }
-  return 'blocked (monthly usage limit reached)';
+  return '已阻止（月度用量已用完）';
+}
+
+function networkPolicyLabel(access: AccessBundle): string {
+  const labels: Record<string, string> = {
+    'deny-by-default': '默认禁止',
+    'allow-all': '全部允许',
+    restricted: '受限',
+  };
+  return `${labels[access.networkPolicy.mode] || access.networkPolicy.mode}；${access.networkPolicy.allowedHosts.length} 个允许域名`;
+}
+
+function activationModeLabel(mode: ThreadActivationMode): string {
+  if (mode === 'always') return '持续响应';
+  if (mode === 'questions') return '回答明确问题';
+  return '仅被 @ 时';
+}
+
+function visibilityLabel(value: SourceThread['visibility']): string {
+  if (value === 'direct') return '私聊';
+  if (value === 'private') return '私有群';
+  return '公开群';
 }
 
 export class ThreadStatusService {
@@ -200,7 +271,7 @@ export class ThreadStatusService {
     const skillIds = resolved.access.skillIds ?? [];
     const agentIds = resolved.access.agentIds ?? [];
     const knowledgeSourceIds = resolved.access.knowledgeSourceIds ?? [];
-    const [skills, agents, knowledgeSources, routines, budget] = await Promise.all([
+    const [skills, agents, knowledgeSources, routines, budget, binding] = await Promise.all([
       this.options.skillStore.list({ ids: skillIds }),
       this.options.delegatedAgentStore.list({ ids: agentIds }),
       this.options.knowledgeSourceStore.list({
@@ -214,6 +285,7 @@ export class ThreadStatusService {
         policies: resolved.access.budgetPolicies,
         expected: { runs: 1, costUsd: 0 },
       }),
+      this.options.deliveryStore.getThreadBindingForThread(thread),
     ]);
     const toolGrants = resolved.access.grants.filter(
       (grant) => grant.kind !== 'memory',
@@ -229,40 +301,68 @@ export class ThreadStatusService {
     const enabledRoutines = routines.filter((routine) => routine.enabled);
     const pausedRoutines = routines.length - enabledRoutines.length;
     const budgetState = budget.allowed
-      ? 'available'
+      ? '可用'
       : budgetBlockedLabel(budget);
     const budgetDetails = policies.length
       ? policies.map((policy) => budgetPolicyLabel(budget, policy)).join('; ')
-      : 'no monthly cap';
+      : '无月度上限';
+    const activationMode = binding?.activationMode ?? 'mention';
+    const cardModel: ThreadStatusCardModel = {
+      agentName: resolved.identity.displayName,
+      workspaceName: resolved.workspace.name,
+      workspaceId: resolved.workspace.id,
+      projectName: resolved.project.name,
+      projectId: resolved.project.key,
+      channel,
+      topic,
+      visibility: visibilityLabel(thread.visibility),
+      activationMode,
+      identity: `${resolved.identity.displayName} [${resolved.identity.id}]`,
+      executor: resolved.identity.defaultExecutorId,
+      actorAccess: accessLabel(authorization),
+      memoryRead: memoryScopeLabelsFor(resolved.access, 'read'),
+      memoryWrite: memoryScopeLabelsFor(resolved.access, 'write'),
+      skills: skills.map((skill) => skill.name),
+      agents: agents.map((agent) => agent.name),
+      sources: knowledgeSources.map((source) => source.name),
+      tools: toolLabels,
+      network: networkPolicyLabel(resolved.access),
+      activeRoutines: enabledRoutines.map((routine) => routine.name),
+      pausedRoutines: routines
+        .filter((routine) => !routine.enabled)
+        .map((routine) => routine.name),
+      budgetState: budget.allowed ? '下一次模型调用可用' : budgetBlockedLabel(budget),
+      budgetDetails,
+      budgetPeriod: budget.period,
+    };
 
     const summary = [
-      `${resolved.identity.displayName} thread status`,
+      `${resolved.identity.displayName} · 群内设置`,
       '',
-      'Route',
-      `- Workspace: ${resolved.workspace.name} [${resolved.workspace.id}]`,
-      `- Project: ${resolved.project.name} [${resolved.project.key}]`,
-      `- Channel: ${channel}`,
-      `- Topic: ${topic}`,
-      `- Visibility: ${thread.visibility}`,
+      '路由',
+      `- 工作区：${resolved.workspace.name} [${resolved.workspace.id}]`,
+      `- Project：${resolved.project.name} [${resolved.project.key}]`,
+      `- 群聊：${channel}`,
+      `- 话题：${topic}`,
+      `- 响应方式：${activationModeLabel(activationMode)}`,
       '',
-      'Identity and access',
-      `- Agent: ${resolved.identity.displayName} [${resolved.identity.id}] via ${resolved.identity.defaultExecutorId}`,
-      `- Your access: ${accessLabel(authorization)}`,
-      `- Memory read: ${boundedList(memoryScopes(resolved.access, 'read'))}`,
-      `- Memory write: ${boundedList(memoryScopes(resolved.access, 'write'))}`,
+      '身份与权限',
+      `- 智能体：${resolved.identity.displayName} [${resolved.identity.id}]，执行器 ${resolved.identity.defaultExecutorId}`,
+      `- 你的权限：${accessLabel(authorization)}`,
+      `- 可读记忆：${boundedList(memoryScopeLabelsFor(resolved.access, 'read'), '无')}`,
+      `- 可写记忆：${boundedList(memoryScopeLabelsFor(resolved.access, 'write'), '无')}`,
       '',
-      'Available here',
-      `- Skills (${skills.length}): ${boundedList(skills.map((skill) => skill.name))}`,
-      `- Agents (${agents.length}): ${boundedList(agents.map((agent) => agent.name))}`,
-      `- Sources (${knowledgeSources.length}): ${boundedList(knowledgeSources.map((source) => source.name))}`,
-      `- Tools (${toolLabels.length}): ${boundedList(toolLabels)}`,
-      `- Network: ${resolved.access.networkPolicy.mode}; ${resolved.access.networkPolicy.allowedHosts.length} allowed host${resolved.access.networkPolicy.allowedHosts.length === 1 ? '' : 's'}`,
-      `- Standing work: ${enabledRoutines.length} active${pausedRoutines ? `, ${pausedRoutines} paused` : ''}`,
+      '当前可用',
+      `- Skills（${skills.length}）：${boundedList(skills.map((skill) => skill.name), '无')}`,
+      `- 子智能体（${agents.length}）：${boundedList(agents.map((agent) => agent.name), '无')}`,
+      `- 知识源（${knowledgeSources.length}）：${boundedList(knowledgeSources.map((source) => source.name), '无')}`,
+      `- 工具（${toolLabels.length}）：${boundedList(toolLabels, '无')}`,
+      `- 持续任务：${enabledRoutines.length} 个运行中${pausedRoutines ? `，${pausedRoutines} 个已暂停` : ''}`,
       '',
-      'Usage',
-      `- Next model run: ${budgetState}`,
-      `- ${budget.period}: ${budgetDetails}`,
-      '- This status check uses no model run.',
+      '用量',
+      `- 下一次模型调用：${budgetState}`,
+      `- ${budget.period}：${budgetDetails}`,
+      '- 查看本卡片不消耗模型调用。',
     ].join('\n');
 
     return {
@@ -275,6 +375,12 @@ export class ThreadStatusService {
       knowledgeSourceIds: knowledgeSources.map((source) => source.id),
       routineIds: routines.map((routine) => routine.id),
       budget,
+      activationMode,
+      bindingId: binding?.id,
+      card: buildLarkThreadStatusCard(cardModel) as unknown as Record<
+        string,
+        unknown
+      >,
     };
   }
 }

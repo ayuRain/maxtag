@@ -9,6 +9,7 @@ export interface LarkDeliveryMetadata {
     | 'tool-approval-card'
     | 'thread-reply'
     | 'onboarding-card'
+    | 'thread-status-card'
     | 'routine-notification'
     | 'artifact';
   artifactId?: string;
@@ -142,6 +143,7 @@ export interface LarkCardAction {
   proposalId?: string;
   approvalId?: string;
   projectId?: string;
+  activationMode?: 'mention' | 'questions' | 'always';
   inputValue?: string;
   actorId: string;
   cardMessageId: string;

@@ -5,6 +5,7 @@ import {
   OPENTAG_REJECT_MEMORY_PROPOSAL_ACTION,
   OPENTAG_APPROVE_TOOL_ACTION,
   OPENTAG_REJECT_TOOL_ACTION,
+  OPENTAG_SET_THREAD_ACTIVATION_ACTION,
   OPENTAG_STOP_RUN_ACTION,
   OPENTAG_TAKE_OVER_RUN_ACTION,
 } from '@opentag/core';
@@ -12,7 +13,53 @@ import {
   buildLarkMemoryProposalCard,
   buildLarkProgressCard,
   buildLarkToolApprovalCard,
+  buildLarkThreadStatusCard,
 } from '@opentag/ui-cards';
+
+test('Lark thread status card exposes Chinese capability sections and three activation modes', () => {
+  const card = buildLarkThreadStatusCard({
+    agentName: 'MaxTag',
+    workspaceName: '研发公司',
+    workspaceId: 'workspace-1',
+    projectName: '支付项目',
+    projectId: 'payments',
+    channel: '支付研发群',
+    topic: 'main',
+    visibility: '私有群',
+    activationMode: 'mention',
+    identity: 'MaxTag [maxtag]',
+    executor: 'codex',
+    actorAccess: 'project manager',
+    memoryRead: ['workspace', 'project', 'channel'],
+    memoryWrite: ['project', 'channel'],
+    skills: ['发布复核'],
+    agents: ['发布检查员'],
+    sources: ['发布手册'],
+    tools: ['GitHub'],
+    network: 'restricted；1 个允许域名',
+    activeRoutines: ['每日发布检查'],
+    pausedRoutines: [],
+    budgetState: '下一次模型调用可用',
+    budgetDetails: 'runs 3/100',
+    budgetPeriod: '2026-08',
+  });
+  const buttons = cardButtons(card);
+  assert.equal(card.schema, '2.0');
+  assert.equal(buttons.length, 3);
+  assert.deepEqual(
+    buttons.map((button) => button.behaviors[0].value),
+    ['mention', 'questions', 'always'].map((mode) => ({
+      action: OPENTAG_SET_THREAD_ACTIVATION_ACTION,
+      activation_mode: mode,
+    })),
+  );
+  assert.equal(buttons[0].disabled, true);
+  assert.match(JSON.stringify(card), /群内设置/u);
+  assert.match(JSON.stringify(card), /什么时候响应/u);
+  assert.match(JSON.stringify(card), /持续任务/u);
+  assert.match(JSON.stringify(card), /可用能力/u);
+  assert.match(JSON.stringify(card), /记忆、权限与用量/u);
+});
 
 function progressState(status) {
   return {

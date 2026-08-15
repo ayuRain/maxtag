@@ -1264,8 +1264,8 @@ test(
       (run) => run.id === statusAcceptedBody.run.id,
     );
     assert.equal(statusRun.status, 'completed');
-    assert.match(statusRun.summary, /Next model run: blocked/);
-    assert.match(statusRun.summary, /This status check uses no model run/);
+    assert.match(statusRun.summary, /下一次模型调用：已阻止/);
+    assert.match(statusRun.summary, /查看本卡片不消耗模型调用/);
 
     const auditResponse = await fetch(
       `${baseUrl}/v1/audit?workspaceId=dev-workspace&action=thread_status`,

@@ -12,6 +12,7 @@ import {
   OPENTAG_REJECT_MEMORY_PROPOSAL_ACTION,
   OPENTAG_REJECT_TOOL_ACTION,
   OPENTAG_REQUEUE_RUN_ABORT_REASON,
+  OPENTAG_SET_THREAD_ACTIVATION_ACTION,
   OPENTAG_STOP_RUN_ACTION,
   OPENTAG_TAKE_OVER_RUN_ACTION,
   OpenTagRuntime,
@@ -7195,6 +7196,150 @@ async function handleLarkHistoryOnboardingAction(
   );
 }
 
+function threadActivationModeLabel(
+  mode: 'mention' | 'questions' | 'always',
+): string {
+  if (mode === 'always') return '持续响应';
+  if (mode === 'questions') return '回答明确问题';
+  return '仅被 @ 时';
+}
+
+async function handleLarkThreadActivationAction(
+  action: LarkCardAction & {
+    activationMode: 'mention' | 'questions' | 'always';
+  },
+  inboundEventId: string,
+): Promise<LarkCardActionResponse> {
+  const receipt = await deliveryStore.getDeliveredOutboundByExternalId({
+    platform: 'lark',
+    externalId: action.cardMessageId,
+    kind: 'lark.card.create',
+  });
+  const run = receipt?.runId
+    ? await deliveryStore.getAgentRun(receipt.runId)
+    : undefined;
+  const validReceipt = Boolean(
+    receipt &&
+      receipt.payload.stage === 'thread-status-card' &&
+      run?.thread &&
+      run.platform === 'lark' &&
+      receipt.threadId === run.threadId &&
+      receipt.workspaceId === run.workspaceId &&
+      receipt.projectId === run.projectId &&
+      receipt.target.chatId === action.chatId &&
+      run.thread.channelId === action.chatId,
+  );
+  if (!validReceipt || !run?.thread) {
+    await deliveryStore.markInboundEventIgnored(
+      inboundEventId,
+      'invalid_lark_thread_status_receipt',
+      {
+        metadata: {
+          action: action.action,
+          actorId: action.actorId,
+          cardMessageId: action.cardMessageId,
+          activationMode: action.activationMode,
+          receiptId: receipt?.id,
+        },
+      },
+    );
+    return larkCardActionResponse('warning', '这张设置卡已失效，请重新发送「@MaxTag 状态」。');
+  }
+
+  const authorization = await accessStore.authorize({
+    workspaceId: run.thread.workspaceId || 'dev-workspace',
+    projectId: run.thread.projectId || run.thread.channelId || 'general',
+    platform: 'lark',
+    actor: { id: action.actorId, platformUserId: action.actorId },
+    capability: 'manage_routines',
+  });
+  const workspaceManager =
+    authorization.member?.status === 'active' &&
+    (authorization.member.role === 'owner' ||
+      authorization.member.role === 'admin');
+  const projectManager =
+    authorization.member?.status === 'active' &&
+    authorization.projectMembership?.role === 'manager';
+  if (!authorization.allowed || (!workspaceManager && !projectManager)) {
+    await deliveryStore.markInboundEventIgnored(
+      inboundEventId,
+      'actor_not_authorized',
+      {
+        workspaceId: run.workspaceId,
+        projectId: run.projectId,
+        threadId: run.threadId,
+        messageId: action.cardMessageId,
+        metadata: {
+          control: 'thread_activation',
+          actorId: action.actorId,
+          activationMode: action.activationMode,
+          authorization: actorAuthorizationPayload(authorization),
+        },
+      },
+    );
+    return larkCardActionResponse('error', '只有工作区管理员或 Project 管理员可以修改响应方式。');
+  }
+
+  const existing = await deliveryStore.getThreadBindingForThread(run.thread);
+  const configured = await deliveryStore.configureThreadBinding({
+    platform: run.thread.platform,
+    externalId: existing?.externalId || run.thread.externalId,
+    workspaceId: run.thread.workspaceId || existing?.workspaceId || 'dev-workspace',
+    projectId:
+      run.thread.projectId ||
+      existing?.projectId ||
+      run.thread.channelId ||
+      'general',
+    scope:
+      existing?.scope ||
+      (run.thread.topicId || run.thread.rootMessageId ? 'thread' : 'channel'),
+    source: 'configured',
+    channelId: run.thread.channelId || existing?.channelId,
+    title: existing?.title || run.thread.title,
+    activationMode: action.activationMode,
+    requireMention: action.activationMode !== 'always',
+    metadata: existing?.metadata || run.thread.metadata,
+    actor: `lark:${action.actorId}`,
+    reason: 'thread_status_card_activation_change',
+  });
+  const commandResult = await threadStatusService.execute(
+    { kind: 'status' },
+    run.thread,
+    actorAuthorizationPayload(authorization),
+  );
+  const transport = new TrackedLarkTransport(
+    createLarkTransportForRun().transport,
+    deliveryStore,
+  );
+  await transport.updateCard({
+    cardId: action.cardMessageId,
+    card: commandResult.card,
+    metadata: {
+      runId: run.id,
+      thread: run.thread,
+      stage: 'thread-status-card',
+    },
+  });
+  await deliveryStore.markInboundEventProcessed(inboundEventId, {
+    workspaceId: run.workspaceId,
+    projectId: run.projectId,
+    threadId: run.threadId,
+    messageId: action.cardMessageId,
+    metadata: {
+      control: 'thread_activation',
+      actorId: action.actorId,
+      activationMode: action.activationMode,
+      bindingId: configured.id,
+      receiptId: receipt!.id,
+      authorization: actorAuthorizationPayload(authorization),
+    },
+  });
+  return larkCardActionResponse(
+    'success',
+    `响应方式已切换为「${threadActivationModeLabel(action.activationMode)}」。`,
+  );
+}
+
 async function handleLarkCardAction(
   body: LarkIncomingEvent & Record<string, unknown>,
   inboundEventId: string,
@@ -7222,6 +7367,17 @@ async function handleLarkCardAction(
       MAXTAG_HISTORY_ACTION_DAYS.has(action.action))
   ) {
     return handleLarkHistoryOnboardingAction(action, inboundEventId);
+  }
+  if (
+    action?.action === OPENTAG_SET_THREAD_ACTIVATION_ACTION &&
+    action.activationMode
+  ) {
+    return handleLarkThreadActivationAction(
+      action as LarkCardAction & {
+        activationMode: 'mention' | 'questions' | 'always';
+      },
+      inboundEventId,
+    );
   }
   const isStopAction = action?.action === OPENTAG_STOP_RUN_ACTION;
   const isTakeOverAction = action?.action === OPENTAG_TAKE_OVER_RUN_ACTION;
@@ -9354,12 +9510,27 @@ async function executeAgentRun(
           nextModelRunAllowed: commandResult.budget.allowed,
         },
       });
-      await runPlatform.platform.sendMessage(
-        initialRun.thread,
-        commandResult.summary,
-        [],
-        { runId, replyToMessageId: sourceReplyMessageId(initialRun.message) },
-      );
+      if (
+        runPlatform.platform.kind === 'lark' &&
+        runPlatform.platform.sendCard
+      ) {
+        await runPlatform.platform.sendCard(
+          initialRun.thread,
+          commandResult.card,
+          {
+            runId,
+            replyToMessageId: sourceReplyMessageId(initialRun.message),
+            stage: 'thread-status-card',
+          },
+        );
+      } else {
+        await runPlatform.platform.sendMessage(
+          initialRun.thread,
+          commandResult.summary,
+          [],
+          { runId, replyToMessageId: sourceReplyMessageId(initialRun.message) },
+        );
+      }
       await markRunInboundProcessed(initialRun);
       await deliveryStore.markAgentRunCompleted(runId, commandResult.summary);
       return {
