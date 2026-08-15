@@ -35,6 +35,10 @@ interface LarkMessageData {
   message_id?: string;
 }
 
+interface LarkReactionData {
+  reaction_id?: string;
+}
+
 interface LarkFileData {
   file_key?: string;
 }
@@ -254,6 +258,35 @@ export class HttpLarkTransport implements LarkTransport {
       hasMore: data.has_more === true,
       pageToken: data.page_token,
     };
+  }
+
+  async addReaction(input: {
+    messageId: string;
+    emojiType: string;
+  }): Promise<{ reactionId: string }> {
+    const data = await this.openApiRequest<LarkReactionData>(
+      `/open-apis/im/v1/messages/${encodeURIComponent(input.messageId)}/reactions`,
+      {
+        method: 'POST',
+        body: { reaction_type: { emoji_type: input.emojiType } },
+      },
+    );
+    if (!data.reaction_id) {
+      throw new LarkApiError({
+        message: 'Lark add reaction response did not include reaction_id.',
+      });
+    }
+    return { reactionId: data.reaction_id };
+  }
+
+  async removeReaction(input: {
+    messageId: string;
+    reactionId: string;
+  }): Promise<void> {
+    await this.openApiRequest<Record<string, never>>(
+      `/open-apis/im/v1/messages/${encodeURIComponent(input.messageId)}/reactions/${encodeURIComponent(input.reactionId)}`,
+      { method: 'DELETE' },
+    );
   }
 
   async openApiRequest<T>(

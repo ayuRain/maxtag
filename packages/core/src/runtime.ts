@@ -99,6 +99,18 @@ export class OpenTagRuntime {
     onEvent?: (event: AgentRunEvent) => void | Promise<void>;
   }): Promise<AgentRunResult> {
     const now = () => (this.deps.clock ?? (() => new Date()))().toISOString();
+    let processingReactionStarted = false;
+    if (this.deps.platform.setMessageProcessingReaction) {
+      try {
+        await this.deps.platform.setMessageProcessingReaction(
+          input.message.id,
+          true,
+        );
+        processingReactionStarted = true;
+      } catch {
+        // Reactions are acknowledgement chrome, never part of durable delivery.
+      }
+    }
     let state: ProgressState = {
       runId: input.runId,
       title: `Working on ${input.thread.title || input.thread.externalId}`,
@@ -117,10 +129,25 @@ export class OpenTagRuntime {
             async complete(): Promise<void> {},
           }
         : this.deps.platform.createProgressSurface(input.thread);
-    const surfaceId = input.progressSurfaceId
-      ? input.progressSurfaceId
-      : (await progress.create(state)).surfaceId;
-    if (input.progressSurfaceId) await progress.update(surfaceId, state);
+    let surfaceId: string;
+    try {
+      surfaceId = input.progressSurfaceId
+        ? input.progressSurfaceId
+        : (await progress.create(state)).surfaceId;
+      if (input.progressSurfaceId) await progress.update(surfaceId, state);
+    } catch (error) {
+      if (processingReactionStarted) {
+        try {
+          await this.deps.platform.setMessageProcessingReaction?.(
+            input.message.id,
+            false,
+          );
+        } catch {
+          // Do not mask the real progress-surface failure.
+        }
+      }
+      throw error;
+    }
     let executor: Executor | undefined;
     let activeItem: ChecklistItem = {
       id: 'route',
@@ -434,6 +461,18 @@ export class OpenTagRuntime {
       if (requeued) await progress.update(surfaceId, state);
       else await progress.complete(surfaceId, state);
       throw error;
+    } finally {
+      if (processingReactionStarted) {
+        try {
+          await this.deps.platform.setMessageProcessingReaction?.(
+            input.message.id,
+            false,
+          );
+        } catch {
+          // Completion, cancellation and retry semantics must not depend on
+          // cosmetic reaction cleanup.
+        }
+      }
     }
   }
 }

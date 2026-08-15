@@ -409,6 +409,23 @@ test('HTTP Lark transport uploads files, replies with a file key, and downloads 
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
+        if (url.endsWith('/messages/message-1/reactions')) {
+          assert.equal(options.method, 'POST');
+          assert.deepEqual(JSON.parse(options.body), {
+            reaction_type: { emoji_type: 'OnIt' },
+          });
+          return new Response(
+            JSON.stringify({ code: 0, data: { reaction_id: 'reaction-1' } }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.endsWith('/messages/message-1/reactions/reaction-1')) {
+          assert.equal(options.method, 'DELETE');
+          return new Response(JSON.stringify({ code: 0, data: {} }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
         if (url.endsWith('/im/v1/files')) {
           assert.ok(options.body instanceof FormData);
           assert.equal(options.body.get('file_type'), 'stream');
@@ -497,6 +514,17 @@ test('HTTP Lark transport uploads files, replies with a file key, and downloads 
         external: false,
       },
     );
+    assert.deepEqual(
+      await transport.addReaction({
+        messageId: 'message-1',
+        emojiType: 'OnIt',
+      }),
+      { reactionId: 'reaction-1' },
+    );
+    await transport.removeReaction({
+      messageId: 'message-1',
+      reactionId: 'reaction-1',
+    });
     assert.deepEqual(
       await transport.sendFile({
         chatId: 'chat-1',
@@ -607,6 +635,25 @@ test('Lark adapter sends managed artifacts through tracked file delivery', async
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test('Lark adapter mirrors AgentDock OnIt acknowledgement lifecycle', async () => {
+  const memory = new MemoryLarkTransport();
+  const adapter = new LarkPlatformAdapter(memory);
+
+  await adapter.setMessageProcessingReaction('message-1', true);
+  await adapter.setMessageProcessingReaction('message-1', true);
+  assert.deepEqual(memory.reactions, [
+    {
+      messageId: 'message-1',
+      reactionId: 'reaction_1',
+      emojiType: 'OnIt',
+    },
+  ]);
+
+  await adapter.setMessageProcessingReaction('message-1', false);
+  await adapter.setMessageProcessingReaction('message-1', false);
+  assert.deepEqual(memory.reactions, []);
 });
 
 test('successful Lark runs remove the transient progress card after the reply is delivered', async () => {

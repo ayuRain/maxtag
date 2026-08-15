@@ -85,9 +85,32 @@ export class LarkPlatformAdapter implements PlatformAdapter {
   };
 
   private readonly transport: LarkTransport;
+  private readonly processingReactions = new Map<string, string>();
 
   constructor(transport: LarkTransport) {
     this.transport = transport;
+  }
+
+  async setMessageProcessingReaction(
+    messageId: string,
+    active: boolean,
+  ): Promise<void> {
+    if (active) {
+      if (this.processingReactions.has(messageId)) return;
+      const { reactionId } = await this.transport.addReaction({
+        messageId,
+        // AgentDock uses Feishu's native OnIt reaction as a quiet receipt and
+        // typing indicator, then removes it when processing stops.
+        emojiType: 'OnIt',
+      });
+      this.processingReactions.set(messageId, reactionId);
+      return;
+    }
+
+    const reactionId = this.processingReactions.get(messageId);
+    if (!reactionId) return;
+    this.processingReactions.delete(messageId);
+    await this.transport.removeReaction({ messageId, reactionId });
   }
 
   createProgressSurface(thread: SourceThread): ProgressSurface {

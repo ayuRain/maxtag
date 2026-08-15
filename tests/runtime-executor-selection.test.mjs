@@ -43,6 +43,9 @@ test('runtime selects the executor configured by the project identity', async ()
         supportsReactions: true,
         supportsMentions: true,
       },
+      async setMessageProcessingReaction(messageId, active) {
+        calls.push(`reaction:${messageId}:${active}`);
+      },
       createProgressSurface() {
         return {
           async create(value) {
@@ -127,7 +130,12 @@ test('runtime selects the executor configured by the project identity', async ()
   });
 
   assert.equal(result.summary, 'handled by Claude');
-  assert.deepEqual(calls, ['claude', 'sent:handled by Claude']);
+  assert.deepEqual(calls, [
+    'reaction:message-1:true',
+    'claude',
+    'sent:handled by Claude',
+    'reaction:message-1:false',
+  ]);
   assert.ok(
     progress.some((entry) =>
       entry.checklist.some((item) => item.label === 'Run Claude'),
@@ -547,6 +555,7 @@ test('runtime queues only authorized non-sensitive memory candidates for approva
 
 test('runtime closes the progress surface when a configured executor is unavailable', async () => {
   const completed = [];
+  const reactions = [];
   const thread = {
     id: 'lark:payments:root',
     platform: 'lark',
@@ -564,6 +573,9 @@ test('runtime closes the progress surface when a configured executor is unavaila
         supportsFiles: true,
         supportsReactions: true,
         supportsMentions: true,
+      },
+      async setMessageProcessingReaction(messageId, active) {
+        reactions.push([messageId, active]);
       },
       createProgressSurface() {
         return {
@@ -642,6 +654,10 @@ test('runtime closes the progress surface when a configured executor is unavaila
   assert.equal(completed[0].status, 'failed');
   assert.equal(completed[0].summary, 'executor_not_available:missing');
   assert.equal(completed[0].checklist[0].status, 'failed');
+  assert.deepEqual(reactions, [
+    ['message-2', true],
+    ['message-2', false],
+  ]);
 });
 
 test('runtime exposes a live steering channel to a capable executor', async () => {

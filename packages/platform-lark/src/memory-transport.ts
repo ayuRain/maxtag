@@ -11,6 +11,11 @@ import type {
 
 export class MemoryLarkTransport implements LarkTransport {
   readonly texts: Array<Record<string, unknown>> = [];
+  readonly reactions: Array<{
+    messageId: string;
+    reactionId: string;
+    emojiType: string;
+  }> = [];
   readonly cards: Array<{ id: string; card: Record<string, unknown> }> = [];
   readonly files: Array<{
     messageId: string;
@@ -73,6 +78,27 @@ export class MemoryLarkTransport implements LarkTransport {
       hasMore: nextOffset < matching.length,
       pageToken: nextOffset < matching.length ? String(nextOffset) : undefined,
     };
+  }
+
+  async addReaction(input: {
+    messageId: string;
+    emojiType: string;
+  }): Promise<{ reactionId: string }> {
+    const reactionId = `reaction_${this.reactions.length + 1}`;
+    this.reactions.push({ reactionId, ...input });
+    return { reactionId };
+  }
+
+  async removeReaction(input: {
+    messageId: string;
+    reactionId: string;
+  }): Promise<void> {
+    const index = this.reactions.findIndex(
+      (reaction) =>
+        reaction.messageId === input.messageId &&
+        reaction.reactionId === input.reactionId,
+    );
+    if (index !== -1) this.reactions.splice(index, 1);
   }
 
   async sendText(input: {

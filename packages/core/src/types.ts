@@ -1166,6 +1166,15 @@ export interface PlatformCapabilities {
 export interface PlatformAdapter {
   kind: PlatformKind;
   capabilities: PlatformCapabilities;
+  /**
+   * Show or clear the platform-native "working on it" acknowledgement for an
+   * inbound message. This is deliberately best-effort UI feedback: callers
+   * must not make run delivery depend on it succeeding.
+   */
+  setMessageProcessingReaction?(
+    messageId: string,
+    active: boolean,
+  ): Promise<void>;
   createProgressSurface(thread: SourceThread): ProgressSurface;
   sendMessage(
     thread: SourceThread,

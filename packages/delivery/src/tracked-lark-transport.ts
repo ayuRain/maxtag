@@ -50,6 +50,20 @@ export class TrackedLarkTransport implements LarkTransport {
     return this.delegate.listMessages(input);
   }
 
+  addReaction(input: {
+    messageId: string;
+    emojiType: string;
+  }): Promise<{ reactionId: string }> {
+    return this.delegate.addReaction(input);
+  }
+
+  removeReaction(input: {
+    messageId: string;
+    reactionId: string;
+  }): Promise<void> {
+    return this.delegate.removeReaction(input);
+  }
+
   async sendText(input: {
     chatId: string;
     text: string;

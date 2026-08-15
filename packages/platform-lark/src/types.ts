@@ -162,6 +162,14 @@ export interface LarkTransport {
   ): Promise<LarkChatInfo | undefined>;
   getMessage(messageId: string): Promise<LarkHistoryMessage | undefined>;
   listMessages(input: LarkListMessagesInput): Promise<LarkMessagePage>;
+  addReaction(input: {
+    messageId: string;
+    emojiType: string;
+  }): Promise<{ reactionId: string }>;
+  removeReaction(input: {
+    messageId: string;
+    reactionId: string;
+  }): Promise<void>;
   sendText(input: {
     chatId: string;
     text: string;
