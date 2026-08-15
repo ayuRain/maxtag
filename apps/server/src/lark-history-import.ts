@@ -23,6 +23,7 @@ export interface LarkHistoryImportServiceOptions {
   maxMessagesPerWindow?: number;
   staleMs?: number;
   retryBaseMs?: number;
+  onStatus?: (job: LarkHistoryImportJobRecord) => Promise<void>;
   onTerminal?: (job: LarkHistoryImportJobRecord) => Promise<void>;
 }
 
@@ -257,11 +258,17 @@ export class LarkHistoryImportService {
     });
     result.claimed = jobs.length;
     for (const job of jobs) {
+      if (this.options.onStatus) {
+        await this.options.onStatus(job).catch(() => undefined);
+      }
       try {
         const current = await this.processJob(job, result);
         if (current.status === 'completed') result.completed += 1;
         else result.released += 1;
         result.jobs.push(current);
+        if (this.options.onStatus) {
+          await this.options.onStatus(current).catch(() => undefined);
+        }
         if (current.status === 'completed' && this.options.onTerminal) {
           await this.options.onTerminal(current).catch(() => undefined);
         }
@@ -280,7 +287,12 @@ export class LarkHistoryImportService {
             await this.options.onTerminal(retried).catch(() => undefined);
           }
         } else result.retried += 1;
-        if (retried) result.jobs.push(retried);
+        if (retried) {
+          result.jobs.push(retried);
+          if (this.options.onStatus) {
+            await this.options.onStatus(retried).catch(() => undefined);
+          }
+        }
       }
     }
     this.passCount += 1;

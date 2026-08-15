@@ -1158,7 +1158,19 @@ const larkHistoryImportService = new LarkHistoryImportService({
     }
   },
   botOpenId,
+  onStatus: async (job) => {
+    if (!job.cardMessageId) return;
+    await larkResourceTransport().updateCard({
+      cardId: job.cardMessageId,
+      card: buildLarkHistoryImportStatusCard(job),
+      metadata: {
+        thread: job.thread,
+        stage: 'onboarding-card',
+      },
+    });
+  },
   onTerminal: async (job) => {
+    if (job.cardMessageId) return;
     const platform = createPlatformForRun(job.thread).platform;
     const message = job.status === 'completed'
       ? `历史初始化完成：已扫描 ${job.scannedMessages} 条消息，导入 ${job.importedMessages} 条，生成 ${job.proposalIds.length} 条待审核记忆。管理员可在 MaxTag「记忆」页面批量审核。`
@@ -6668,6 +6680,98 @@ function buildLarkHistoryOnboardingCard(input?: {
       subtitle: larkPlainText(selected ? '群聊接入已完成' : '首次接入'),
       template: selected === 'history' ? 'blue' : selected ? 'green' : 'wathet',
       icon: { tag: 'standard_icon', token: selected ? 'yes_outlined' : 'history_outlined' },
+    },
+    body: { direction: 'vertical', padding: '12px 16px 14px 16px', elements },
+  };
+}
+
+function larkHistoryImportProgress(job: LarkHistoryImportJobRecord): number {
+  if (job.status === 'completed') return 100;
+  if (!job.since || !job.until || !job.cursor?.windowSince) return 0;
+  const start = Date.parse(job.since);
+  const end = Date.parse(job.until);
+  const current = Date.parse(job.cursor.windowSince);
+  if (![start, end, current].every(Number.isFinite) || end <= start) return 0;
+  return Math.max(0, Math.min(99, Math.floor(((current - start) / (end - start)) * 100)));
+}
+
+function larkHistoryImportError(lastError?: string): string | undefined {
+  if (!lastError) return undefined;
+  if (lastError.includes('im:message.group_msg')) {
+    return '缺少飞书权限 `im:message.group_msg`。请在开放平台添加权限并发布应用版本；MaxTag 会自动重试。';
+  }
+  return lastError.replace(/[\0\r\n]+/gu, ' ').trim().slice(0, 240);
+}
+
+function buildLarkHistoryImportStatusCard(
+  job: LarkHistoryImportJobRecord,
+): Record<string, unknown> {
+  const progress = larkHistoryImportProgress(job);
+  const terminal = job.status === 'completed' || job.status === 'failed';
+  const status = job.status === 'completed'
+    ? '导入完成'
+    : job.status === 'failed'
+      ? '导入失败'
+      : job.status === 'claimed'
+        ? '正在导入'
+        : job.lastError
+          ? '等待重试'
+          : '排队中';
+  const barLength = 10;
+  const filled = Math.round((progress / 100) * barLength);
+  const progressBar = `${'█'.repeat(filled)}${'░'.repeat(barLength - filled)}`;
+  const error = larkHistoryImportError(job.lastError);
+  const elements: Array<Record<string, unknown>> = [
+    {
+      tag: 'markdown',
+      content: [
+        `**${status} · ${progress}%**`,
+        `\`${progressBar}\``,
+        `Project：${job.projectId}`,
+        `扫描 ${job.scannedMessages} 条 · 导入 ${job.importedMessages} 条 · 重复 ${job.duplicateMessages} 条`,
+        `已发现 ${job.discoveredThreads} 个话题 · 待审核记忆 ${job.proposalIds.length} 条`,
+        `尝试 ${job.attempts}/${job.maxAttempts}`,
+      ].join('\n'),
+    },
+  ];
+  if (error) {
+    elements.push({
+      tag: 'markdown',
+      content: `<font color="${job.status === 'failed' ? 'red' : 'orange'}">${error}</font>`,
+    });
+  }
+  elements.push({
+    tag: 'markdown',
+    content: terminal
+      ? '<font color="grey">这是本次历史初始化的最终结果，可在 MaxTag「记忆」页面审核候选记忆。</font>'
+      : '<font color="grey">本卡片会随后台任务自动更新；无需停留在页面。</font>',
+  });
+  return {
+    schema: '2.0',
+    config: {
+      width_mode: 'fill',
+      update_multi: true,
+      enable_forward_interaction: false,
+      summary: { content: `MaxTag · 历史初始化 ${status}` },
+    },
+    header: {
+      title: larkPlainText('MaxTag'),
+      subtitle: larkPlainText('群聊历史初始化'),
+      template: job.status === 'completed'
+        ? 'green'
+        : job.status === 'failed'
+          ? 'red'
+          : job.lastError
+            ? 'orange'
+            : 'blue',
+      icon: {
+        tag: 'standard_icon',
+        token: job.status === 'completed'
+          ? 'yes_outlined'
+          : job.status === 'failed'
+            ? 'warning_outlined'
+            : 'history_outlined',
+      },
     },
     body: { direction: 'vertical', padding: '12px 16px 14px 16px', elements },
   };

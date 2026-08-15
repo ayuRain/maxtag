@@ -79,6 +79,7 @@ test('old-group history import is durable, archive-only, and restart resumable',
     until: new Date('2026-08-15T00:00:00.000Z'),
     analyzeMemory: false,
   });
+  const statusUpdates = [];
   const service = new LarkHistoryImportService({
     deliveryStore: store,
     memoryAnalysisService: { status: () => ({ enabled: false }) },
@@ -86,6 +87,7 @@ test('old-group history import is durable, archive-only, and restart resumable',
     workerId: 'history-worker-a',
     intervalWindowMs: 12 * 60 * 60_000,
     windowsPerPass: 1,
+    onStatus: async (current) => statusUpdates.push(current.status),
   });
 
   const first = await service.runPass();
@@ -94,6 +96,7 @@ test('old-group history import is durable, archive-only, and restart resumable',
   const checkpoint = await store.getLarkHistoryImport(job.id);
   assert.equal(checkpoint.status, 'pending');
   assert.equal(checkpoint.cursor.windowSince, '2026-08-14T12:00:00.000Z');
+  assert.deepEqual(statusUpdates, ['claimed', 'pending']);
 
   // A fresh service instance represents a process restart. It resumes at the
   // persisted window boundary and idempotently finishes without executing any
@@ -105,6 +108,7 @@ test('old-group history import is durable, archive-only, and restart resumable',
     workerId: 'history-worker-b',
     intervalWindowMs: 12 * 60 * 60_000,
     windowsPerPass: 2,
+    onStatus: async (current) => statusUpdates.push(current.status),
   });
   const second = await restarted.runPass();
   assert.equal(second.completed, 1);
@@ -112,6 +116,7 @@ test('old-group history import is durable, archive-only, and restart resumable',
   assert.equal(completed.status, 'completed');
   assert.equal(completed.importedMessages, 2);
   assert.equal(completed.duplicateMessages, 0);
+  assert.deepEqual(statusUpdates.slice(-2), ['claimed', 'completed']);
   assert.equal((await store.listAgentRuns({ limit: 20 })).length, 0);
 
   const main = await store.listSourceThreadMessages({ thread: mainThread() });
