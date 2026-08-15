@@ -63,6 +63,7 @@ async function persistedApproval(store) {
     id: proposed.id,
     claimedBy: 'worker-1',
     resultPreview: 'Write workspace file completed',
+    resultUrl: 'https://github.example/acme/payments/issues/77',
     now: new Date('2026-08-13T01:01:02.000Z'),
   });
 }
@@ -110,6 +111,14 @@ test('successful tool approval schedules one same-thread continuation after a te
   assert.equal(queued.metadata.continuationOfRunId, 'source-run');
   assert.equal(queued.message.replyToMessageId, 'message-1');
   assert.match(queued.message.text, /Continue the original request/u);
+  assert.match(
+    queued.message.text,
+    /External result: https:\/\/github\.example\/acme\/payments\/issues\/77/u,
+  );
+  assert.equal(
+    queued.message.metadata.resultUrl,
+    'https://github.example/acme/payments/issues/77',
+  );
   assert.doesNotMatch(JSON.stringify(queued), /src\/index\.ts/u);
   assert.equal(
     (await store.listAgentRuns({ workspaceId: 'acme', limit: 20 })).filter(

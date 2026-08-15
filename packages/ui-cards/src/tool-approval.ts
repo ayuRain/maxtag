@@ -32,6 +32,28 @@ function escaped(value: unknown): string {
     .replace(/([\\`*_{}\[\]()#+\-.!|])/gu, '\\$1');
 }
 
+function safeResultUrl(value: string | undefined): string | undefined {
+  if (!value || value.length > 2_048) return undefined;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+      return undefined;
+    }
+    if (
+      [...parsed.searchParams.keys()].some((key) =>
+        /(?:^|[_-])(token|secret|password|credential|signature|api[_-]?key|auth)(?:$|[_-])/iu.test(
+          key,
+        ),
+      )
+    ) {
+      return undefined;
+    }
+    return parsed.toString().replaceAll(')', '%29');
+  } catch {
+    return undefined;
+  }
+}
+
 function statusPresentation(approval: ToolApprovalRecord): {
   label: string;
   color: string;
@@ -190,6 +212,7 @@ export function buildLarkToolApprovalCard(
 ): LarkCardV2Document {
   const status = statusPresentation(approval);
   const argumentsReview = reviewArguments(approval);
+  const resultUrl = safeResultUrl(approval.resultUrl);
   const terminalDetail =
     approval.status === 'succeeded'
       ? approval.resultPreview || '操作已完成。'
@@ -283,7 +306,25 @@ export function buildLarkToolApprovalCard(
             padding: '8px 10px 8px 10px',
           },
           padding: '8px 10px 10px 10px',
-          elements: [markdown(`申请时间：${escaped(approval.requestedAt)}  \n过期时间：${escaped(approval.expiresAt)}  \n参数摘要：${escaped(approval.argumentDigest.slice(0, 12))}`, { text_size: 'notation' })],
+          elements: [
+            markdown(
+              [
+                `申请智能体：${escaped(approval.requestedBy)}`,
+                approval.credentialIdentityId
+                  ? `执行身份：${escaped(approval.credentialIdentityId)} r${escaped(approval.credentialIdentityRevision || '?')}`
+                  : '',
+                approval.externalActor
+                  ? `外部身份：${escaped(approval.externalActor)}`
+                  : '',
+                `申请时间：${escaped(approval.requestedAt)}`,
+                `过期时间：${escaped(approval.expiresAt)}`,
+                `参数摘要：${escaped(approval.argumentDigest.slice(0, 12))}`,
+              ]
+                .filter(Boolean)
+                .join('  \n'),
+              { text_size: 'notation' },
+            ),
+          ],
         },
         ...(approval.status === 'pending'
           ? [pendingActions(approval, argumentsReview.reviewable)]
@@ -305,6 +346,9 @@ export function buildLarkToolApprovalCard(
                 ],
               },
             ]),
+        ...(approval.status === 'succeeded' && resultUrl
+          ? [markdown(`[查看外部结果](${resultUrl})`)]
+          : []),
       ],
     },
   };

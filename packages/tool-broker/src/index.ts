@@ -264,6 +264,7 @@ interface ToolDefinition {
   ): ToolGrant | Promise<ToolGrant>;
   summarize(input: JsonObject): JsonObject;
   destination?(input: JsonObject, result?: unknown): string | undefined;
+  resultUrl?(input: JsonObject, result: unknown): string | undefined;
   execute(context: ToolExecutionContext, input: JsonObject): Promise<unknown>;
   validate?: ValidateFunction;
 }
@@ -544,6 +545,35 @@ function toolDestination(
   return destination;
 }
 
+function toolResultUrl(
+  definition: ToolDefinition | undefined,
+  input: JsonObject,
+  result: unknown,
+): string | undefined {
+  const candidate = definition?.resultUrl?.(input, result)?.trim();
+  if (!candidate || candidate.length > 2_048 || /[\r\n\0]/u.test(candidate)) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+      return undefined;
+    }
+    if (
+      [...parsed.searchParams.keys()].some((key) =>
+        /(?:^|[_-])(token|secret|password|credential|signature|api[_-]?key|auth)(?:$|[_-])/iu.test(
+          key,
+        ),
+      )
+    ) {
+      return undefined;
+    }
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 function credentialProviderFor(
   definition: ToolDefinition | undefined,
 ): 'lark' | 'github' | undefined {
@@ -552,6 +582,24 @@ function credentialProviderFor(
     return 'lark';
   }
   return undefined;
+}
+
+function larkWebOrigin(client: LarkOpenApiClient): string {
+  try {
+    return new URL(client.baseUrl || 'https://open.feishu.cn').hostname
+      .toLowerCase()
+      .includes('larksuite')
+      ? 'https://www.larksuite.com'
+      : 'https://www.feishu.cn';
+  } catch {
+    return 'https://www.feishu.cn';
+  }
+}
+
+function resultFieldUrl(result: unknown, field: string): string | undefined {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return undefined;
+  const value = (result as JsonObject)[field];
+  return typeof value === 'string' ? value : undefined;
 }
 
 async function resolveCredentialIdentity(
@@ -2088,6 +2136,9 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           labelCount: Array.isArray(input.labels) ? input.labels.length : 0,
         };
       },
+      resultUrl(_input, result) {
+        return resultFieldUrl(result, 'htmlUrl');
+      },
       async execute({ signal, credentialIdentity }, input) {
         const repository = repositoryInput(input);
         const raw = objectValue(
@@ -2154,6 +2205,9 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           issueNumber: input.issueNumber,
           bodyLength: stringValue(input, 'body').length,
         };
+      },
+      resultUrl(_input, result) {
+        return resultFieldUrl(result, 'htmlUrl');
       },
       async execute({ signal, credentialIdentity }, input) {
         const repository = repositoryInput(input);
@@ -2256,6 +2310,9 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           textLength: stringValue(input, 'text').length,
         };
       },
+      resultUrl(_input, result) {
+        return resultFieldUrl(result, 'webUrl');
+      },
       async execute({ signal, credentialIdentity }, input) {
         const lark = credentialIdentity?.lark ?? options.lark;
         if (!lark) throw new Error('lark_provider_unavailable');
@@ -2290,6 +2347,7 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
         );
         return {
           documentId,
+          webUrl: `${larkWebOrigin(lark)}/docx/${encodeURIComponent(documentId)}`,
           blockIds: Array.isArray(response.children)
             ? response.children
                 .map((item) => objectValue(item).block_id)
@@ -2416,6 +2474,9 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           fieldCount: Object.keys(objectValue(input.fields)).length,
         };
       },
+      resultUrl(_input, result) {
+        return resultFieldUrl(result, 'webUrl');
+      },
       async execute({ signal, credentialIdentity }, input) {
         const lark = credentialIdentity?.lark ?? options.lark;
         if (!lark) throw new Error('lark_provider_unavailable');
@@ -2437,6 +2498,7 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           appToken,
           tableId,
           recordId: record.record_id,
+          webUrl: `${larkWebOrigin(lark)}/base/${encodeURIComponent(appToken)}?table=${encodeURIComponent(tableId)}`,
           fields: record.fields,
           created: true,
         };
@@ -2482,6 +2544,9 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           fieldCount: Object.keys(objectValue(input.fields)).length,
         };
       },
+      resultUrl(_input, result) {
+        return resultFieldUrl(result, 'webUrl');
+      },
       async execute({ signal, credentialIdentity }, input) {
         const lark = credentialIdentity?.lark ?? options.lark;
         if (!lark) throw new Error('lark_provider_unavailable');
@@ -2500,10 +2565,13 @@ function createDefinitions(options: OpenTagToolBrokerOptions): ToolDefinition[] 
           ),
         );
         const record = objectValue(response.record);
+        const resultRecordId =
+          typeof record.record_id === 'string' ? record.record_id : recordId;
         return {
           appToken,
           tableId,
-          recordId: record.record_id || recordId,
+          recordId: resultRecordId,
+          webUrl: `${larkWebOrigin(lark)}/base/${encodeURIComponent(appToken)}?table=${encodeURIComponent(tableId)}&record=${encodeURIComponent(resultRecordId)}`,
           fields: record.fields,
           updated: true,
         };
@@ -2796,12 +2864,14 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
         value,
         Math.max(4096, this.options.maxResultBytes ?? 128 * 1024),
       );
+      const resultUrl = toolResultUrl(definition, exactArguments, value);
       const completed = await store.completeToolApproval({
         id: approval.id,
         claimedBy: input.claimedBy,
         resultPreview: definition.provider
           ? `${definition.title} completed`
           : rendered.text.replace(/\s+/gu, ' ').slice(0, 300),
+        resultUrl,
       });
       await emitToolEvent(input.request, { type: 'tool_approval', approval: completed });
       await emitToolEvent(input.request, {
@@ -2821,6 +2891,7 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
             value,
             credentialIdentity,
           ),
+          resultUrl,
           ...credentialAudit(input.request, credentialIdentity),
           arguments: definition.summarize(exactArguments),
           status: 'succeeded',
@@ -2998,6 +3069,7 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
                 (approvalActive
                   ? `Waiting for approval ${approval.id}`
                   : `Approval ${approval.status}`),
+              resultUrl: approval.resultUrl,
               error: approval.error,
             },
           });
@@ -3007,6 +3079,7 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
             status: approval.status,
             expiresAt: approval.expiresAt,
             resultPreview: approval.resultPreview,
+            resultUrl: approval.resultUrl,
             error: approval.error,
           };
           return {
@@ -3042,6 +3115,7 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
           request.abortSignal?.removeEventListener('abort', abort);
         }
         const result = jsonText(value, maxResultBytes);
+        const resultUrl = toolResultUrl(definition, input, value);
         await request.onEvent?.({
           type: 'tool_result',
           call: {
@@ -3059,6 +3133,7 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
               value,
               credentialIdentity,
             ),
+            resultUrl,
             ...credentialAudit(request, credentialIdentity),
             arguments: definition.summarize(input),
             status: 'succeeded',

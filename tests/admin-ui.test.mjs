@@ -381,6 +381,8 @@ test('admin Audit view filters and exports organization evidence', async () => {
   assert.match(script, /\/v1\/audit\.csv\?/u);
   assert.match(script, /entry\.tool\.argumentKeys/u);
   assert.match(script, /entry\.tool\.destination/u);
+  assert.match(script, /entry\.tool\.resultUrl/u);
+  assert.match(script, /打开外部结果/u);
   assert.match(script, /provider-native/u);
   assert.match(script, /native tool/u);
   assert.doesNotMatch(script, /entry\.tool\.arguments/u);

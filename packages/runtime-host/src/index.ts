@@ -618,6 +618,7 @@ function agentRunEventSummary(event: AgentRunEvent): {
           credentialIdentityId: event.approval.credentialIdentityId,
           credentialIdentityRevision: event.approval.credentialIdentityRevision,
           externalActor: event.approval.externalActor,
+          resultUrl: event.approval.resultUrl,
           expiresAt: event.approval.expiresAt,
           approvedBy: event.approval.approvedBy,
           rejectedBy: event.approval.rejectedBy,

@@ -23,8 +23,11 @@ export async function scheduleToolApprovalContinuation(input: {
       input.approval.resultPreview
         ? `Result: ${input.approval.resultPreview}`
         : 'The operation completed successfully.',
+      input.approval.resultUrl
+        ? `External result: ${input.approval.resultUrl}`
+        : '',
       'Continue the original request from the durable thread context. Verify the change and complete any remaining work. Do not repeat this write unless the user explicitly requests another change.',
-    ].join('\n'),
+    ].filter(Boolean).join('\n'),
     actor: {
       id: 'opentag:tool-approval',
       displayName: 'MaxTag approval',
@@ -36,6 +39,7 @@ export async function scheduleToolApprovalContinuation(input: {
       source: 'tool-approval',
       approvalId: input.approval.id,
       toolName: input.approval.toolName,
+      resultUrl: input.approval.resultUrl,
       sourceRunId: source.id,
     },
   };

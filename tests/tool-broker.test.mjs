@@ -502,6 +502,33 @@ test('per-run MCP broker filters, authorizes, executes, and audits tools', async
       event.call.status === 'succeeded',
   );
   assert.equal(successfulGitHub.call.destination, 'https://api.github.test');
+  assert.equal(
+    events.find(
+      (event) =>
+        event.type === 'tool_result' &&
+        event.call.name === 'github_issue_create' &&
+        event.call.status === 'succeeded',
+    ).call.resultUrl,
+    'https://github.test/acme/payments/issues/42',
+  );
+  assert.equal(
+    events.find(
+      (event) =>
+        event.type === 'tool_result' &&
+        event.call.name === 'github_issue_comment' &&
+        event.call.status === 'succeeded',
+    ).call.resultUrl,
+    'https://github.test/acme/payments/issues/42#issuecomment-91',
+  );
+  assert.equal(
+    events.find(
+      (event) =>
+        event.type === 'tool_result' &&
+        event.call.name === 'lark_doc_append_text' &&
+        event.call.status === 'succeeded',
+    ).call.resultUrl,
+    'https://www.larksuite.com/docx/dox-approved',
+  );
   const deniedGitHub = events.find(
     (event) =>
       event.type === 'tool_result' &&
@@ -1227,7 +1254,20 @@ test('external write approval executes exact arguments once after a durable deci
     body: exactArguments.body,
     labels: exactArguments.labels,
   });
-  assert.equal((await approvals.getToolApproval(approval.id)).status, 'succeeded');
+  const completedApproval = await approvals.getToolApproval(approval.id);
+  assert.equal(completedApproval.status, 'succeeded');
+  assert.equal(
+    completedApproval.resultUrl,
+    'https://github.test/acme/payments/issues/77',
+  );
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === 'tool_result' &&
+        event.call.status === 'succeeded' &&
+        event.call.resultUrl === 'https://github.test/acme/payments/issues/77',
+    ),
+  );
   const replay = await broker.executeApproved({
     approvalId: approval.id,
     request,
@@ -1241,6 +1281,7 @@ test('external write approval executes exact arguments once after a durable deci
   });
   assert.equal(modelReplay.isError, undefined);
   assert.match(textResult(modelReplay), /"status":"succeeded"/u);
+  assert.match(textResult(modelReplay), /github\.test\/acme\/payments\/issues\/77/u);
   assert.equal((await approvals.listToolApprovals({ runId: request.runId })).length, 1);
   assert.equal(providerCalls.length, 1);
   assert.ok(

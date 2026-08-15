@@ -16,6 +16,9 @@ test('thread status parser accepts explicit bilingual commands only', () => {
     '@MaxTag what can you access?',
     '@MaxTag 你能访问什么？',
     '/opentag 状态',
+    '@MaxTag help',
+    '@MaxTag 怎么用？',
+    '/maxtag 使用帮助',
   ]) {
     assert.deepEqual(parseThreadStatusCommand(text), { kind: 'status' }, text);
   }
@@ -24,6 +27,7 @@ test('thread status parser accepts explicit bilingual commands only', () => {
     'what can you access in this document',
     '能力建设计划',
     '/maxtag status of CI',
+    'help me debug this',
   ]) {
     assert.equal(parseThreadStatusCommand(text), null, text);
   }

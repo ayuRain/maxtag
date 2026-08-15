@@ -855,6 +855,7 @@ export interface ToolApprovalRecord {
   completedAt?: string;
   failedAt?: string;
   resultPreview?: string;
+  resultUrl?: string;
   error?: string;
   continuationStatus?: 'pending' | 'scheduled';
   continuationRunId?: string;
@@ -907,6 +908,7 @@ export interface CompleteToolApprovalInput {
   id: string;
   claimedBy: string;
   resultPreview?: string;
+  resultUrl?: string;
   now?: Date;
 }
 
@@ -960,6 +962,7 @@ export interface ToolCallAudit {
   source?: 'broker' | 'provider-native';
   provider?: string;
   destination?: string;
+  resultUrl?: string;
   agentIdentityId?: string;
   credentialIdentityId?: string;
   credentialIdentityRevision?: number;

@@ -1486,6 +1486,7 @@ test(
             provider: 'opentag:github',
             destination:
               'https://api.github.example/repos/acme/payments?token=must-not-leak',
+            resultUrl: 'https://github.example/acme/payments/issues/77',
             status: 'succeeded',
             durationMs: 8,
           },
@@ -1582,6 +1583,14 @@ test(
       destinationAuditBody.entries[0].tool.destination,
       'https://api.github.example',
     );
+    assert.equal(
+      destinationAuditBody.entries[0].resultUrl,
+      'https://github.example/acme/payments/issues/77',
+    );
+    assert.equal(
+      destinationAuditBody.entries[0].tool.resultUrl,
+      'https://github.example/acme/payments/issues/77',
+    );
     assert.doesNotMatch(
       JSON.stringify(destinationAuditBody),
       /repos\/acme|token=|must-not-leak/u,
@@ -1593,6 +1602,10 @@ test(
     const destinationCsvText = await destinationCsv.text();
     assert.match(destinationCsvText, /"toolProvider","destination"/u);
     assert.match(destinationCsvText, /"https:\/\/api\.github\.example"/u);
+    assert.match(
+      destinationCsvText,
+      /"https:\/\/github\.example\/acme\/payments\/issues\/77"/u,
+    );
     assert.doesNotMatch(destinationCsvText, /repos\/acme|token=|must-not-leak/u);
     const invalidDestinationAudit = await fetch(
       `${baseUrl}/v1/audit?workspaceId=dev-workspace&destination=api.github.example`,

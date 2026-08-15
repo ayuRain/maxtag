@@ -56,6 +56,8 @@ test('Lark thread status card exposes Chinese capability sections and three acti
   assert.equal(buttons[0].disabled, true);
   assert.match(JSON.stringify(card), /群内设置/u);
   assert.match(JSON.stringify(card), /什么时候响应/u);
+  assert.match(JSON.stringify(card), /怎么使用/u);
+  assert.match(JSON.stringify(card), /交互式发布健康报告/u);
   assert.match(JSON.stringify(card), /持续任务/u);
   assert.match(JSON.stringify(card), /可用能力/u);
   assert.match(JSON.stringify(card), /记忆、权限与用量/u);
@@ -233,6 +235,9 @@ function toolApproval(status = 'pending') {
       bodyLength: 240,
     },
     argumentDigest: '1234567890abcdef',
+    credentialIdentityId: 'github-payments',
+    credentialIdentityRevision: 3,
+    externalActor: 'maxtag-payments[bot]',
     platform: 'lark',
     thread: memoryProposal().thread,
     threadId: memoryProposal().thread.id,
@@ -248,6 +253,7 @@ function toolApproval(status = 'pending') {
           approvedBy: 'lark:ou-manager',
           completedAt: '2026-08-13T00:01:01.000Z',
           resultPreview: 'Created issue #42',
+          resultUrl: 'https://github.com/acme/payments/issues/42',
         }
       : {}),
   };
@@ -297,4 +303,8 @@ test('terminal Lark tool approval card removes controls and shows result', () =>
   assert.equal(card.header.template, 'green');
   assert.equal(cardButtons(card).length, 0);
   assert.match(JSON.stringify(card), /Created issue \\\\#42/u);
+  assert.match(JSON.stringify(card), /查看外部结果/u);
+  assert.match(JSON.stringify(card), /github\.com\/acme\/payments\/issues\/42/u);
+  assert.match(JSON.stringify(card), /github\\\\-payments/u);
+  assert.match(JSON.stringify(card), /maxtag\\\\-payments/u);
 });

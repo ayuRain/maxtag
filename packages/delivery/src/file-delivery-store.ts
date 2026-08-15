@@ -158,6 +158,25 @@ function cloneToolApproval(record: ToolApprovalRecord): ToolApprovalRecord {
   };
 }
 
+function safeToolResultUrl(value: string | undefined): string | undefined {
+  const candidate = value?.trim();
+  if (!candidate || candidate.length > 2_048) return undefined;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== 'https:' || url.username || url.password) return undefined;
+    if (
+      [...url.searchParams.keys()].some((key) =>
+        /(?:^|[_-])(token|secret|password|credential|signature|api[_-]?key|auth)(?:$|[_-])/iu.test(
+          key,
+        ),
+      )
+    ) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 function expireToolApprovals(
   state: FileDeliveryState,
   timestamp: string,
@@ -3034,6 +3053,7 @@ export class FileDeliveryStore {
       approval.status = 'succeeded';
       approval.completedAt = (input.now ?? new Date()).toISOString();
       approval.resultPreview = input.resultPreview?.slice(0, 300);
+      approval.resultUrl = safeToolResultUrl(input.resultUrl);
       return cloneToolApproval(approval);
     });
   }

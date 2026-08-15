@@ -1222,6 +1222,16 @@ function renderAuditDetail(entry) {
     if (!value) return;
     facts.append(element('dt', '', label), element('dd', '', String(value)));
   };
+  const appendLinkFact = (label, value) => {
+    if (!value) return;
+    const link = element('a', '', '打开外部结果');
+    link.href = value;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    const detail = element('dd');
+    detail.append(link);
+    facts.append(element('dt', '', label), detail);
+  };
   appendFact('Time', new Date(entry.at).toLocaleString());
   appendFact('Actor', entry.actor);
   appendFact('Workspace', entry.workspaceId);
@@ -1230,6 +1240,7 @@ function renderAuditDetail(entry) {
   appendFact('Thread', entry.threadId);
   appendFact('Platform', entry.platform);
   appendFact('Destination', entry.destination);
+  appendLinkFact('External result', entry.resultUrl);
   appendFact('Agent identity', entry.agentIdentityId);
   appendFact('Credential identity', entry.credentialIdentityId);
   appendFact('Credential revision', entry.credentialIdentityRevision);
@@ -1253,6 +1264,15 @@ function renderAuditDetail(entry) {
       element('span', '', `${entry.tool.grantKind || 'unknown'} / ${entry.tool.risk || 'unknown'}${typeof entry.tool.durationMs === 'number' ? ` / ${entry.tool.durationMs} ms` : ''}`),
       ...(entry.tool.destination
         ? [element('span', '', `Destination: ${entry.tool.destination}`)]
+        : []),
+      ...(entry.tool.resultUrl
+        ? (() => {
+            const link = element('a', '', '打开外部结果');
+            link.href = entry.tool.resultUrl;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            return [link];
+          })()
         : []),
       ...(entry.tool.credentialIdentityId
         ? [
@@ -7212,6 +7232,20 @@ function activityToolRow(event, className = '') {
   );
   if (call.resultPreview || call.error) {
     copy.append(element('p', 'run-tool-preview', call.resultPreview || call.error));
+  }
+  if (call.resultUrl) {
+    try {
+      const resultUrl = new URL(call.resultUrl);
+      if (resultUrl.protocol === 'https:' && !resultUrl.username && !resultUrl.password) {
+        const link = element('a', 'run-tool-result-link', '打开外部结果');
+        link.href = resultUrl.toString();
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        copy.append(link);
+      }
+    } catch {
+      // Ignore malformed historical result links.
+    }
   }
   row.append(copy, statePill(call.status || 'running'));
   return row;

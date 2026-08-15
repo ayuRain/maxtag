@@ -3562,6 +3562,7 @@ interface OrganizationAuditEntry {
   toolSource?: string;
   toolProvider?: string;
   destination?: string;
+  resultUrl?: string;
   agentIdentityId?: string;
   credentialIdentityId?: string;
   credentialIdentityRevision?: number;
@@ -3574,6 +3575,7 @@ interface OrganizationAuditEntry {
     source?: string;
     provider?: string;
     destination?: string;
+    resultUrl?: string;
     agentIdentityId?: string;
     credentialIdentityId?: string;
     credentialIdentityRevision?: number;
@@ -3687,6 +3689,25 @@ function auditDestination(value: string | undefined): string | undefined {
   }
 }
 
+function auditResultUrl(value: string | undefined): string | undefined {
+  const candidate = value?.trim();
+  if (!candidate || candidate.length > 2_048) return undefined;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== 'https:' || url.username || url.password) return undefined;
+    if (
+      [...url.searchParams.keys()].some((key) =>
+        /(?:^|[_-])(token|secret|password|credential|signature|api[_-]?key|auth)(?:$|[_-])/iu.test(
+          key,
+        ),
+      )
+    ) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 function organizationRunAuditEntry(
   workspaceId: string,
   event: ScopedAgentRunTimelineEvent,
@@ -3707,6 +3728,10 @@ function organizationRunAuditEntry(
         destination:
           toolSource === 'broker'
             ? auditDestination(stringValue(call, 'destination'))
+            : undefined,
+        resultUrl:
+          toolSource === 'broker'
+            ? auditResultUrl(stringValue(call, 'resultUrl'))
             : undefined,
         agentIdentityId: stringValue(call, 'agentIdentityId'),
         credentialIdentityId: stringValue(call, 'credentialIdentityId'),
@@ -3747,6 +3772,7 @@ function organizationRunAuditEntry(
     toolSource: tool?.source,
     toolProvider: tool?.provider,
     destination: tool?.destination,
+    resultUrl: tool?.resultUrl,
     agentIdentityId: tool?.agentIdentityId,
     credentialIdentityId: tool?.credentialIdentityId,
     credentialIdentityRevision: tool?.credentialIdentityRevision,
@@ -3779,6 +3805,7 @@ function organizationAuditCsv(entries: OrganizationAuditEntry[]): string {
     'toolSource',
     'toolProvider',
     'destination',
+    'resultUrl',
     'agentIdentityId',
     'credentialIdentityId',
     'credentialIdentityRevision',
@@ -8467,6 +8494,10 @@ function agentRunEventSummary(event: AgentRunEvent): {
           risk: event.approval.risk,
           arguments: event.approval.argumentSummary,
           argumentDigest: event.approval.argumentDigest,
+          credentialIdentityId: event.approval.credentialIdentityId,
+          credentialIdentityRevision: event.approval.credentialIdentityRevision,
+          externalActor: event.approval.externalActor,
+          resultUrl: event.approval.resultUrl,
           expiresAt: event.approval.expiresAt,
           approvedBy: event.approval.approvedBy,
           rejectedBy: event.approval.rejectedBy,

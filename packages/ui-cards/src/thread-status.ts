@@ -159,6 +159,15 @@ export function buildLarkThreadStatusCard(
     '',
     '查看记忆：`@MaxTag 查看记忆 项目` 或 `@MaxTag 查看记忆 工作区`',
   ].join('\n');
+  const usage = [
+    '**直接交办**：`@MaxTag 帮我分析……`、`@MaxTag 修改代码并验证`',
+    '**长任务协作**：在同一话题继续补充要求；可点“停止”或“接管”',
+    '**图表与报告**：`@MaxTag 生成交互式发布健康报告，并以后持续更新`',
+    '**记忆**：聊天上下文会自动整理；可用 `@MaxTag 查看记忆 项目` 检查',
+    '**持续任务**：`@MaxTag 每天 09:00：总结项目进展`、`@MaxTag 定时任务`',
+    '**项目归属**：首次入群卡片可选择或创建 Project；管理员也可在管理台调整',
+    '**当前状态**：`@MaxTag 状态`、`@MaxTag 帮助`（不消耗模型调用）',
+  ].join('\n\n');
 
   return {
     schema: '2.0',
@@ -194,6 +203,7 @@ export function buildLarkThreadStatusCard(
           `**什么时候响应**\n${escaped(activationDescriptions[model.activationMode])}`,
         ),
         activationControls(model),
+        collapsible('怎么使用', 'app_outlined', usage, true),
         collapsible('持续任务', 'calendar_outlined', standingWork, true),
         collapsible('可用能力', 'app_outlined', capabilities),
         collapsible('记忆、权限与用量', 'lock_outlined', access),

@@ -87,6 +87,11 @@ export function parseThreadStatusCommand(
     '你能访问什么',
     '你可以访问什么',
     '你有什么权限',
+    'help',
+    'usage',
+    '使用帮助',
+    '怎么用',
+    '如何使用',
   ].includes(text)
     ? { kind: 'status' }
     : null;

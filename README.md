@@ -4,6 +4,9 @@ MaxTag is a workspace Agent runtime for Feishu/Lark. One visible bot serves
 many projects and group topics while preserving project policy, scoped memory,
 durable execution, human control, and audit evidence.
 
+普通成员和管理员的完整接入、群内用法、记忆说明与故障排查见
+[`docs/USER_GUIDE.zh-CN.md`](docs/USER_GUIDE.zh-CN.md)。
+
 The current product target is direct: **rebuild Claude Tag's shared Slack
 experience for Lark**. The runtime remains client-neutral so Telegram or other
 clients can be added later, but Lark is the only primary chat product in this
@@ -310,6 +313,11 @@ For the detailed evidence matrix and sequencing, see
   record query/create/update. External writes require both an explicit project
   write grant and, by default, a one-time exact-argument approval in Lark or the
   Activity console. GitHub and Lark credentials stay in the host process.
+  Each write records the requesting route Agent identity, credential identity
+  revision, external actor, destination origin, and—when the provider returns
+  one—an exact HTTPS result link. The completed Lark approval card, durable
+  continuation, Activity trace, Organization Audit, and CSV export carry that
+  same result link without exposing credentials or raw response bodies.
 - Delivery, run, inbound-event, binding, pairing, workspace-access, memory,
   routine, and workflow state defaults to a shared SQLite WAL database. Outbox,
   run, routine, and workflow-node claims plus memory revisions are transactional
@@ -1135,7 +1143,10 @@ or through `GET /v1/tool-approvals` and
 `POST /v1/tool-approvals/:id/{approve|reject}`. Lark cards expose approval only
 when the complete argument JSON is safe to display; oversized or
 sensitive-looking payloads must be reviewed in the console. Audit and metrics
-use redacted summaries and status counts rather than argument values.
+use redacted summaries and status counts rather than argument values. Completed
+GitHub issue/comment and Lark Doc/Base writes expose **查看外部结果** together
+with the Agent identity, credential revision, and external actor that performed
+the operation.
 
 When a CLI creates a user-facing file, the executor asks it to declare the
 project-relative path in its final response. MaxTag strips that declaration,
