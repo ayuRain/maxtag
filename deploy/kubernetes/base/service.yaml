@@ -15,9 +15,9 @@ spec:
     - name: worker-metrics
       port: 3078
       targetPort: worker-metrics
-    - name: scheduler-metrics
+    - name: sched-metrics
       port: 3079
-      targetPort: scheduler-metrics
+      targetPort: sched-metrics
     - name: lark-metrics
       port: 3080
       targetPort: lark-metrics

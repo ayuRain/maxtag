@@ -108,7 +108,7 @@ spec:
             - configMapRef:
                 name: maxtag-runtime
           ports:
-            - name: scheduler-metrics
+            - name: sched-metrics
               containerPort: 3079
           resources:
             requests: {cpu: 100m, memory: 256Mi}
