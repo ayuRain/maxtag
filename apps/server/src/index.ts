@@ -7001,7 +7001,18 @@ async function handleLarkHistoryOnboardingAction(
     return larkCardActionResponse('warning', '没有找到对应的群聊接入记录。');
   }
   if (job.status !== 'awaiting_choice') {
-    return larkCardActionResponse('info', '这个群已经完成过初始化选择。');
+    const completedCard = job.mode === 'from_now'
+      ? buildLarkHistoryOnboardingCard({
+          selected: 'from_now',
+          projectId: job.projectId,
+          channelTitle: job.channelTitle,
+        })
+      : buildLarkHistoryImportStatusCard(job);
+    return larkCardActionResponse(
+      'info',
+      '这个群已经完成过初始化选择。',
+      completedCard,
+    );
   }
   const authorization = await accessStore.authorize({
     workspaceId: job.workspaceId,

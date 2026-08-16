@@ -409,4 +409,51 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
     ).length,
     cardUpdatesBeforeCreate,
   );
+
+  const fromNow = await fetch(`${running.baseUrl}/v1/lark/card-actions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer managed-lark-client-ingress-token',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'card.action.trigger',
+      event_id: 'onboarding-from-now-1',
+      operator_id: 'ou-onboarding-owner',
+      message_id: 'om_onboarding_card',
+      chat_id: 'oc_onboarding',
+      action_tag: 'button',
+      action_value: JSON.stringify({ action: 'maxtag.history.from_now' }),
+    }),
+  });
+  assert.equal(fromNow.status, 200);
+  const fromNowAction = await fromNow.json();
+  assert.equal(fromNowAction.toast.type, 'success');
+  assert.equal(fromNowAction.card.type, 'raw');
+  assert.match(JSON.stringify(fromNowAction.card.data), /已选择从现在开始/u);
+
+  const staleCardRetry = await fetch(`${running.baseUrl}/v1/lark/card-actions`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer managed-lark-client-ingress-token',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'card.action.trigger',
+      event_id: 'onboarding-stale-card-retry-1',
+      operator_id: 'ou-onboarding-owner',
+      message_id: 'om_onboarding_card',
+      chat_id: 'oc_onboarding',
+      action_tag: 'button',
+      action_value: JSON.stringify({
+        action: 'maxtag.history.select_project',
+        project_id: 'mobile-rebuild',
+      }),
+    }),
+  });
+  assert.equal(staleCardRetry.status, 200);
+  const staleCardAction = await staleCardRetry.json();
+  assert.equal(staleCardAction.toast.type, 'info');
+  assert.equal(staleCardAction.card.type, 'raw');
+  assert.match(JSON.stringify(staleCardAction.card.data), /已选择从现在开始/u);
 });
