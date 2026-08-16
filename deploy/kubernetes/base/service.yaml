@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: maxtag
+  labels:
+    app.kubernetes.io/name: maxtag
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: maxtag
+  ports:
+    - name: http
+      port: 3077
+      targetPort: http
+    - name: worker-metrics
+      port: 3078
+      targetPort: worker-metrics
+    - name: scheduler-metrics
+      port: 3079
+      targetPort: scheduler-metrics
+    - name: lark-metrics
+      port: 3080
+      targetPort: lark-metrics

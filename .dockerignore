@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+**/dist
+**/*.tsbuildinfo
+.env
+.env.*
+data
+artifacts
+coverage
+docs/parity-audit-*.md

@@ -609,6 +609,10 @@ scheduling requires the shared SQLite store.
 
 `deploy/systemd` contains a four-process target for the HTTP server, Lark
 long-connection bridge, durable worker, and routine/workflow scheduler.
+`deploy/kubernetes` provides a single-Pod StatefulSet migration target with a
+safe shadow base, an explicit production overlay, KMS-compatible Secret
+creation, consistent SQLite/PVC transfer helpers, and Cloudflare Tunnel
+cutover. See [`deploy/kubernetes/README.md`](deploy/kubernetes/README.md).
 `deploy/prometheus` contains a
 Bearer-authenticated scrape fragment plus alerts for dead processes, stale
 long-connection consumers, stale loops, stale run leases, queued work, stuck
