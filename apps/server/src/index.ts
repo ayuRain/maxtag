@@ -6577,8 +6577,12 @@ async function handleRunControlCommand(
 function larkCardActionResponse(
   type: LarkCardActionResponse['toast']['type'],
   content: string,
+  card?: Record<string, unknown>,
 ): LarkCardActionResponse {
-  return { toast: { type, content } };
+  return {
+    toast: { type, content },
+    ...(card ? { card } : {}),
+  };
 }
 
 const MAXTAG_HISTORY_FROM_NOW_ACTION = 'maxtag.history.from_now';
@@ -7060,22 +7064,18 @@ async function handleLarkHistoryOnboardingAction(
     if (!updated || updated.status !== 'awaiting_choice') {
       return larkCardActionResponse('warning', '群聊接入状态已变化，请刷新后重试。');
     }
-    const transport = new TrackedLarkTransport(
-      createLarkTransportForRun().transport,
-      deliveryStore,
-    );
-    await transport.updateCard({
-      cardId: action.cardMessageId,
-      card: buildLarkHistoryOnboardingCard({
-        projectId: updated.projectId,
-        channelTitle: updated.channelTitle,
-        projects: await larkHistoryProjectOptions(
-          updated.workspaceId,
-          updated.projectId,
-        ),
-      }),
-      metadata: { thread: updated.thread, stage: 'onboarding-card' },
-    }).catch(() => undefined);
+    // Return the replacement card in the callback response instead of waiting
+    // for a second Lark API request. Card callbacks must finish within three
+    // seconds; the external update previously pushed successful bindings over
+    // that limit and made Lark show error 200341 even though state was saved.
+    const responseCard = buildLarkHistoryOnboardingCard({
+      projectId: updated.projectId,
+      channelTitle: updated.channelTitle,
+      projects: await larkHistoryProjectOptions(
+        updated.workspaceId,
+        updated.projectId,
+      ),
+    });
     await deliveryStore.markInboundEventProcessed(inboundEventId, {
       workspaceId: updated.workspaceId,
       projectId: updated.projectId,
@@ -7087,7 +7087,11 @@ async function handleLarkHistoryOnboardingAction(
         historyImportJobId: updated.id,
       },
     });
-    return larkCardActionResponse('success', `已切换到 Project：${target.name}。`);
+    return larkCardActionResponse(
+      'success',
+      `已切换到 Project：${target.name}。`,
+      responseCard,
+    );
   }
   if (action.action === MAXTAG_HISTORY_CREATE_PROJECT_ACTION) {
     const mayCreateProject =
@@ -7141,22 +7145,14 @@ async function handleLarkHistoryOnboardingAction(
     if (!updated || updated.status !== 'awaiting_choice') {
       return larkCardActionResponse('warning', 'Project 已创建，但群聊接入状态已变化。');
     }
-    const transport = new TrackedLarkTransport(
-      createLarkTransportForRun().transport,
-      deliveryStore,
-    );
-    await transport.updateCard({
-      cardId: action.cardMessageId,
-      card: buildLarkHistoryOnboardingCard({
-        projectId: updated.projectId,
-        channelTitle: updated.channelTitle,
-        projects: await larkHistoryProjectOptions(
-          updated.workspaceId,
-          updated.projectId,
-        ),
-      }),
-      metadata: { thread: updated.thread, stage: 'onboarding-card' },
-    }).catch(() => undefined);
+    const responseCard = buildLarkHistoryOnboardingCard({
+      projectId: updated.projectId,
+      channelTitle: updated.channelTitle,
+      projects: await larkHistoryProjectOptions(
+        updated.workspaceId,
+        updated.projectId,
+      ),
+    });
     await deliveryStore.markInboundEventProcessed(inboundEventId, {
       workspaceId: updated.workspaceId,
       projectId: updated.projectId,
@@ -7172,6 +7168,7 @@ async function handleLarkHistoryOnboardingAction(
     return larkCardActionResponse(
       'success',
       `已创建并绑定 Project：${created.name}。`,
+      responseCard,
     );
   }
   const historyDays = MAXTAG_HISTORY_ACTION_DAYS.get(action.action);
@@ -7190,20 +7187,12 @@ async function handleLarkHistoryOnboardingAction(
   if (!configured) {
     return larkCardActionResponse('warning', '群聊接入状态已变化，请刷新后重试。');
   }
-  const transport = new TrackedLarkTransport(
-    createLarkTransportForRun().transport,
-    deliveryStore,
-  );
-  await transport.updateCard({
-    cardId: action.cardMessageId,
-    card: buildLarkHistoryOnboardingCard({
-      selected: history ? 'history' : 'from_now',
-      historyDays,
-      projectId: job.projectId,
-      channelTitle: job.channelTitle,
-    }),
-    metadata: { thread: job.thread, stage: 'onboarding-card' },
-  }).catch(() => undefined);
+  const responseCard = buildLarkHistoryOnboardingCard({
+    selected: history ? 'history' : 'from_now',
+    historyDays,
+    projectId: job.projectId,
+    channelTitle: job.channelTitle,
+  });
   await deliveryStore.markInboundEventProcessed(inboundEventId, {
     workspaceId: job.workspaceId,
     projectId: job.projectId,
@@ -7225,6 +7214,7 @@ async function handleLarkHistoryOnboardingAction(
   return larkCardActionResponse(
     'success',
     history ? `已开始后台导入最近 ${historyDays} 天历史。` : '已从现在开始使用。',
+    responseCard,
   );
 }
 

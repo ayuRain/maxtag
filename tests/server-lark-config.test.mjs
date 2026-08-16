@@ -329,6 +329,10 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
       `${callbackTimestamp}${callbackNonce}platform-managed-encrypt-key${callbackBody}`,
     )
     .digest('hex');
+  const cardUpdatesBeforeSelect = requests.filter(
+    (request) => request.url === '/open-apis/im/v1/messages/om_onboarding_card',
+  ).length;
+  const selectStartedAt = Date.now();
   const selectProject = await fetch(`${running.baseUrl}/v1/lark/events`, {
     method: 'POST',
     headers: {
@@ -339,9 +343,14 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
     },
     body: callbackBody,
   });
+  assert.ok(
+    Date.now() - selectStartedAt < 2_500,
+    'Project selection callback must stay below Lark\'s 3 second deadline',
+  );
   assert.equal(selectProject.status, 200);
   const projectAction = await selectProject.json();
   assert.equal(projectAction.toast.type, 'success');
+  assert.match(JSON.stringify(projectAction.card), /Second project/u);
 
   const imports = await fetch(
     `${running.baseUrl}/v1/lark/history-imports?workspaceId=dev-workspace`,
@@ -349,14 +358,16 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   ).then((response) => response.json());
   assert.equal(imports.jobs[0].status, 'awaiting_choice');
   assert.equal(imports.jobs[0].projectId, 'second-project');
-  assert.ok(
-    requests.some(
-      (request) =>
-        request.url === '/open-apis/im/v1/messages/om_onboarding_card' &&
-        request.body.includes('Second project'),
-    ),
+  assert.equal(
+    requests.filter(
+      (request) => request.url === '/open-apis/im/v1/messages/om_onboarding_card',
+    ).length,
+    cardUpdatesBeforeSelect,
   );
 
+  const cardUpdatesBeforeCreate = requests.filter(
+    (request) => request.url === '/open-apis/im/v1/messages/om_onboarding_card',
+  ).length;
   const createProject = await fetch(`${running.baseUrl}/v1/lark/card-actions`, {
     method: 'POST',
     headers: {
@@ -380,6 +391,7 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   const createAction = await createProject.json();
   assert.equal(createAction.toast.type, 'success');
   assert.match(createAction.toast.content, /Mobile Rebuild/u);
+  assert.match(JSON.stringify(createAction.card), /Mobile Rebuild/u);
 
   const createdImports = await fetch(
     `${running.baseUrl}/v1/lark/history-imports?workspaceId=dev-workspace`,
@@ -387,11 +399,10 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   ).then((response) => response.json());
   assert.equal(createdImports.jobs[0].status, 'awaiting_choice');
   assert.equal(createdImports.jobs[0].projectId, 'mobile-rebuild');
-  assert.ok(
-    requests.some(
-      (request) =>
-        request.url === '/open-apis/im/v1/messages/om_onboarding_card' &&
-        request.body.includes('Mobile Rebuild'),
-    ),
+  assert.equal(
+    requests.filter(
+      (request) => request.url === '/open-apis/im/v1/messages/om_onboarding_card',
+    ).length,
+    cardUpdatesBeforeCreate,
   );
 });
