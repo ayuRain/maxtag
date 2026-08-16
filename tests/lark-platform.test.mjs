@@ -591,6 +591,60 @@ test('HTTP Lark transport uploads files, replies with a file key, and downloads 
   }
 });
 
+test('HTTP Lark transport retries idempotent message delivery after a transient 504', async () => {
+  const messageBodies = [];
+  let messageAttempts = 0;
+  const transport = new HttpLarkTransport({
+    appId: 'app-id',
+    appSecret: 'app-secret',
+    baseUrl: 'https://lark.example',
+    retryBaseMs: 0,
+    fetch: async (url, options = {}) => {
+      if (url.endsWith('/tenant_access_token/internal')) {
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            tenant_access_token: 'tenant-token',
+            expire: 7200,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (url.endsWith('/messages/root-1/reply')) {
+        messageAttempts += 1;
+        messageBodies.push(JSON.parse(options.body));
+        if (messageAttempts === 1) {
+          return new Response(
+            JSON.stringify({ code: 504, msg: 'gateway timeout' }),
+            { status: 504, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({ code: 0, data: { message_id: 'message-retried' } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+  });
+
+  const result = await transport.createCard({
+    chatId: 'chat-1',
+    rootId: 'root-1',
+    card: { schema: '2.0', body: { elements: [] } },
+    metadata: {
+      runId: 'run-transient-504',
+      stage: 'thread-status-card',
+    },
+  });
+
+  assert.deepEqual(result, { cardId: 'message-retried' });
+  assert.equal(messageAttempts, 2);
+  assert.equal(messageBodies[0].uuid, messageBodies[1].uuid);
+  assert.equal(typeof messageBodies[0].uuid, 'string');
+  assert.equal(messageBodies[0].uuid.length, 50);
+});
+
 test('Lark adapter sends managed artifacts through tracked file delivery', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-adapter-'));
   try {

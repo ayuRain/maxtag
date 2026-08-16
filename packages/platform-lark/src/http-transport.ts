@@ -21,6 +21,8 @@ export interface HttpLarkTransportOptions {
   baseUrl?: string;
   fetch?: typeof fetch;
   now?: () => Date;
+  retryMaxAttempts?: number;
+  retryBaseMs?: number;
 }
 
 interface LarkApiEnvelope<T> {
@@ -196,6 +198,8 @@ export class HttpLarkTransport implements LarkTransport {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => Date;
+  private readonly retryMaxAttempts: number;
+  private readonly retryBaseMs: number;
   private tokenCache?: TenantTokenCache;
 
   constructor(options: HttpLarkTransportOptions) {
@@ -204,6 +208,11 @@ export class HttpLarkTransport implements LarkTransport {
     this.baseUrl = baseUrlFor(options);
     this.fetchImpl = options.fetch ?? fetch;
     this.now = options.now ?? (() => new Date());
+    this.retryMaxAttempts = Math.max(
+      1,
+      Math.min(options.retryMaxAttempts ?? 3, 5),
+    );
+    this.retryBaseMs = Math.max(0, options.retryBaseMs ?? 250);
   }
 
   async readiness(): Promise<{ ok: boolean }> {
@@ -636,12 +645,60 @@ export class HttpLarkTransport implements LarkTransport {
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
     }
-    const response = await this.fetchImpl(url.toString(), {
-      method: options.method,
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: options.signal,
-    });
-    return this.parseJsonResponse<T>(response);
+    const requestBody = options.body ? JSON.stringify(options.body) : undefined;
+    const replaySafe =
+      options.method !== 'POST' ||
+      typeof options.body?.uuid === 'string' ||
+      pathname.endsWith('/tenant_access_token/internal');
+
+    for (let attempt = 1; attempt <= this.retryMaxAttempts; attempt += 1) {
+      try {
+        const response = await this.fetchImpl(url.toString(), {
+          method: options.method,
+          headers,
+          body: requestBody,
+          signal: options.signal,
+        });
+        const retryableStatus =
+          response.status === 408 ||
+          response.status === 429 ||
+          response.status >= 500;
+        if (
+          replaySafe &&
+          retryableStatus &&
+          attempt < this.retryMaxAttempts
+        ) {
+          await response.arrayBuffer().catch(() => undefined);
+          await this.waitBeforeRetry(attempt, response.headers.get('retry-after'));
+          continue;
+        }
+        return this.parseJsonResponse<T>(response);
+      } catch (error) {
+        if (
+          !replaySafe ||
+          attempt >= this.retryMaxAttempts ||
+          options.signal?.aborted ||
+          (error instanceof Error && error.name === 'AbortError')
+        ) {
+          throw error;
+        }
+        await this.waitBeforeRetry(attempt);
+      }
+    }
+
+    throw new LarkApiError({ message: 'Lark API retry loop exhausted.' });
+  }
+
+  private async waitBeforeRetry(
+    attempt: number,
+    retryAfter?: string | null,
+  ): Promise<void> {
+    const retryAfterSeconds = Number(retryAfter);
+    const delayMs =
+      Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+        ? retryAfterSeconds * 1_000
+        : this.retryBaseMs * 2 ** Math.max(0, attempt - 1);
+    if (delayMs <= 0) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
   }
 }
