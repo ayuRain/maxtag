@@ -33,6 +33,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+              add: ["CHOWN"]
           volumeMounts:
             - name: persistent
               mountPath: /mnt
