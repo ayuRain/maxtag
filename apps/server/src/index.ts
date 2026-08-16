@@ -6581,7 +6581,7 @@ function larkCardActionResponse(
 ): LarkCardActionResponse {
   return {
     toast: { type, content },
-    ...(card ? { card } : {}),
+    ...(card ? { card: { type: 'raw', data: card } } : {}),
   };
 }
 

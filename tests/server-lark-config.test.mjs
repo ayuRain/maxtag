@@ -350,7 +350,9 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   assert.equal(selectProject.status, 200);
   const projectAction = await selectProject.json();
   assert.equal(projectAction.toast.type, 'success');
-  assert.match(JSON.stringify(projectAction.card), /Second project/u);
+  assert.equal(projectAction.card.type, 'raw');
+  assert.equal(projectAction.card.data.schema, '2.0');
+  assert.match(JSON.stringify(projectAction.card.data), /Second project/u);
 
   const imports = await fetch(
     `${running.baseUrl}/v1/lark/history-imports?workspaceId=dev-workspace`,
@@ -391,7 +393,9 @@ test('installation owner saves a validated Lark Bot and restart activates HTTP t
   const createAction = await createProject.json();
   assert.equal(createAction.toast.type, 'success');
   assert.match(createAction.toast.content, /Mobile Rebuild/u);
-  assert.match(JSON.stringify(createAction.card), /Mobile Rebuild/u);
+  assert.equal(createAction.card.type, 'raw');
+  assert.equal(createAction.card.data.schema, '2.0');
+  assert.match(JSON.stringify(createAction.card.data), /Mobile Rebuild/u);
 
   const createdImports = await fetch(
     `${running.baseUrl}/v1/lark/history-imports?workspaceId=dev-workspace`,
