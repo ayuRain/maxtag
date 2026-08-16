@@ -15,6 +15,36 @@ export type ProjectAgentMode = 'inherit' | 'custom';
 export type ProjectCapabilityMode = 'inherit' | 'custom';
 export type ChannelInstructionMode = 'inherit' | 'append' | 'replace';
 export type ChannelCapabilityMode = 'inherit' | 'extend' | 'custom';
+export type CapabilityBundlePreset =
+  | 'data-readonly'
+  | 'platform-monitoring'
+  | 'github-write'
+  | 'custom';
+
+/**
+ * A reusable, administrator-managed set of capabilities.  This is the
+ * persisted counterpart of the per-run AccessBundle in core: projects and
+ * channels reference these by id, while the resolver expands them into the
+ * immutable access snapshot carried by every run.
+ */
+export interface CapabilityBundle {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description?: string;
+  preset: CapabilityBundlePreset;
+  enabled: boolean;
+  revision: number;
+  skillIds: string[];
+  agentIds: string[];
+  knowledgeSourceIds: string[];
+  grants: ToolGrant[];
+  networkPolicy: AccessBundle['networkPolicy'];
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+}
 
 export interface WorkspaceAgentPolicy {
   workspace: Workspace;
@@ -22,6 +52,7 @@ export interface WorkspaceAgentPolicy {
   skillIds: string[];
   agentIds: string[];
   knowledgeSourceIds: string[];
+  bundleIds: string[];
   grants: ToolGrant[];
   networkPolicy: AccessBundle['networkPolicy'];
   budgetPolicy?: UsageBudgetPolicy;
@@ -45,6 +76,7 @@ export interface ProjectAgentPolicy {
   skillIds: string[];
   agentIds: string[];
   knowledgeSourceIds: string[];
+  bundleIds: string[];
   grants: ToolGrant[];
   networkPolicy: AccessBundle['networkPolicy'];
   memoryMode: ProjectMemoryMode;
@@ -70,6 +102,7 @@ export interface ChannelAgentPolicy {
   skillIds: string[];
   agentIds: string[];
   knowledgeSourceIds: string[];
+  bundleIds: string[];
   grants: ToolGrant[];
   networkPolicy: AccessBundle['networkPolicy'];
   budgetPolicy?: UsageBudgetPolicy;
@@ -90,6 +123,7 @@ export interface UpsertProjectAgentPolicyInput {
   skillIds?: string[];
   agentIds?: string[];
   knowledgeSourceIds?: string[];
+  bundleIds?: string[];
   grants?: ToolGrant[];
   networkPolicy?: Partial<AccessBundle['networkPolicy']>;
   memoryMode?: ProjectMemoryMode;
@@ -109,6 +143,7 @@ export interface UpsertWorkspaceAgentPolicyInput {
   skillIds?: string[];
   agentIds?: string[];
   knowledgeSourceIds?: string[];
+  bundleIds?: string[];
   grants?: ToolGrant[];
   networkPolicy?: Partial<AccessBundle['networkPolicy']>;
   budgetPolicy?: UsageBudgetPolicy;
@@ -131,11 +166,28 @@ export interface UpsertChannelAgentPolicyInput {
   skillIds?: string[];
   agentIds?: string[];
   knowledgeSourceIds?: string[];
+  bundleIds?: string[];
   grants?: ToolGrant[];
   networkPolicy?: Partial<AccessBundle['networkPolicy']>;
   budgetPolicy?: UsageBudgetPolicy;
   memoryApprovalPolicy?: MemoryApprovalPolicy;
   toolApprovalPolicy?: ToolApprovalPolicy;
+  actor?: string;
+}
+
+export interface UpsertCapabilityBundleInput {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description?: string;
+  preset?: CapabilityBundlePreset;
+  enabled?: boolean;
+  expectedRevision?: number;
+  skillIds?: string[];
+  agentIds?: string[];
+  knowledgeSourceIds?: string[];
+  grants?: ToolGrant[];
+  networkPolicy?: Partial<AccessBundle['networkPolicy']>;
   actor?: string;
 }
 
@@ -147,14 +199,23 @@ export interface ConfigAuditRecord {
     | 'project.updated'
     | 'channel.created'
     | 'channel.updated'
-    | 'channel.removed';
+    | 'channel.removed'
+    | 'capability_bundle.created'
+    | 'capability_bundle.updated'
+    | 'capability_bundle.enabled'
+    | 'capability_bundle.disabled'
+    | 'capability_bundle.removed';
   actor: string;
   workspaceId: string;
   projectId?: string;
   channelId?: string;
   platform?: string;
   at: string;
-  snapshot: WorkspaceAgentPolicy | ProjectAgentPolicy | ChannelAgentPolicy;
+  snapshot:
+    | WorkspaceAgentPolicy
+    | ProjectAgentPolicy
+    | ChannelAgentPolicy
+    | CapabilityBundle;
 }
 
 export interface FileConfigState {
@@ -162,6 +223,7 @@ export interface FileConfigState {
   workspaces: WorkspaceAgentPolicy[];
   projects: ProjectAgentPolicy[];
   channels: ChannelAgentPolicy[];
+  capabilityBundles: CapabilityBundle[];
   audit: ConfigAuditRecord[];
 }
 

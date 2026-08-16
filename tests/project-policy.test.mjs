@@ -636,6 +636,161 @@ test('channel policy overlays project instructions, capabilities, and budget wit
   }
 });
 
+test('named capability bundles inherit through projects and channels without leaking', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-bundles-'));
+  try {
+    const store = new FileThreadConfigStore(rootDir, {
+      workspace: { id: 'acme', name: 'Acme', defaultProjectId: 'shared' },
+    });
+    await store.upsertCapabilityBundle({
+      workspaceId: 'acme',
+      id: 'data-readonly',
+      name: 'Data read only',
+      preset: 'data-readonly',
+      grants: [{
+        id: 'bundle:acme:data-readonly:mcp-clickhouse',
+        kind: 'mcp:clickhouse',
+        scope: 'workspace',
+        label: 'ClickHouse',
+        constraints: { permissions: ['read'] },
+      }],
+      networkPolicy: {
+        mode: 'restricted',
+        allowedHosts: ['clickhouse.internal'],
+      },
+      actor: 'operator:owner',
+    });
+    await store.upsertCapabilityBundle({
+      workspaceId: 'acme',
+      id: 'github-write',
+      name: 'GitHub write',
+      preset: 'github-write',
+      grants: [{
+        id: 'bundle:acme:github-write:github',
+        kind: 'github',
+        scope: 'workspace',
+        label: 'GitHub',
+        credentialIdentityId: 'github-bot',
+        constraints: {
+          permissions: ['read', 'write'],
+          repositories: ['acme/shared'],
+        },
+      }],
+      networkPolicy: {
+        mode: 'restricted',
+        allowedHosts: ['api.github.com'],
+      },
+      actor: 'operator:owner',
+    });
+    await store.upsertCapabilityBundle({
+      workspaceId: 'acme',
+      id: 'platform-monitoring',
+      name: 'Platform monitoring',
+      preset: 'platform-monitoring',
+      grants: [{
+        id: 'bundle:acme:platform-monitoring:mcp-kubernetes',
+        kind: 'mcp:kubernetes',
+        scope: 'workspace',
+        label: 'Kubernetes',
+        constraints: { permissions: ['read'] },
+      }],
+      networkPolicy: { mode: 'deny-by-default', allowedHosts: [] },
+      actor: 'operator:owner',
+    });
+    await store.upsertWorkspacePolicy({
+      workspaceId: 'acme',
+      bundleIds: ['data-readonly'],
+      actor: 'operator:owner',
+    });
+    await store.upsertProjectPolicy({
+      workspaceId: 'acme',
+      projectId: 'shared',
+      capabilityMode: 'inherit',
+      actor: 'operator:owner',
+    });
+    await store.upsertProjectPolicy({
+      workspaceId: 'acme',
+      projectId: 'engineering',
+      capabilityMode: 'custom',
+      bundleIds: ['github-write'],
+      actor: 'operator:owner',
+    });
+    await store.upsertChannelPolicy({
+      workspaceId: 'acme',
+      projectId: 'engineering',
+      platform: 'lark',
+      channelId: 'oc_incidents',
+      capabilityMode: 'extend',
+      bundleIds: ['platform-monitoring'],
+      actor: 'operator:owner',
+    });
+
+    const thread = (projectId, channelId) => ({
+      id: `lark:${channelId}:main`,
+      platform: 'lark',
+      externalId: `${channelId}:main`,
+      workspaceId: 'acme',
+      projectId,
+      channelId,
+      visibility: 'public',
+    });
+    const inherited = await store.resolveThreadPolicy(thread('shared', 'oc_shared'));
+    assert.deepEqual(inherited.access.capabilityBundleIds, ['data-readonly']);
+    assert.ok(inherited.access.grants.some((grant) => grant.kind === 'mcp:clickhouse'));
+    assert.equal(inherited.access.grants.some((grant) => grant.kind === 'github'), false);
+    assert.deepEqual(inherited.access.networkPolicy, {
+      mode: 'restricted',
+      allowedHosts: ['clickhouse.internal'],
+    });
+
+    const engineering = await store.resolveThreadPolicy(
+      thread('engineering', 'oc_engineering'),
+    );
+    assert.deepEqual(engineering.access.capabilityBundleIds, ['github-write']);
+    assert.ok(engineering.access.grants.some((grant) => grant.kind === 'github'));
+    assert.equal(
+      engineering.access.grants.some((grant) => grant.kind === 'mcp:clickhouse'),
+      false,
+    );
+
+    const incident = await store.resolveThreadPolicy(
+      thread('engineering', 'oc_incidents'),
+    );
+    assert.deepEqual(
+      new Set(incident.access.capabilityBundleIds),
+      new Set(['github-write', 'platform-monitoring']),
+    );
+    assert.ok(incident.access.grants.some((grant) => grant.kind === 'github'));
+    assert.ok(incident.access.grants.some((grant) => grant.kind === 'mcp:kubernetes'));
+
+    const reloaded = new FileThreadConfigStore(rootDir);
+    const bundles = await reloaded.listCapabilityBundles('acme');
+    assert.equal(bundles.length, 3);
+    await assert.rejects(
+      () => reloaded.removeCapabilityBundle({
+        workspaceId: 'acme',
+        id: 'github-write',
+      }),
+      /capability_bundle_in_use/,
+    );
+    const disabled = await reloaded.setCapabilityBundleEnabled({
+      workspaceId: 'acme',
+      id: 'github-write',
+      enabled: false,
+      expectedRevision: bundles.find((bundle) => bundle.id === 'github-write').revision,
+      actor: 'operator:owner',
+    });
+    assert.equal(disabled.enabled, false);
+    const afterDisable = await reloaded.resolveThreadPolicy(
+      thread('engineering', 'oc_engineering'),
+    );
+    assert.deepEqual(afterDisable.access.capabilityBundleIds, []);
+    assert.equal(afterDisable.access.grants.some((grant) => grant.kind === 'github'), false);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
 test('external write approval policy inherits and overrides at workspace project and channel', async () => {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-tool-approval-policy-'));
   try {

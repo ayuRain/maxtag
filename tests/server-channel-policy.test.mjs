@@ -343,6 +343,25 @@ test('channel policy API persists scoped instructions tools and budget', async (
   assert.equal(privacyFallback.data.route.visibility, 'public');
   assert.equal(privacyFallback.data.route.larkChatInfoStatus, undefined);
 
+  const createdBundle = await jsonRequest(baseUrl, '/v1/capability-bundles', {
+    method: 'POST',
+    body: {
+      workspaceId: 'dev-workspace',
+      id: 'incident-docs',
+      name: 'Incident documents',
+      preset: 'data-readonly',
+      tools: ['lark-docs'],
+      toolConstraints: {
+        'lark-docs': { documentIds: ['dox_incidents'], permissions: ['read'] },
+      },
+      networkMode: 'restricted',
+      allowedHosts: ['open.feishu.cn'],
+    },
+  });
+  assert.equal(createdBundle.response.status, 200);
+  assert.equal(createdBundle.data.bundle.id, 'incident-docs');
+  assert.equal(createdBundle.data.bundle.revision, 1);
+
   const created = await jsonRequest(baseUrl, '/v1/channel-policies', {
     method: 'POST',
     body: {
@@ -354,6 +373,7 @@ test('channel policy API persists scoped instructions tools and budget', async (
       instructionMode: 'append',
       instructions: 'Post a concise incident timeline.',
       capabilityMode: 'extend',
+      bundleIds: ['incident-docs'],
       tools: ['lark-docs'],
       toolConstraints: {
         'lark-docs': { documentIds: ['dox_incidents'], permissions: ['read'] },
@@ -371,8 +391,38 @@ test('channel policy API persists scoped instructions tools and budget', async (
   assert.equal(created.response.status, 200);
   assert.equal(created.data.channelPolicy.projectId, 'opentag');
   assert.equal(created.data.channelPolicy.instructionMode, 'append');
+  assert.deepEqual(created.data.channelPolicy.bundleIds, ['incident-docs']);
   assert.equal(created.data.channelPolicy.grants[0].scope, 'channel');
   assert.equal(created.data.channelPolicy.budgetPolicy.scope, 'channel');
+
+  const listedBundles = await jsonRequest(
+    baseUrl,
+    '/v1/capability-bundles?workspaceId=dev-workspace',
+  );
+  assert.equal(listedBundles.response.status, 200);
+  assert.deepEqual(
+    listedBundles.data.bundles.map((bundle) => bundle.id),
+    ['incident-docs'],
+  );
+  const staleBundleUpdate = await jsonRequest(baseUrl, '/v1/capability-bundles', {
+    method: 'POST',
+    body: {
+      workspaceId: 'dev-workspace',
+      id: 'incident-docs',
+      name: 'Stale update',
+      expectedRevision: 0,
+      tools: [],
+    },
+  });
+  assert.equal(staleBundleUpdate.response.status, 409);
+  assert.equal(staleBundleUpdate.data.error, 'capability_bundle_revision_conflict');
+  const referencedBundleDelete = await jsonRequest(
+    baseUrl,
+    '/v1/capability-bundles/incident-docs?workspaceId=dev-workspace&expectedRevision=1',
+    { method: 'DELETE' },
+  );
+  assert.equal(referencedBundleDelete.response.status, 409);
+  assert.equal(referencedBundleDelete.data.error, 'capability_bundle_in_use');
 
   const workspace = await jsonRequest(
     baseUrl,
@@ -390,4 +440,13 @@ test('channel policy API persists scoped instructions tools and budget', async (
   assert.equal(removed.response.status, 200);
   assert.equal(removed.data.channelPolicy.channelId, 'oc_incidents');
   assert.equal(removed.data.workspace.channelPolicies.length, 0);
+
+  const deletedBundle = await jsonRequest(
+    baseUrl,
+    '/v1/capability-bundles/incident-docs?workspaceId=dev-workspace&expectedRevision=1',
+    { method: 'DELETE' },
+  );
+  assert.equal(deletedBundle.response.status, 200);
+  assert.equal(deletedBundle.data.bundle.id, 'incident-docs');
+  assert.deepEqual(deletedBundle.data.workspace.capabilityBundles, []);
 });

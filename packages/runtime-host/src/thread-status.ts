@@ -37,6 +37,7 @@ export interface ThreadStatusResult {
   agentIds: string[];
   knowledgeSourceIds: string[];
   routineIds: string[];
+  capabilityBundleIds: string[];
   budget: UsageBudgetCheckResult;
   activationMode: ThreadActivationMode;
   bindingId?: string;
@@ -330,6 +331,7 @@ export class ThreadStatusService {
       skills: skills.map((skill) => skill.name),
       agents: agents.map((agent) => agent.name),
       sources: knowledgeSources.map((source) => source.name),
+      capabilityBundles: resolved.access.capabilityBundleIds ?? [],
       tools: toolLabels,
       network: networkPolicyLabel(resolved.access),
       activeRoutines: enabledRoutines.map((routine) => routine.name),
@@ -362,6 +364,7 @@ export class ThreadStatusService {
       `- 子智能体（${agents.length}）：${boundedList(agents.map((agent) => agent.name), '无')}`,
       `- 知识源（${knowledgeSources.length}）：${boundedList(knowledgeSources.map((source) => source.name), '无')}`,
       `- 工具（${toolLabels.length}）：${boundedList(toolLabels, '无')}`,
+      `- 能力包（${resolved.access.capabilityBundleIds?.length ?? 0}）：${boundedList(resolved.access.capabilityBundleIds ?? [], '无')}`,
       `- 持续任务：${enabledRoutines.length} 个运行中${pausedRoutines ? `，${pausedRoutines} 个已暂停` : ''}`,
       '',
       '用量',
@@ -379,6 +382,7 @@ export class ThreadStatusService {
       agentIds: agents.map((agent) => agent.id),
       knowledgeSourceIds: knowledgeSources.map((source) => source.id),
       routineIds: routines.map((routine) => routine.id),
+      capabilityBundleIds: resolved.access.capabilityBundleIds ?? [],
       budget,
       activationMode,
       bindingId: binding?.id,

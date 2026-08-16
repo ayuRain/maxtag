@@ -172,6 +172,28 @@ test('admin Projects view renders deployment-managed MCP tool grants', async () 
   assert.match(script, /\.tool-constraint input/u);
 });
 
+test('admin manages reusable capability bundles and assigns them by route', async () => {
+  const [html, script, server] = await Promise.all([
+    fs.readFile('apps/admin/public/index.html', 'utf8'),
+    fs.readFile('apps/admin/public/admin.js', 'utf8'),
+    fs.readFile('apps/server/src/index.ts', 'utf8'),
+  ]);
+  assert.match(html, /id="capability-bundle-form"/u);
+  assert.match(html, /数据只读/u);
+  assert.match(html, /平台排障/u);
+  assert.match(html, /研发协作/u);
+  assert.match(html, /id="workspace-bundle-picker"/u);
+  assert.match(html, /id="project-bundle-picker"/u);
+  assert.match(html, /id="channel-bundle-picker"/u);
+  assert.match(script, /function renderCapabilityBundlePicker/u);
+  assert.match(script, /async function saveCapabilityBundle/u);
+  assert.match(script, /async function createCapabilityBundlePreset/u);
+  assert.match(script, /repositories: \[\]/u);
+  assert.match(script, /bundleIds: selectedCapabilityBundleIds/u);
+  assert.match(server, /url\.pathname === '\/v1\/capability-bundles'/u);
+  assert.match(server, /CapabilityBundleRevisionConflictError/u);
+});
+
 test('admin manages Lark-first Agent Identities and binds them to route grants', async () => {
   const [html, script, styles] = await Promise.all([
     fs.readFile('apps/admin/public/index.html', 'utf8'),

@@ -18,6 +18,8 @@ import type {
 } from '@opentag/core';
 import type {
   ConfigAuditRecord,
+  CapabilityBundle,
+  CapabilityBundlePreset,
   ChannelAgentPolicy,
   ChannelCapabilityMode,
   ChannelInstructionMode,
@@ -28,6 +30,7 @@ import type {
   ProjectMemoryMode,
   ResolvedThreadPolicy,
   UpsertChannelAgentPolicyInput,
+  UpsertCapabilityBundleInput,
   UpsertProjectAgentPolicyInput,
   UpsertWorkspaceAgentPolicyInput,
   WorkspaceAgentPolicy,
@@ -56,6 +59,23 @@ function normalizedSkillIds(values: string[] | undefined): string[] {
 
 const normalizedAgentIds = normalizedSkillIds;
 const normalizedKnowledgeSourceIds = normalizedSkillIds;
+const normalizedBundleIds = normalizedSkillIds;
+
+function capabilityBundleId(value: string): string {
+  const id = value.trim().toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u.test(id)) {
+    throw new Error('capability_bundle_invalid_id');
+  }
+  return id;
+}
+
+function capabilityBundlePreset(value: unknown): CapabilityBundlePreset {
+  return value === 'data-readonly' ||
+    value === 'platform-monitoring' ||
+    value === 'github-write'
+    ? value
+    : 'custom';
+}
 
 function projectKey(workspaceId: string, value: string): string {
   const prefix = `${workspaceId}:`;
@@ -117,6 +137,7 @@ function createDefaultState(input?: {
         skillIds: [],
         agentIds: [],
         knowledgeSourceIds: [],
+        bundleIds: [],
         grants: [],
         networkPolicy: defaultNetworkPolicy(),
         budgetPolicy: { mode: 'disabled' },
@@ -141,6 +162,7 @@ function createDefaultState(input?: {
         skillIds: [],
         agentIds: [],
         knowledgeSourceIds: [],
+        bundleIds: [],
         grants: [],
         networkPolicy: defaultNetworkPolicy(),
         memoryMode: 'workspace',
@@ -154,6 +176,7 @@ function createDefaultState(input?: {
       },
     ],
     channels: [],
+    capabilityBundles: [],
     audit: [],
   };
 }
@@ -166,6 +189,20 @@ function cloneGrant(grant: ToolGrant): ToolGrant {
   return {
     ...grant,
     constraints: grant.constraints ? { ...grant.constraints } : undefined,
+  };
+}
+
+function cloneCapabilityBundle(bundle: CapabilityBundle): CapabilityBundle {
+  return {
+    ...bundle,
+    skillIds: normalizedSkillIds(bundle.skillIds),
+    agentIds: normalizedAgentIds(bundle.agentIds),
+    knowledgeSourceIds: normalizedKnowledgeSourceIds(bundle.knowledgeSourceIds),
+    grants: bundle.grants.map(cloneGrant),
+    networkPolicy: {
+      ...bundle.networkPolicy,
+      allowedHosts: [...bundle.networkPolicy.allowedHosts],
+    },
   };
 }
 
@@ -223,6 +260,7 @@ function cloneWorkspacePolicy(policy: WorkspaceAgentPolicy): WorkspaceAgentPolic
     skillIds: normalizedSkillIds(policy.skillIds),
     agentIds: normalizedAgentIds(policy.agentIds),
     knowledgeSourceIds: normalizedKnowledgeSourceIds(policy.knowledgeSourceIds),
+    bundleIds: normalizedBundleIds(policy.bundleIds),
     grants: policy.grants.map(cloneGrant),
     networkPolicy: {
       ...policy.networkPolicy,
@@ -253,6 +291,7 @@ function cloneProjectPolicy(policy: ProjectAgentPolicy): ProjectAgentPolicy {
     skillIds: normalizedSkillIds(policy.skillIds),
     agentIds: normalizedAgentIds(policy.agentIds),
     knowledgeSourceIds: normalizedKnowledgeSourceIds(policy.knowledgeSourceIds),
+    bundleIds: normalizedBundleIds(policy.bundleIds),
     grants: policy.grants.map(cloneGrant),
     networkPolicy: {
       ...policy.networkPolicy,
@@ -283,6 +322,7 @@ function cloneChannelPolicy(policy: ChannelAgentPolicy): ChannelAgentPolicy {
     skillIds: normalizedSkillIds(policy.skillIds),
     agentIds: normalizedAgentIds(policy.agentIds),
     knowledgeSourceIds: normalizedKnowledgeSourceIds(policy.knowledgeSourceIds),
+    bundleIds: normalizedBundleIds(policy.bundleIds),
     grants: (policy.grants ?? []).map(cloneGrant),
     networkPolicy: {
       ...(policy.networkPolicy ?? defaultNetworkPolicy()),
@@ -527,6 +567,62 @@ function extendedNetworkPolicy(
   return { mode, allowedHosts };
 }
 
+function enabledCapabilityBundles(
+  state: FileConfigState,
+  workspaceId: string,
+  ids: string[],
+): CapabilityBundle[] {
+  const requested = new Set(normalizedBundleIds(ids));
+  return state.capabilityBundles
+    .filter(
+      (bundle) =>
+        bundle.workspaceId === workspaceId &&
+        bundle.enabled &&
+        requested.has(bundle.id),
+    )
+    .map(cloneCapabilityBundle);
+}
+
+function assertCapabilityBundleIds(
+  state: FileConfigState,
+  workspaceId: string,
+  ids: string[],
+): void {
+  const available = new Set(
+    state.capabilityBundles
+      .filter((bundle) => bundle.workspaceId === workspaceId)
+      .map((bundle) => bundle.id),
+  );
+  const missing = normalizedBundleIds(ids).find((id) => !available.has(id));
+  if (missing) throw new Error(`capability_bundle_not_found:${missing}`);
+}
+
+function resolvedCapabilityBundleIds(input: {
+  workspace: WorkspaceAgentPolicy;
+  project?: ProjectAgentPolicy;
+  channel?: ChannelAgentPolicy;
+}): string[] {
+  const workspaceIds = normalizedBundleIds(input.workspace.bundleIds);
+  const projectIds =
+    !input.project || input.project.capabilityMode === 'inherit'
+      ? workspaceIds
+      : normalizedBundleIds(input.project.bundleIds);
+  if (input.channel?.capabilityMode === 'custom') {
+    return normalizedBundleIds(input.channel.bundleIds);
+  }
+  if (input.channel?.capabilityMode === 'extend') {
+    return normalizedBundleIds([...projectIds, ...input.channel.bundleIds]);
+  }
+  return projectIds;
+}
+
+export class CapabilityBundleRevisionConflictError extends Error {
+  constructor(readonly currentRevision: number) {
+    super('capability_bundle_revision_conflict');
+    this.name = 'CapabilityBundleRevisionConflictError';
+  }
+}
+
 export class FileThreadConfigStore implements ThreadConfigStore {
   private readonly stateFile: string;
   private readonly fallback: FileConfigState;
@@ -557,6 +653,9 @@ export class FileThreadConfigStore implements ThreadConfigStore {
         channels: (parsed.channels ?? this.fallback.channels).map(
           cloneChannelPolicy,
         ),
+        capabilityBundles: (
+          parsed.capabilityBundles ?? this.fallback.capabilityBundles
+        ).map(cloneCapabilityBundle),
         audit: parsed.audit ?? [],
       };
     } catch (error) {
@@ -566,6 +665,9 @@ export class FileThreadConfigStore implements ThreadConfigStore {
           workspaces: this.fallback.workspaces.map(cloneWorkspacePolicy),
           projects: this.fallback.projects.map(cloneProjectPolicy),
           channels: this.fallback.channels.map(cloneChannelPolicy),
+          capabilityBundles: this.fallback.capabilityBundles.map(
+            cloneCapabilityBundle,
+          ),
           audit: [],
         };
       }
@@ -759,25 +861,47 @@ export class FileThreadConfigStore implements ThreadConfigStore {
               channel.networkPolicy,
             )
           : projectNetworkPolicy;
+    const capabilityBundleIds = resolvedCapabilityBundleIds({
+      workspace: workspacePolicy,
+      project: policy,
+      channel,
+    });
+    const capabilityBundles = enabledCapabilityBundles(
+      state,
+      workspace.id,
+      capabilityBundleIds,
+    );
+    const bundleNetworkPolicy = capabilityBundles.reduce(
+      (current, bundle) => extendedNetworkPolicy(current, bundle.networkPolicy),
+      defaultNetworkPolicy(),
+    );
+    const effectiveNetworkPolicy = extendedNetworkPolicy(
+      networkPolicy,
+      bundleNetworkPolicy,
+    );
     return {
       id: `access:${thread.id}`,
       threadId: thread.id,
       workspaceId: workspace.id,
       projectId: project.id,
+      capabilityBundleIds: capabilityBundles.map((bundle) => bundle.id),
       skillIds: normalizedSkillIds([
         ...workspacePolicy.skillIds,
         ...(policy?.skillIds ?? []),
         ...(channel?.skillIds ?? []),
+        ...capabilityBundles.flatMap((bundle) => bundle.skillIds),
       ]),
       agentIds: normalizedAgentIds([
         ...workspacePolicy.agentIds,
         ...(policy?.agentIds ?? []),
         ...(channel?.agentIds ?? []),
+        ...capabilityBundles.flatMap((bundle) => bundle.agentIds),
       ]),
       knowledgeSourceIds: normalizedKnowledgeSourceIds([
         ...workspacePolicy.knowledgeSourceIds,
         ...(policy?.knowledgeSourceIds ?? []),
         ...(channel?.knowledgeSourceIds ?? []),
+        ...capabilityBundles.flatMap((bundle) => bundle.knowledgeSourceIds),
       ]),
       grants: dedupeGrants([
         ...memoryGrants({
@@ -786,11 +910,12 @@ export class FileThreadConfigStore implements ThreadConfigStore {
           projectId: project.id,
           memoryMode: policy?.memoryMode ?? 'workspace',
         }),
+        ...capabilityBundles.flatMap((bundle) => bundle.grants),
         ...capabilityGrants,
       ]),
       networkPolicy: {
-        ...networkPolicy,
-        allowedHosts: [...networkPolicy.allowedHosts],
+        ...effectiveNetworkPolicy,
+        allowedHosts: [...effectiveNetworkPolicy.allowedHosts],
       },
       budgetPolicy: resolvedBudgetPolicy({
         workspace: workspacePolicy,
@@ -873,11 +998,196 @@ export class FileThreadConfigStore implements ThreadConfigStore {
       .map(cloneChannelPolicy);
   }
 
+  async listCapabilityBundles(workspaceId?: string): Promise<CapabilityBundle[]> {
+    const state = await this.readState();
+    return state.capabilityBundles
+      .filter((bundle) => !workspaceId || bundle.workspaceId === workspaceId)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(cloneCapabilityBundle);
+  }
+
+  async upsertCapabilityBundle(
+    input: UpsertCapabilityBundleInput,
+  ): Promise<CapabilityBundle> {
+    return this.mutate((state) => {
+      const workspaceId = input.workspaceId.trim();
+      const id = capabilityBundleId(input.id);
+      const name = input.name.replace(/[\0\r\n]/gu, '').trim();
+      if (!workspaceId || !name || name.length > 120) {
+        throw new Error('capability_bundle_workspace_name_required');
+      }
+      if (!state.workspaces.some((item) => item.workspace.id === workspaceId)) {
+        throw new Error('capability_bundle_workspace_not_found');
+      }
+      const existing = state.capabilityBundles.find(
+        (bundle) => bundle.workspaceId === workspaceId && bundle.id === id,
+      );
+      if (
+        input.expectedRevision !== undefined &&
+        input.expectedRevision !== (existing?.revision ?? 0)
+      ) {
+        throw new CapabilityBundleRevisionConflictError(existing?.revision ?? 0);
+      }
+      const timestamp = now();
+      const actor = input.actor?.trim() || 'admin';
+      const networkBase = existing?.networkPolicy ?? defaultNetworkPolicy();
+      const bundle: CapabilityBundle = {
+        id,
+        workspaceId,
+        name,
+        description:
+          input.description === undefined
+            ? existing?.description
+            : input.description.replace(/[\0\r\n]/gu, ' ').trim().slice(0, 500) ||
+              undefined,
+        preset: capabilityBundlePreset(input.preset ?? existing?.preset),
+        enabled: input.enabled ?? existing?.enabled ?? true,
+        revision: (existing?.revision ?? 0) + 1,
+        skillIds: normalizedSkillIds(input.skillIds ?? existing?.skillIds),
+        agentIds: normalizedAgentIds(input.agentIds ?? existing?.agentIds),
+        knowledgeSourceIds: normalizedKnowledgeSourceIds(
+          input.knowledgeSourceIds ?? existing?.knowledgeSourceIds,
+        ),
+        grants: (input.grants ?? existing?.grants ?? []).map(cloneGrant),
+        networkPolicy: {
+          mode: input.networkPolicy?.mode ?? networkBase.mode,
+          allowedHosts: [
+            ...(input.networkPolicy?.allowedHosts ?? networkBase.allowedHosts),
+          ],
+        },
+        createdAt: existing?.createdAt ?? timestamp,
+        createdBy: existing?.createdBy ?? actor,
+        updatedAt: timestamp,
+        updatedBy: actor,
+      };
+      if (existing) {
+        state.capabilityBundles.splice(
+          state.capabilityBundles.indexOf(existing),
+          1,
+          bundle,
+        );
+      } else {
+        state.capabilityBundles.push(bundle);
+      }
+      state.audit.push({
+        id: randomUUID(),
+        action: existing
+          ? 'capability_bundle.updated'
+          : 'capability_bundle.created',
+        actor,
+        workspaceId,
+        at: timestamp,
+        snapshot: cloneCapabilityBundle(bundle),
+      });
+      if (state.audit.length > 500) state.audit.splice(0, state.audit.length - 500);
+      return cloneCapabilityBundle(bundle);
+    });
+  }
+
+  async setCapabilityBundleEnabled(input: {
+    workspaceId: string;
+    id: string;
+    enabled: boolean;
+    expectedRevision?: number;
+    actor?: string;
+  }): Promise<CapabilityBundle> {
+    return this.mutate((state) => {
+      const id = capabilityBundleId(input.id);
+      const existing = state.capabilityBundles.find(
+        (bundle) =>
+          bundle.workspaceId === input.workspaceId && bundle.id === id,
+      );
+      if (!existing) throw new Error('capability_bundle_not_found');
+      if (
+        input.expectedRevision !== undefined &&
+        input.expectedRevision !== existing.revision
+      ) {
+        throw new CapabilityBundleRevisionConflictError(existing.revision);
+      }
+      const timestamp = now();
+      const actor = input.actor?.trim() || 'admin';
+      const bundle: CapabilityBundle = {
+        ...cloneCapabilityBundle(existing),
+        enabled: input.enabled,
+        revision: existing.revision + 1,
+        updatedAt: timestamp,
+        updatedBy: actor,
+      };
+      state.capabilityBundles.splice(
+        state.capabilityBundles.indexOf(existing),
+        1,
+        bundle,
+      );
+      state.audit.push({
+        id: randomUUID(),
+        action: input.enabled
+          ? 'capability_bundle.enabled'
+          : 'capability_bundle.disabled',
+        actor,
+        workspaceId: input.workspaceId,
+        at: timestamp,
+        snapshot: cloneCapabilityBundle(bundle),
+      });
+      if (state.audit.length > 500) state.audit.splice(0, state.audit.length - 500);
+      return cloneCapabilityBundle(bundle);
+    });
+  }
+
+  async removeCapabilityBundle(input: {
+    workspaceId: string;
+    id: string;
+    expectedRevision?: number;
+    actor?: string;
+  }): Promise<CapabilityBundle | undefined> {
+    return this.mutate((state) => {
+      const id = capabilityBundleId(input.id);
+      const existing = state.capabilityBundles.find(
+        (bundle) =>
+          bundle.workspaceId === input.workspaceId && bundle.id === id,
+      );
+      if (!existing) return undefined;
+      if (
+        input.expectedRevision !== undefined &&
+        input.expectedRevision !== existing.revision
+      ) {
+        throw new CapabilityBundleRevisionConflictError(existing.revision);
+      }
+      const referenced = [
+        ...state.workspaces
+          .filter((policy) => policy.workspace.id === input.workspaceId)
+          .flatMap((policy) => policy.bundleIds),
+        ...state.projects
+          .filter((policy) => policy.workspaceId === input.workspaceId)
+          .flatMap((policy) => policy.bundleIds),
+        ...state.channels
+          .filter((policy) => policy.workspaceId === input.workspaceId)
+          .flatMap((policy) => policy.bundleIds),
+      ].includes(id);
+      if (referenced) throw new Error('capability_bundle_in_use');
+      state.capabilityBundles.splice(state.capabilityBundles.indexOf(existing), 1);
+      state.audit.push({
+        id: randomUUID(),
+        action: 'capability_bundle.removed',
+        actor: input.actor?.trim() || 'admin',
+        workspaceId: input.workspaceId,
+        at: now(),
+        snapshot: cloneCapabilityBundle(existing),
+      });
+      if (state.audit.length > 500) state.audit.splice(0, state.audit.length - 500);
+      return cloneCapabilityBundle(existing);
+    });
+  }
+
   async upsertWorkspacePolicy(
     input: UpsertWorkspaceAgentPolicyInput,
   ): Promise<WorkspaceAgentPolicy> {
     return this.mutate((state) => {
       const existing = this.workspacePolicyFor(state, input.workspaceId);
+      assertCapabilityBundleIds(
+        state,
+        input.workspaceId,
+        input.bundleIds ?? existing.bundleIds,
+      );
       const timestamp = now();
       const networkBase = existing.networkPolicy;
       const policy: WorkspaceAgentPolicy = {
@@ -908,6 +1218,7 @@ export class FileThreadConfigStore implements ThreadConfigStore {
         knowledgeSourceIds: normalizedKnowledgeSourceIds(
           input.knowledgeSourceIds ?? existing.knowledgeSourceIds,
         ),
+        bundleIds: normalizedBundleIds(input.bundleIds ?? existing.bundleIds),
         grants: (input.grants ?? existing.grants).map(cloneGrant),
         networkPolicy: {
           mode: input.networkPolicy?.mode ?? networkBase.mode,
@@ -972,6 +1283,11 @@ export class FileThreadConfigStore implements ThreadConfigStore {
       const workspacePolicy = this.workspacePolicyFor(state, input.workspaceId);
       const projectId = projectKey(input.workspaceId, input.projectId);
       const existing = this.projectPolicyFor(state, input.workspaceId, projectId);
+      assertCapabilityBundleIds(
+        state,
+        input.workspaceId,
+        input.bundleIds ?? existing?.bundleIds ?? [],
+      );
       const timestamp = now();
       const identityBase = existing?.identity ?? workspacePolicy.identity;
       const networkBase = existing?.networkPolicy ?? workspacePolicy.networkPolicy;
@@ -1011,6 +1327,7 @@ export class FileThreadConfigStore implements ThreadConfigStore {
         knowledgeSourceIds: normalizedKnowledgeSourceIds(
           input.knowledgeSourceIds ?? existing?.knowledgeSourceIds,
         ),
+        bundleIds: normalizedBundleIds(input.bundleIds ?? existing?.bundleIds),
         grants: (input.grants ?? existing?.grants ?? []).map(cloneGrant),
         networkPolicy: {
           mode: input.networkPolicy?.mode ?? networkBase.mode,
@@ -1089,6 +1406,11 @@ export class FileThreadConfigStore implements ThreadConfigStore {
           item.platform === platform &&
           item.channelId === channelId,
       );
+      assertCapabilityBundleIds(
+        state,
+        workspaceId,
+        input.bundleIds ?? existing?.bundleIds ?? [],
+      );
       const timestamp = now();
       const instructionMode =
         input.instructionMode ?? existing?.instructionMode ?? 'inherit';
@@ -1117,6 +1439,10 @@ export class FileThreadConfigStore implements ThreadConfigStore {
         knowledgeSourceIds: normalizedKnowledgeSourceIds(
           input.knowledgeSourceIds ?? existing?.knowledgeSourceIds,
         ),
+        bundleIds:
+          capabilityMode === 'inherit'
+            ? []
+            : normalizedBundleIds(input.bundleIds ?? existing?.bundleIds),
         grants:
           capabilityMode === 'inherit'
             ? []
@@ -1223,6 +1549,8 @@ export class FileThreadConfigStore implements ThreadConfigStore {
         snapshot:
           'workspace' in item.snapshot
             ? cloneWorkspacePolicy(item.snapshot)
+            : 'preset' in item.snapshot
+              ? cloneCapabilityBundle(item.snapshot)
             : 'channelId' in item.snapshot
               ? cloneChannelPolicy(item.snapshot)
               : cloneProjectPolicy(item.snapshot),

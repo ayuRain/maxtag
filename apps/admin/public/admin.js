@@ -2632,6 +2632,312 @@ function toolIdentityProviderForTool(toolId) {
   return null;
 }
 
+function capabilityBundles() {
+  return state.workspace?.capabilityBundles || [];
+}
+
+function capabilityBundleById(id) {
+  return capabilityBundles().find((bundle) => bundle.id === id);
+}
+
+function renderCapabilityBundlePicker(selector, selectedIds = [], options = {}) {
+  const root = $(selector);
+  if (!root) return;
+  const selected = new Set(selectedIds || []);
+  root.replaceChildren();
+  const bundles = capabilityBundles();
+  if (!bundles.length) {
+    root.append(
+      element(
+        'div',
+        'empty-state compact-empty',
+        '尚未创建能力包；请先到「连接器 → 高级连接器设置」创建。',
+      ),
+    );
+    return;
+  }
+  for (const bundle of bundles) {
+    const label = element('label', 'skill-option');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = bundle.id;
+    checkbox.dataset.capabilityBundle = 'true';
+    checkbox.checked = selected.has(bundle.id);
+    checkbox.disabled = Boolean(options.disabled) || !bundle.enabled;
+    const copy = element('span', 'skill-option-copy');
+    copy.append(
+      element('strong', '', bundle.name),
+      element(
+        'small',
+        '',
+        `${bundle.grants?.length || 0} 组工具 · ${
+          bundle.enabled ? '已启用' : '已停用'
+        }`,
+      ),
+    );
+    label.append(checkbox, copy);
+    checkbox.addEventListener('change', options.markDirty || (() => {}));
+    root.append(label);
+  }
+}
+
+function selectedCapabilityBundleIds(selector) {
+  return $$(`${selector} input[data-capability-bundle]:checked`).map(
+    (input) => input.value,
+  );
+}
+
+function resetCapabilityBundleForm() {
+  $('#capability-bundle-form')?.reset();
+  $('#capability-bundle-revision').value = '';
+  $('#capability-bundle-id').disabled = false;
+  $('#capability-bundle-network-mode').value = 'deny-by-default';
+  $('#capability-bundle-allowed-hosts').value = '';
+  renderToolGrid({}, {
+    selector: '#capability-bundle-tool-grid',
+    markDirty: () => {},
+  });
+}
+
+function editCapabilityBundle(bundle) {
+  $('#capability-bundle-id').value = bundle.id;
+  $('#capability-bundle-id').disabled = true;
+  $('#capability-bundle-name').value = bundle.name;
+  $('#capability-bundle-description').value = bundle.description || '';
+  $('#capability-bundle-preset').value = bundle.preset || 'custom';
+  $('#capability-bundle-revision').value = String(bundle.revision || '');
+  $('#capability-bundle-network-mode').value =
+    bundle.networkPolicy?.mode || 'deny-by-default';
+  $('#capability-bundle-allowed-hosts').value =
+    (bundle.networkPolicy?.allowedHosts || []).join(', ');
+  renderToolGrid(bundle, {
+    selector: '#capability-bundle-tool-grid',
+    markDirty: () => {},
+  });
+  $('#capability-bundle-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function saveCapabilityBundle(event) {
+  event.preventDefault();
+  const button = $('#save-capability-bundle');
+  setButtonBusy(button, true, '保存中', '保存能力包');
+  try {
+    const data = await getJson('/v1/capability-bundles', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: currentWorkspaceId(),
+        id: $('#capability-bundle-id').value.trim(),
+        name: $('#capability-bundle-name').value.trim(),
+        description: $('#capability-bundle-description').value,
+        preset: $('#capability-bundle-preset').value,
+        expectedRevision: $('#capability-bundle-revision').value
+          ? Number($('#capability-bundle-revision').value)
+          : undefined,
+        tools: selectedTools('#capability-bundle-tool-grid'),
+        toolConstraints: toolConstraints('#capability-bundle-tool-grid'),
+        networkMode: $('#capability-bundle-network-mode').value,
+        allowedHosts: $('#capability-bundle-allowed-hosts')
+          .value.split(',')
+          .map((host) => host.trim())
+          .filter(Boolean),
+      }),
+    });
+    state.workspace = data.workspace;
+    renderCapabilityBundles();
+    fillProjectForm(selectedProject());
+    showToast('能力包已保存');
+    editCapabilityBundle(data.bundle);
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '保存中', '保存能力包');
+  }
+}
+
+async function toggleCapabilityBundle(bundle, button) {
+  const action = bundle.enabled ? 'disable' : 'enable';
+  setButtonBusy(button, true, '保存中', bundle.enabled ? '停用' : '启用');
+  try {
+    const data = await getJson(
+      `/v1/capability-bundles/${encodeURIComponent(bundle.id)}/${action}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: currentWorkspaceId(),
+          expectedRevision: bundle.revision,
+        }),
+      },
+    );
+    state.workspace = data.workspace;
+    renderCapabilityBundles();
+    fillProjectForm(selectedProject());
+    showToast(action === 'disable' ? '能力包已停用' : '能力包已启用');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '保存中', bundle.enabled ? '停用' : '启用');
+  }
+}
+
+async function deleteCapabilityBundle(bundle, button) {
+  if (!window.confirm(`删除能力包「${bundle.name}」？已绑定的能力包不能删除。`)) return;
+  setButtonBusy(button, true, '删除中', '删除');
+  try {
+    const query = new URLSearchParams({
+      workspaceId: currentWorkspaceId(),
+      expectedRevision: String(bundle.revision),
+    });
+    const data = await getJson(
+      `/v1/capability-bundles/${encodeURIComponent(bundle.id)}?${query}`,
+      { method: 'DELETE' },
+    );
+    state.workspace = data.workspace;
+    resetCapabilityBundleForm();
+    renderCapabilityBundles();
+    fillProjectForm(selectedProject());
+    showToast('能力包已删除');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '删除中', '删除');
+  }
+}
+
+function renderCapabilityBundles() {
+  const root = $('#capability-bundle-list');
+  if (!root) return;
+  if (!$('#capability-bundle-tool-grid')?.childElementCount) {
+    resetCapabilityBundleForm();
+  }
+  root.replaceChildren();
+  const bundles = capabilityBundles();
+  if (!bundles.length) {
+    root.append(element('div', 'empty-state compact-empty', '还没有能力包'));
+    return;
+  }
+  for (const bundle of bundles) {
+    const row = element('div', 'mcp-connector-row');
+    const copy = element('div', 'mcp-connector-identity');
+    copy.append(
+      element('strong', '', bundle.name),
+      element('small', '', `${bundle.id} · r${bundle.revision}`),
+    );
+    const actions = element('div', 'mcp-connector-actions');
+    const edit = element('button', 'text-button', '编辑');
+    edit.type = 'button';
+    edit.addEventListener('click', () => editCapabilityBundle(bundle));
+    const toggle = element(
+      'button',
+      bundle.enabled ? 'danger-text-button' : 'text-button',
+      bundle.enabled ? '停用' : '启用',
+    );
+    toggle.type = 'button';
+    toggle.addEventListener('click', () => void toggleCapabilityBundle(bundle, toggle));
+    const remove = element('button', 'danger-text-button', '删除');
+    remove.type = 'button';
+    remove.addEventListener('click', () => void deleteCapabilityBundle(bundle, remove));
+    actions.append(edit, toggle, remove);
+    row.append(
+      copy,
+      clientCell('类型', statusLabel(bundle.preset || 'custom')),
+      clientCell('能力', `${bundle.grants?.length || 0} 组工具`),
+      clientCell(
+        '使用范围',
+        `${bundle.assignedProjectCount || 0} Project · ${
+          bundle.assignedChannelCount || 0
+        } 群`,
+      ),
+      statePill(bundle.enabled ? 'enabled' : 'disabled'),
+      actions,
+    );
+    root.append(row);
+  }
+}
+
+function presetTools(preset) {
+  const tools = state.workspace?.availableTools || [];
+  if (preset === 'github-write') return tools.some((tool) => tool.id === 'github')
+    ? ['github']
+    : [];
+  const pattern = preset === 'data-readonly'
+    ? /clickhouse|athena|snowflake|bigquery|redshift|warehouse|data/iu
+    : /aws|eks|kubernetes|cloudwatch|grafana|sentry|pagerduty|monitor/iu;
+  return tools
+    .filter((tool) => pattern.test(`${tool.id} ${tool.label} ${tool.description || ''}`))
+    .map((tool) => tool.id);
+}
+
+async function createCapabilityBundlePreset(preset, button) {
+  const definitions = {
+    'data-readonly': {
+      name: '数据只读',
+      description: '读取 ClickHouse、数仓或分析数据；不允许写库。',
+      hosts: [],
+    },
+    'platform-monitoring': {
+      name: '平台排障',
+      description: '只读查看 EKS、Kubernetes、CloudWatch 与监控系统。',
+      hosts: [],
+    },
+    'github-write': {
+      name: '研发协作',
+      description: '读取指定仓库，并在确认后执行 GitHub 写操作。',
+      hosts: ['api.github.com'],
+    },
+  };
+  const definition = definitions[preset];
+  if (!definition) return;
+  const existing = capabilityBundleById(preset);
+  if (existing) {
+    editCapabilityBundle(existing);
+    showToast('该模板已存在，可继续编辑资源范围');
+    return;
+  }
+  const idleLabel = button.textContent;
+  setButtonBusy(button, true, '创建中', idleLabel);
+  try {
+    const tools = presetTools(preset);
+    const constraints = Object.fromEntries(
+      tools.map((tool) => [
+        tool,
+        tool === 'github'
+          ? { permissions: ['read', 'write'], repositories: [] }
+          : { permissions: ['read'] },
+      ]),
+    );
+    const data = await getJson('/v1/capability-bundles', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: currentWorkspaceId(),
+        id: preset,
+        name: definition.name,
+        description: definition.description,
+        preset,
+        tools,
+        toolConstraints: constraints,
+        networkMode: definition.hosts.length ? 'restricted' : 'deny-by-default',
+        allowedHosts: definition.hosts,
+      }),
+    });
+    state.workspace = data.workspace;
+    renderCapabilityBundles();
+    fillProjectForm(selectedProject());
+    editCapabilityBundle(data.bundle);
+    showToast(
+      tools.length
+        ? '能力包模板已创建，请确认资源范围后再绑定 Project'
+        : '模板已创建；连接对应 MCP 后再把工具加入能力包',
+    );
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    setButtonBusy(button, false, '创建中', idleLabel);
+  }
+}
+
 function selectableToolIdentities(provider) {
   return (state.toolIdentities?.identities || []).filter(
     (identity) =>
@@ -3964,6 +4270,11 @@ function fillWorkspaceForm() {
 
 function fillWorkspaceCapabilities() {
   const policy = state.workspace?.workspace || {};
+  renderCapabilityBundlePicker(
+    '#workspace-bundle-picker',
+    policy.bundleIds || [],
+    { markDirty: markWorkspaceDirty },
+  );
   renderToolGrid(policy, {
     selector: '#workspace-tool-grid',
     markDirty: markWorkspaceDirty,
@@ -3991,13 +4302,14 @@ function fillWorkspaceCapabilities() {
   fillWorkspaceMemoryApproval();
   fillWorkspaceMemoryRetention();
   const count = policy.grants?.length || 0;
+  const bundleCount = policy.bundleIds?.length || 0;
   const approvalMode = policy.memoryApprovalPolicy?.mode || 'disabled';
   const toolApprovalMode =
     policy.toolApprovalPolicy?.mode === 'disabled'
       ? 'direct writes'
       : 'write approval';
   $('#workspace-capability-summary').textContent =
-    `${count} default tool ${count === 1 ? 'group' : 'groups'} / ${
+    `${bundleCount} 个能力包 / ${count} 组直接工具 / ${
       approvalMode === 'require_approval' ? 'memory approval' : 'direct memory'
     } / ${toolApprovalMode}`;
 }
@@ -4033,6 +4345,7 @@ async function saveWorkspace(event, button = $('#save-workspace')) {
         skillIds: selectedSkillIds('#workspace-skill-picker'),
         knowledgeSourceIds: selectedKnowledgeSourceIds('#workspace-source-picker'),
         agentIds: selectedDelegatedAgentIds('#workspace-agent-picker'),
+        bundleIds: selectedCapabilityBundleIds('#workspace-bundle-picker'),
         tools: selectedTools('#workspace-tool-grid'),
         toolConstraints: toolConstraints('#workspace-tool-grid'),
         toolApprovalPolicy: {
@@ -4146,6 +4459,13 @@ function updateChannelBudgetFields() {
 function renderChannelCapabilities(policy) {
   const mode = $('#channel-capability-mode').value;
   const inherited = mode === 'inherit';
+  renderCapabilityBundlePicker(
+    '#channel-bundle-picker',
+    inherited
+      ? channelCapabilityBase().bundleIds || []
+      : policy?.bundleIds || [],
+    { disabled: inherited },
+  );
   $('#channel-network-fields').hidden = inherited;
   renderToolGrid(inherited ? channelCapabilityBase() : policy || {}, {
     selector: '#channel-tool-grid',
@@ -4212,6 +4532,10 @@ async function saveChannelPolicy(event) {
         skillIds: selectedSkillIds('#channel-skill-picker'),
         knowledgeSourceIds: selectedKnowledgeSourceIds('#channel-source-picker'),
         agentIds: selectedDelegatedAgentIds('#channel-agent-picker'),
+        bundleIds:
+          capabilityMode === 'inherit'
+            ? undefined
+            : selectedCapabilityBundleIds('#channel-bundle-picker'),
         toolApprovalPolicy: {
           mode: $('#channel-tool-approval-mode').value,
           risks: ['write'],
@@ -4368,6 +4692,16 @@ function updateProjectCapabilityFields(policyOverride) {
   $('#network-mode').value = policy.networkPolicy?.mode || 'deny-by-default';
   $('#allowed-hosts').value = (policy.networkPolicy?.allowedHosts || []).join(', ');
   $('#project-network-fields').hidden = inherited;
+  renderCapabilityBundlePicker(
+    '#project-bundle-picker',
+    inherited
+      ? state.workspace?.workspace?.bundleIds || []
+      : policy.bundleIds || [],
+    { disabled: inherited, markDirty: markProjectDirty },
+  );
+  $('#project-bundle-summary').textContent = inherited
+    ? `${state.workspace?.workspace?.bundleIds?.length || 0} 个 Workspace 能力包`
+    : `${policy.bundleIds?.length || 0} 个 Project 能力包`;
   const networkSummary = $('#project-network-inherited');
   networkSummary.hidden = !inherited;
   if (inherited) {
@@ -4644,6 +4978,9 @@ async function saveProject(event) {
         skillIds: selectedSkillIds('#project-skill-picker'),
         knowledgeSourceIds: selectedKnowledgeSourceIds('#project-source-picker'),
         agentIds: selectedDelegatedAgentIds('#project-agent-picker'),
+        bundleIds: customCapabilities
+          ? selectedCapabilityBundleIds('#project-bundle-picker')
+          : undefined,
         memoryApprovalPolicy: projectMemoryApprovalPolicyInput(),
         memoryRetentionPolicy: projectMemoryRetentionPolicyInput(),
         toolApprovalPolicy: {
@@ -8493,6 +8830,7 @@ function renderAll() {
   renderLarkHistoryImports();
   renderExecutorSetup();
   renderToolIdentities();
+  renderCapabilityBundles();
   renderOverviewRuns();
   renderProjectList();
   fillWorkspaceForm();
@@ -8648,6 +8986,15 @@ $('#lark-history-range').addEventListener('change', updateLarkHistoryRangeFields
 $('#lark-history-form').addEventListener('submit', (event) =>
   void startLarkHistoryImport(event),
 );
+$('#capability-bundle-form')?.addEventListener('submit', (event) =>
+  void saveCapabilityBundle(event),
+);
+$('#reset-capability-bundle')?.addEventListener('click', resetCapabilityBundleForm);
+for (const button of $$('.capability-preset')) {
+  button.addEventListener('click', () =>
+    void createCapabilityBundlePreset(button.dataset.preset, button),
+  );
+}
 $('#preview-lark-history').addEventListener('click', (event) =>
   void previewLarkHistory(event.currentTarget),
 );

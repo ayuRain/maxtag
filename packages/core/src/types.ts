@@ -696,6 +696,8 @@ export interface AccessBundle {
   threadId: string;
   workspaceId?: string;
   projectId?: string;
+  /** Named administrator-managed capability bundles expanded into this run. */
+  capabilityBundleIds?: string[];
   skillIds?: string[];
   agentIds?: string[];
   knowledgeSourceIds?: string[];

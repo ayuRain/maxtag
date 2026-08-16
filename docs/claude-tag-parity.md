@@ -20,6 +20,7 @@ threshold alerts; and organization-wide task/network-call audit.
 | --- | --- | --- |
 | One workspace agent | Workspace identity, instructions, executor, tool grants, and network policy resolve before every project run; channel overlays can append/replace instructions and inherit/extend/replace tools and network access | Implemented |
 | Per-project specialization | Identity and capability inheritance can be changed independently per project | Implemented |
+| Organization-owned connections and capability bundles | Installation-managed credential identities and deployment-approved MCP connectors stay separate from reusable workspace capability bundles. Administrators can create data-read-only, platform-observability, GitHub collaboration, or custom bundles, bind exact resource constraints and network destinations, then inherit or replace them at Workspace, Project, and channel scope. Every run expands enabled bundles into an immutable access snapshot; the Tool Broker still enforces provider identity, route, read/write constraints, approval policy, and audit. Disabling a bundle fences the next run, and credentials are never copied into a Project or chat. | Implemented locally; real ClickHouse/EKS connector proof pending |
 | Channel Skills and instructions | Workspace Skills provide a mandatory baseline while projects and channels add reusable procedures. Only enabled summaries enter the prompt; `skills_list` and `skills_load` fetch current bodies on demand through a read-only route-bound broker. Shared enablement is rechecked across Server/Worker, and Skill text cannot widen access. Channel instruction append/replace remains independent. | Implemented locally; real Lark Skill invocation proof pending |
 | Delegated specialists | Workspace, project, and channel policies add installation-managed Agent definitions to the route. The parent discovers enabled summaries and can synchronously invoke a focused child or create/cancel a durable asynchronous task after exact approval. Shared Server/Worker claims, retries, route/revision/access revalidation, cross-process cancellation, credential filtering, usage, and deterministic main-Agent continuation back into the original thread are implemented. A child has its own prompt and executor/model but no transcript, provider session, recursion, direct publishing, artifacts, write grants, or memory writes. Skills, Sources, read-only tool kinds, memory scopes, and network hosts remain intersections of the parent route. Invocation lifecycle and child tools remain linked in Activity and Web Assistant; the Agents console exposes recent async task results and Stop. | Implemented locally; real Lark invocation and async completion proof pending |
 | Shared vs isolated memory | Workspace, project, channel, and thread documents have independent keys and grants; private channels keep read-only workspace context, isolated projects omit workspace context, and DMs remain thread-only. Workspace keep/custom retention defaults and project inherit/keep/custom overrides apply at commit or approval without rewriting existing facts. Fast search is route-bound. On every normal turn, a low-cost runner selects references only from that authorized snapshot; the host validates current document/version/line identities and supplies original text to the project agent, with a bounded local timeout fallback. The same runner provides one-shot semantic query and complete-thread synthesis into confidence-filtered, version-bound proposals that always require approval. Successful runs also enter a durable debounced wrapup queue with per-thread cursors, retry/recovery, oldest-first long-thread continuation, and bounded job retention. | Implemented locally |
@@ -89,6 +90,33 @@ and thread writes at commit or approval time; explicit per-fact keep/expiry wins
 and existing facts remain unchanged. Embedding/ANN scale for much larger corpora
 remains future depth work. Retrieval, query, manual analysis, and automatic
 wrapup calls are metered separately from the project agent.
+
+## Connection and Capability Contract
+
+MaxTag separates **who authenticates** from **what a route may do**:
+
+1. An installation owner registers a credential identity or a deployment-approved
+   MCP connector. Secrets remain environment references or encrypted managed
+   credentials; they are not stored in a Project, channel, prompt, or capability
+   bundle.
+2. A workspace administrator creates a named capability bundle. The bundle may
+   contain exact tool grants, read/write permissions, resource constraints such
+   as GitHub repositories or datasets, and a network allowlist.
+3. Workspace defaults, Projects, and individual channels select bundle IDs using
+   the same inherit/extend/custom policy already used by route capabilities.
+4. At run start MaxTag expands only enabled, same-workspace bundles into the
+   immutable `AccessBundle`. The existing Tool Broker and approval flow enforce
+   that snapshot for every call and record the credential identity revision and
+   normalized destination in Organization Audit.
+
+The built-in console presets are deliberately safe templates. **Data read-only**
+and **Platform troubleshooting** select matching deployment-approved MCP tools
+with read permission only. **Engineering collaboration** permits GitHub writes
+only after an administrator supplies an explicit repository allowlist; the
+template begins with an empty repository list, so it grants no repository by
+default. Adding a ClickHouse or EKS capability therefore means connecting one
+service identity once, not distributing a human AWS profile, kubeconfig, database
+password, or GitHub token to every user or Project.
 
 ## Spend Contract
 

@@ -393,6 +393,15 @@
 
               <div class="form-section">
                 <div class="form-section-title">
+                  <h3>能力包</h3>
+                  <span id="project-bundle-summary">继承工作空间</span>
+                </div>
+                <p class="muted">管理员把连接、工具和网络规则封装成能力包；绑定到 Project 后，群成员无需再配置凭证。</p>
+                <div class="skill-picker" id="project-bundle-picker"></div>
+              </div>
+
+              <div class="form-section">
+                <div class="form-section-title">
                   <h3>Tools</h3>
                   <span id="project-capability-label">Workspace defaults</span>
                 </div>
@@ -1098,6 +1107,61 @@
             </summary>
             <div class="connector-advanced-body">
           <div class="connector-summary" id="connector-summary"></div>
+
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">项目继承</span>
+              <h2>能力包</h2>
+              <p>把连接凭证、只读/写入工具和网络边界封装一次，再挂到多个 Project。</p>
+            </div>
+          </div>
+          <div class="capability-preset-actions">
+            <button class="secondary-button capability-preset" type="button" data-preset="data-readonly">创建「数据只读」模板</button>
+            <button class="secondary-button capability-preset" type="button" data-preset="platform-monitoring">创建「平台排障」模板</button>
+            <button class="secondary-button capability-preset" type="button" data-preset="github-write">创建「研发协作」模板</button>
+          </div>
+          <form class="tool-identity-editor" id="capability-bundle-form">
+            <input id="capability-bundle-revision" type="hidden" />
+            <label class="field">
+              <span>能力包 ID</span>
+              <input id="capability-bundle-id" autocomplete="off" spellcheck="false" placeholder="data-readonly" required />
+            </label>
+            <label class="field">
+              <span>显示名称</span>
+              <input id="capability-bundle-name" autocomplete="off" placeholder="数据只读" required />
+            </label>
+            <label class="field">
+              <span>类型</span>
+              <select id="capability-bundle-preset">
+                <option value="custom">自定义</option>
+                <option value="data-readonly">数据只读</option>
+                <option value="platform-monitoring">平台排障</option>
+                <option value="github-write">研发协作</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>说明</span>
+              <input id="capability-bundle-description" autocomplete="off" placeholder="哪些场景可以使用这组能力" />
+            </label>
+            <button class="primary-button" id="save-capability-bundle" type="submit">保存能力包</button>
+            <button class="secondary-button" id="reset-capability-bundle" type="button">新建</button>
+          </form>
+          <div class="tool-grid" id="capability-bundle-tool-grid"></div>
+          <div class="two-column-form capability-network-fields">
+            <label class="field">
+              <span>网络策略</span>
+              <select id="capability-bundle-network-mode">
+                <option value="deny-by-default">默认拒绝</option>
+                <option value="restricted">仅允许指定域名</option>
+                <option value="allow-all">允许全部</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>允许域名</span>
+              <input id="capability-bundle-allowed-hosts" placeholder="api.github.com, clickhouse.example.com" spellcheck="false" />
+            </label>
+          </div>
+          <div class="mcp-connector-list" id="capability-bundle-list"></div>
 
           <div class="section-heading">
             <div>
@@ -1908,6 +1972,13 @@
           </div>
           <button class="square-button" id="close-workspace-capabilities" type="button" aria-label="Close">x</button>
         </div>
+        <div class="capability-network-fields">
+          <div class="form-section-title">
+            <h3>Workspace 能力包</h3>
+            <span>默认提供给继承此配置的 Project</span>
+          </div>
+          <div class="skill-picker" id="workspace-bundle-picker"></div>
+        </div>
         <div class="tool-grid" id="workspace-tool-grid"></div>
         <div class="capability-network-fields">
           <div class="form-section-title">
@@ -2044,6 +2115,13 @@
             <span>Channel instructions</span>
             <textarea id="channel-instructions" rows="4" spellcheck="true"></textarea>
           </label>
+        </div>
+        <div class="capability-network-fields">
+          <div class="form-section-title">
+            <h3>Channel 能力包</h3>
+            <span>继承、追加或替换当前 Project 的能力</span>
+          </div>
+          <div class="skill-picker" id="channel-bundle-picker"></div>
         </div>
         <div class="tool-grid" id="channel-tool-grid"></div>
         <div class="capability-network-fields">

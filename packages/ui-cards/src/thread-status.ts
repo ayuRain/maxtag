@@ -21,6 +21,7 @@ export interface ThreadStatusCardModel {
   skills: string[];
   agents: string[];
   sources: string[];
+  capabilityBundles?: string[];
   tools: string[];
   network: string;
   activeRoutines: string[];
@@ -146,6 +147,7 @@ export function buildLarkThreadStatusCard(
     `**Skills（${model.skills.length}）**：${list(model.skills)}`,
     `**子智能体（${model.agents.length}）**：${list(model.agents)}`,
     `**知识源（${model.sources.length}）**：${list(model.sources)}`,
+    `**能力包（${model.capabilityBundles?.length ?? 0}）**：${list(model.capabilityBundles ?? [])}`,
     `**工具（${model.tools.length}）**：${list(model.tools)}`,
     `**网络**：${escaped(model.network)}`,
   ].join('\n\n');

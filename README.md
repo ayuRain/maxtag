@@ -1053,6 +1053,24 @@ OPENTAG_TOOL_CALL_TIMEOUT_MS=30000
 OPENTAG_TOOL_APPROVAL_TTL_MS=900000
 ```
 
+### Capability bundles
+
+The admin console separates one-time **Connections** from reusable **Capability
+bundles**. An installation owner connects an organization-owned GitHub, data,
+AWS/EKS, or other deployment-approved MCP identity once. A workspace admin then
+packages exact tools, read/write permissions, resource constraints, and network
+hosts into a named bundle and assigns that bundle to Workspace defaults,
+Projects, or individual channels.
+
+Bundle selection follows the existing inherit/extend/custom route policy. At
+run start only enabled bundles from the same workspace are expanded into the
+immutable `AccessBundle`; the Tool Broker still applies exact resource checks,
+write approval, provider-identity revision fencing, and audit. Secrets and host
+commands never enter a bundle or Project. The provided data-read-only and
+platform-troubleshooting presets are read-only. The GitHub collaboration preset
+starts with an empty repository allowlist, so it is deny-by-default until an
+administrator chooses repositories explicitly.
+
 ### External MCP registry
 
 MaxTag can proxy deployment-approved stdio MCP servers through the same

@@ -807,6 +807,13 @@ h3 {
   gap: 12px;
 }
 
+.capability-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin: 0 0 1rem;
+}
+
 .tool-identity-editor {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);

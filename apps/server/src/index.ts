@@ -71,12 +71,15 @@ import {
   ManagedConnectorRevisionConflictError,
   OperatorCredentialRevisionConflictError,
   ToolCredentialIdentityRevisionConflictError,
+  CapabilityBundleRevisionConflictError,
+  type CapabilityBundlePreset,
   type ActorAuthorizationDecision,
   type ActorCapability,
   type PairingActivationMode,
   type ProjectAccessMode,
   type ProjectRole,
   type UpsertChannelAgentPolicyInput,
+  type UpsertCapabilityBundleInput,
   type UpsertProjectAgentPolicyInput,
   type UpsertWorkspaceAgentPolicyInput,
   type WorkspaceMemberIdentity,
@@ -2969,6 +2972,7 @@ async function workspaceSnapshot(
     routines,
     access,
     managedConnectors,
+    capabilityBundles,
   ] =
     await Promise.all([
       threadConfigStore.listWorkspacePolicies(),
@@ -2982,6 +2986,7 @@ async function workspaceSnapshot(
       managedConnectorStore.list(
         externalMcpRegistry?.servers.map((server) => server.id) ?? [],
       ),
+      threadConfigStore.listCapabilityBundles(workspaceId),
     ]);
   const managedConnectorById = new Map(
     managedConnectors.map((connector) => [connector.id, connector]),
@@ -2990,11 +2995,33 @@ async function workspaceSnapshot(
     workspacePolicies.find((item) => item.workspace.id === workspaceId);
   return {
     workspace: workspacePolicy,
+    capabilityBundles: capabilityBundles.map((bundle) => ({
+      ...bundle,
+      assignedProjectCount: projects.filter(
+        (project) =>
+          project.capabilityMode === 'custom' &&
+          project.bundleIds.includes(bundle.id),
+      ).length,
+      assignedChannelCount: channelPolicies.filter(
+        (channel) =>
+          channel.capabilityMode !== 'inherit' &&
+          channel.bundleIds.includes(bundle.id),
+      ).length,
+    })),
     projects: projects.map((project) => {
+      const effectiveBundleIds =
+        project.capabilityMode === 'inherit'
+          ? workspacePolicy?.bundleIds ?? []
+          : project.bundleIds;
+      const bundleGrants = capabilityBundles
+        .filter(
+          (bundle) => bundle.enabled && effectiveBundleIds.includes(bundle.id),
+        )
+        .flatMap((bundle) => bundle.grants);
       const effectiveGrants =
         project.capabilityMode === 'inherit'
-          ? workspacePolicy?.grants ?? []
-          : project.grants;
+          ? [...(workspacePolicy?.grants ?? []), ...bundleGrants]
+          : [...project.grants, ...bundleGrants];
       const matchesProject = (value?: string): boolean =>
         value === project.projectId || value === project.id;
       const projectBindings = bindings.filter(
@@ -4376,6 +4403,26 @@ function delegatedAgentIdArrayValue(
     : agentIds;
 }
 
+function capabilityBundleIdArrayValue(
+  body: Record<string, unknown>,
+): string[] | undefined | { error: string } {
+  if (body.bundleIds === undefined) return undefined;
+  if (!Array.isArray(body.bundleIds)) {
+    return { error: 'capability_bundle_ids_invalid' };
+  }
+  const values = stringArrayValue(body, 'bundleIds') ?? [];
+  if (values.length !== body.bundleIds.length) {
+    return { error: 'capability_bundle_ids_invalid' };
+  }
+  const bundleIds = [...new Set(values.map((value) => value.toLowerCase()))];
+  const invalid = bundleIds.find(
+    (value) => !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u.test(value),
+  );
+  return invalid
+    ? { error: `capability_bundle_invalid_id:${invalid}` }
+    : bundleIds;
+}
+
 function knowledgeSourceIdArrayValue(
   body: Record<string, unknown>,
 ): string[] | undefined | { error: string } {
@@ -4813,6 +4860,8 @@ function coerceChannelPolicyInput(
   if (agentIds && 'error' in agentIds) return agentIds;
   const knowledgeSourceIds = knowledgeSourceIdArrayValue(body);
   if (knowledgeSourceIds && 'error' in knowledgeSourceIds) return knowledgeSourceIds;
+  const bundleIds = capabilityBundleIdArrayValue(body);
+  if (bundleIds && 'error' in bundleIds) return bundleIds;
   const budgetPolicy = coerceBudgetPolicy(body, 'inherit', 'channel');
   if (budgetPolicy && 'error' in budgetPolicy) return budgetPolicy;
   const memoryApprovalPolicy = coerceMemoryApprovalPolicy(body, 'inherit');
@@ -4848,6 +4897,7 @@ function coerceChannelPolicyInput(
     skillIds,
     agentIds,
     knowledgeSourceIds,
+    bundleIds,
     grants:
       resolvedCapabilityMode === 'inherit' ? undefined : capabilityPolicy.grants,
     networkPolicy:
@@ -5008,6 +5058,8 @@ function coerceProjectPolicyInput(
   if (agentIds && 'error' in agentIds) return agentIds;
   const knowledgeSourceIds = knowledgeSourceIdArrayValue(body);
   if (knowledgeSourceIds && 'error' in knowledgeSourceIds) return knowledgeSourceIds;
+  const bundleIds = capabilityBundleIdArrayValue(body);
+  if (bundleIds && 'error' in bundleIds) return bundleIds;
   const budgetPolicy = coerceBudgetPolicy(body, 'inherit', 'project');
   if (budgetPolicy && 'error' in budgetPolicy) return budgetPolicy;
   const defaultChannelBudgetPolicy = coerceNamedBudgetPolicy(
@@ -5088,6 +5140,7 @@ function coerceProjectPolicyInput(
     skillIds,
     agentIds,
     knowledgeSourceIds,
+    bundleIds,
     memoryMode:
       memoryMode as UpsertProjectAgentPolicyInput['memoryMode'],
     networkPolicy:
@@ -5133,6 +5186,8 @@ function coerceWorkspacePolicyInput(
   if (agentIds && 'error' in agentIds) return agentIds;
   const knowledgeSourceIds = knowledgeSourceIdArrayValue(body);
   if (knowledgeSourceIds && 'error' in knowledgeSourceIds) return knowledgeSourceIds;
+  const bundleIds = capabilityBundleIdArrayValue(body);
+  if (bundleIds && 'error' in bundleIds) return bundleIds;
   const budgetPolicy = coerceBudgetPolicy(body, 'disabled', 'workspace');
   if (budgetPolicy && 'error' in budgetPolicy) return budgetPolicy;
   const defaultChannelBudgetPolicy = coerceNamedBudgetPolicy(
@@ -5169,6 +5224,7 @@ function coerceWorkspacePolicyInput(
     skillIds,
     agentIds,
     knowledgeSourceIds,
+    bundleIds,
     grants: capabilityPolicy.grants,
     networkPolicy: capabilityPolicy.networkPolicy,
     budgetPolicy,
@@ -5176,6 +5232,53 @@ function coerceWorkspacePolicyInput(
     memoryApprovalPolicy,
     toolApprovalPolicy,
     memoryRetentionPolicy,
+  };
+}
+
+function coerceCapabilityBundleInput(
+  body: Record<string, unknown>,
+): UpsertCapabilityBundleInput | { error: string } {
+  const workspaceId = stringValue(body, 'workspaceId', 'dev-workspace');
+  const id = (stringValue(body, 'id') || '').toLowerCase();
+  const name = stringValue(body, 'name');
+  if (!workspaceId || !id || !name) {
+    return { error: 'capability_bundle_workspace_id_name_required' };
+  }
+  const rawPreset = stringValue(body, 'preset', 'custom');
+  if (
+    rawPreset !== 'custom' &&
+    rawPreset !== 'data-readonly' &&
+    rawPreset !== 'platform-monitoring' &&
+    rawPreset !== 'github-write'
+  ) {
+    return { error: 'unsupported_capability_bundle_preset' };
+  }
+  const capabilityPolicy = coerceCapabilityPolicy(
+    body,
+    'workspace',
+    `bundle:${workspaceId}:${id}`,
+  );
+  if ('error' in capabilityPolicy) return capabilityPolicy;
+  const skillIds = skillIdArrayValue(body);
+  if (skillIds && 'error' in skillIds) return skillIds;
+  const agentIds = delegatedAgentIdArrayValue(body);
+  if (agentIds && 'error' in agentIds) return agentIds;
+  const knowledgeSourceIds = knowledgeSourceIdArrayValue(body);
+  if (knowledgeSourceIds && 'error' in knowledgeSourceIds) return knowledgeSourceIds;
+  return {
+    workspaceId,
+    id,
+    name,
+    description:
+      typeof body.description === 'string' ? body.description : undefined,
+    preset: rawPreset as CapabilityBundlePreset,
+    enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+    expectedRevision: numberValue(body, 'expectedRevision'),
+    skillIds,
+    agentIds,
+    knowledgeSourceIds,
+    grants: capabilityPolicy.grants,
+    networkPolicy: capabilityPolicy.networkPolicy,
   };
 }
 
@@ -11443,6 +11546,184 @@ const server = createServer(async (request, response) => {
             Boolean(operatorAuthentication!.principal.workspaceIds.includes('*')),
         }),
       );
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/v1/capability-bundles') {
+      const workspaceId =
+        url.searchParams.get('workspaceId') ||
+        scopedOperatorWorkspace(operatorAuthentication!) ||
+        'dev-workspace';
+      if (!requireOperatorWorkspace(response, operatorAuthentication!, workspaceId)) {
+        return;
+      }
+      sendJson(response, 200, {
+        workspaceId,
+        bundles: await threadConfigStore.listCapabilityBundles(workspaceId),
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/v1/capability-bundles') {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const input = coerceCapabilityBundleInput(body);
+      if ('error' in input) {
+        sendJson(response, 400, { error: input.error });
+        return;
+      }
+      if (!requireOperatorWorkspace(response, operatorAuthentication!, input.workspaceId)) {
+        return;
+      }
+      const existing = (await threadConfigStore.listCapabilityBundles(input.workspaceId))
+        .find((bundle) => bundle.id === input.id);
+      const invalidToolIdentity = await invalidAssignedToolCredentialIdentity(
+        input.grants,
+        existing?.grants,
+      );
+      if (invalidToolIdentity) {
+        sendJson(response, 400, {
+          error: `tool_credential_identity_${invalidToolIdentity.reason}:${invalidToolIdentity.id}`,
+        });
+        return;
+      }
+      const invalidSkill = await invalidAssignedSkill(
+        input.skillIds,
+        existing?.skillIds,
+      );
+      if (invalidSkill) {
+        sendJson(response, 400, {
+          error: `agent_skill_${invalidSkill.reason}:${invalidSkill.id}`,
+        });
+        return;
+      }
+      const invalidAgent = await invalidAssignedDelegatedAgent(
+        input.agentIds,
+        existing?.agentIds,
+      );
+      if (invalidAgent) {
+        sendJson(response, 400, {
+          error: `delegated_agent_${invalidAgent.reason}:${invalidAgent.id}`,
+        });
+        return;
+      }
+      const invalidKnowledge = await invalidAssignedKnowledgeSource(
+        input.workspaceId,
+        input.knowledgeSourceIds,
+        existing?.knowledgeSourceIds,
+      );
+      if (invalidKnowledge) {
+        sendJson(response, 400, {
+          error: `knowledge_source_${invalidKnowledge.reason}:${invalidKnowledge.id}`,
+        });
+        return;
+      }
+      try {
+        const bundle = await threadConfigStore.upsertCapabilityBundle({
+          ...input,
+          actor: operatorActor(operatorAuthentication!),
+        });
+        sendJson(response, 200, {
+          bundle,
+          workspace: await workspaceSnapshot(input.workspaceId),
+        });
+      } catch (error) {
+        if (error instanceof CapabilityBundleRevisionConflictError) {
+          sendJson(response, 409, {
+            error: error.message,
+            currentRevision: error.currentRevision,
+          });
+          return;
+        }
+        sendJson(response, 400, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    const capabilityBundleActionMatch =
+      request.method === 'POST'
+        ? /^\/v1\/capability-bundles\/([^/]+)\/(enable|disable)$/u.exec(
+            url.pathname,
+          )
+        : null;
+    if (capabilityBundleActionMatch) {
+      const body = (await readJsonBody(request)) as Record<string, unknown>;
+      const workspaceId =
+        stringValue(body, 'workspaceId', 'dev-workspace') || 'dev-workspace';
+      if (!requireOperatorWorkspace(response, operatorAuthentication!, workspaceId)) {
+        return;
+      }
+      try {
+        const bundle = await threadConfigStore.setCapabilityBundleEnabled({
+          workspaceId,
+          id: decodeURIComponent(capabilityBundleActionMatch[1]),
+          enabled: capabilityBundleActionMatch[2] === 'enable',
+          expectedRevision: numberValue(body, 'expectedRevision'),
+          actor: operatorActor(operatorAuthentication!),
+        });
+        sendJson(response, 200, {
+          bundle,
+          workspace: await workspaceSnapshot(workspaceId),
+        });
+      } catch (error) {
+        if (error instanceof CapabilityBundleRevisionConflictError) {
+          sendJson(response, 409, {
+            error: error.message,
+            currentRevision: error.currentRevision,
+          });
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        sendJson(response, message === 'capability_bundle_not_found' ? 404 : 400, {
+          error: message,
+        });
+      }
+      return;
+    }
+
+    const capabilityBundleDeleteMatch =
+      request.method === 'DELETE'
+        ? /^\/v1\/capability-bundles\/([^/]+)$/u.exec(url.pathname)
+        : null;
+    if (capabilityBundleDeleteMatch) {
+      const workspaceId =
+        url.searchParams.get('workspaceId') ||
+        scopedOperatorWorkspace(operatorAuthentication!) ||
+        'dev-workspace';
+      if (!requireOperatorWorkspace(response, operatorAuthentication!, workspaceId)) {
+        return;
+      }
+      try {
+        const bundle = await threadConfigStore.removeCapabilityBundle({
+          workspaceId,
+          id: decodeURIComponent(capabilityBundleDeleteMatch[1]),
+          expectedRevision: numberValue(
+            Object.fromEntries(url.searchParams),
+            'expectedRevision',
+          ),
+          actor: operatorActor(operatorAuthentication!),
+        });
+        if (!bundle) {
+          sendJson(response, 404, { error: 'capability_bundle_not_found' });
+          return;
+        }
+        sendJson(response, 200, {
+          bundle,
+          workspace: await workspaceSnapshot(workspaceId),
+        });
+      } catch (error) {
+        if (error instanceof CapabilityBundleRevisionConflictError) {
+          sendJson(response, 409, {
+            error: error.message,
+            currentRevision: error.currentRevision,
+          });
+          return;
+        }
+        sendJson(response, 409, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return;
     }
 

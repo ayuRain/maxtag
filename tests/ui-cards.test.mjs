@@ -35,6 +35,7 @@ test('Lark thread status card exposes Chinese capability sections and three acti
     skills: ['发布复核'],
     agents: ['发布检查员'],
     sources: ['发布手册'],
+    capabilityBundles: ['数据只读'],
     tools: ['GitHub'],
     network: 'restricted；1 个允许域名',
     activeRoutines: ['每日发布检查'],
@@ -60,6 +61,8 @@ test('Lark thread status card exposes Chinese capability sections and three acti
   assert.match(JSON.stringify(card), /交互式发布健康报告/u);
   assert.match(JSON.stringify(card), /持续任务/u);
   assert.match(JSON.stringify(card), /可用能力/u);
+  assert.match(JSON.stringify(card), /能力包（1）/u);
+  assert.match(JSON.stringify(card), /数据只读/u);
   assert.match(JSON.stringify(card), /记忆、权限与用量/u);
 });
 
