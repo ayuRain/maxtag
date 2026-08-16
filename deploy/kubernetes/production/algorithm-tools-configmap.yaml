@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maxtag-algorithm-tools
+data:
+  maxtag-image-build: |
+    #!/bin/sh
+    set -e
+    export AWS_DEFAULT_REGION="${MAXTAG_BUILD_AWS_REGION:-us-west-1}"
+    export AWS_REGION="$AWS_DEFAULT_REGION"
+    export AWS_ROLE_ARN="${MAXTAG_BUILD_SUBMIT_ROLE_ARN:-arn:aws:iam::463470979853:role/MaxTagDoeksReadOnlyRole}"
+    export AWS_WEB_IDENTITY_TOKEN_FILE="${AWS_WEB_IDENTITY_TOKEN_FILE:-/var/run/secrets/eks.amazonaws.com/serviceaccount/token}"
+    BUCKET="${MAXTAG_BUILD_SOURCE_BUCKET:-maxtag-build-sources-463470979853-us-west-1}"
+    PROJECT="${MAXTAG_BUILD_CODEBUILD_PROJECT:-maxtag-hamer-image-build}"
+    usage() {
+      echo "usage: maxtag-image-build start <tag> [dockerfile] | status <build-id>" >&2
+      exit 64
+    }
+    case "$1" in
+      start)
+        tag="$2"
+        dockerfile="$3"
+        [ -n "$dockerfile" ] || dockerfile=docker/hamer-dev.Dockerfile
+        case "$dockerfile" in
+          docker/hamer-dev.Dockerfile|docker/hamer-optimized.Dockerfile|docker/uploader-dev.Dockerfile) ;;
+          *) echo "unsupported Dockerfile" >&2; exit 64 ;;
+        esac
+        case "$tag" in
+          ""|*[!A-Za-z0-9_.-]*|.*|-*) echo "invalid image tag" >&2; exit 64 ;;
+        esac
+        [ "$(expr "$tag" : '.*')" -le 128 ] || { echo "image tag too long" >&2; exit 64; }
+        origin="$(git remote get-url origin)"
+        case "$origin" in
+          https://github.com/max-insights/hamer.git|git@github.com:max-insights/hamer.git) ;;
+          *) echo "workspace repository is not max-insights/hamer" >&2; exit 65 ;;
+        esac
+        [ -z "$(git status --porcelain)" ] || {
+          echo "workspace has uncommitted changes; commit before building" >&2
+          exit 65
+        }
+        sha="$(git rev-parse HEAD)"
+        key="hamer/$sha.zip"
+        archive="$(mktemp /tmp/maxtag-hamer-XXXXXX.zip)"
+        trap 'rm -f "$archive"' EXIT
+        git archive --format=zip -o "$archive" HEAD
+        aws s3 cp "$archive" "s3://$BUCKET/$key" --only-show-errors
+        aws codebuild start-build \
+          --project-name "$PROJECT" \
+          --source-location-override "$BUCKET/$key" \
+          --environment-variables-override \
+            "name=DOCKERFILE,value=$dockerfile,type=PLAINTEXT" \
+            "name=IMAGE_TAG,value=$tag,type=PLAINTEXT" \
+            "name=SOURCE_SHA,value=$sha,type=PLAINTEXT" \
+          --query 'build.{id:id,status:buildStatus,sourceVersion:sourceVersion,logs:logs.deepLink}' \
+          --output json
+        ;;
+      status)
+        id="$2"
+        [ -n "$id" ] || usage
+        case "$id" in "$PROJECT":*) ;; *) echo "build id does not belong to $PROJECT" >&2; exit 64 ;; esac
+        aws codebuild batch-get-builds --ids "$id" \
+          --query 'builds[0].{id:id,status:buildStatus,phase:currentPhase,sourceVersion:sourceVersion,start:startTime,end:endTime,logs:logs.deepLink}' \
+          --output json
+        ;;
+      *) usage ;;
+    esac

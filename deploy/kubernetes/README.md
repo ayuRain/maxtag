@@ -21,6 +21,14 @@ The image contains pinned Codex and Lark CLIs plus `git`, `gh`, `aws`,
 contain a Docker daemon or mount a node Docker socket. Image builds should run
 as isolated BuildKit/Kaniko Jobs with their own policy and resource limits.
 
+The production overlay also mounts `maxtag-image-build`, a narrow submission
+client for the isolated `maxtag-hamer-image-build` CodeBuild project. It only
+accepts the `max-insights/hamer` workspace, three reviewed Dockerfile paths,
+and valid ECR tags. The command archives a clean Git commit, uploads it under
+the dedicated S3 `hamer/` prefix, starts CodeBuild, and returns a build ID.
+Use `maxtag-image-build status <build-id>` to query progress. It never mounts a
+Docker socket or exposes AWS credentials to the agent container.
+
 ## Shadow deployment
 
 Create the runtime secret from the protected host environment file. The helper
@@ -81,6 +89,14 @@ The manifests contain no credential values. `maxtag-runtime-env` and
 be enabled with KMS. Annotate the `maxtag` ServiceAccount with a dedicated IRSA
 role rather than copying AWS keys. The committed cluster binding grants the
 built-in Kubernetes `view` role and cannot read Secrets or mutate resources.
+
+For algorithm image submission, grant that IRSA role only `s3:PutObject` on
+the configured build-source `hamer/` prefix, `codebuild:StartBuild` on the
+single build project, and `codebuild:BatchGetBuilds`. The CodeBuild service
+role should have read access to that source prefix and push access to the ECR
+`hamer` repository only. Override the default account-specific names with
+`MAXTAG_BUILD_SOURCE_BUCKET`, `MAXTAG_BUILD_CODEBUILD_PROJECT`,
+`MAXTAG_BUILD_SUBMIT_ROLE_ARN`, and `MAXTAG_BUILD_AWS_REGION` when needed.
 
 ## Resource envelope
 

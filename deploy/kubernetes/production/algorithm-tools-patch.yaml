@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: maxtag
+spec:
+  template:
+    spec:
+      containers:
+        - name: server
+          volumeMounts:
+            - name: maxtag-algorithm-tools
+              mountPath: /usr/local/bin/maxtag-image-build
+              subPath: maxtag-image-build
+              readOnly: true
+        - name: worker
+          volumeMounts:
+            - name: maxtag-algorithm-tools
+              mountPath: /usr/local/bin/maxtag-image-build
+              subPath: maxtag-image-build
+              readOnly: true
+      volumes:
+        - name: maxtag-algorithm-tools
+          configMap:
+            name: maxtag-algorithm-tools
+            defaultMode: 365

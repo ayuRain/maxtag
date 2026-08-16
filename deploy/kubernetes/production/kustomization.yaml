@@ -3,6 +3,8 @@ kind: Kustomization
 namespace: maxtag
 resources:
   - ../base
+  - algorithm-tools-configmap.yaml
 patches:
   - path: enable-runtime.yaml
   - path: cloudflared-sidecar.yaml
+  - path: algorithm-tools-patch.yaml
