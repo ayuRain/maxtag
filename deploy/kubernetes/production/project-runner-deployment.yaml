@@ -52,6 +52,15 @@ spec:
               value: "3081"
             - name: OPENTAG_PROJECT_RUNNER_WORKSPACE_ROOT
               value: /srv/opentag/workspaces
+            # The shared image entrypoint creates these directories before it
+            # dispatches roles. Keep runner-local state on its ephemeral /tmp;
+            # never mount the control-plane data directory here.
+            - name: OPENTAG_DATA_DIR
+              value: /tmp/opentag-state
+            - name: OPENTAG_ARTIFACT_ROOT
+              value: /tmp/opentag-artifacts
+            - name: OPENTAG_EXECUTOR_WORKSPACE_ROOT
+              value: /srv/opentag/workspaces
           ports:
             - name: http
               containerPort: 3081
