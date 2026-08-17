@@ -26,6 +26,11 @@ client for the isolated `maxtag-hamer-image-build` CodeBuild project. It only
 accepts the `max-insights/hamer` workspace, three reviewed Dockerfile paths,
 and valid ECR tags. The command archives a clean Git commit, uploads it under
 the dedicated S3 `hamer/` prefix, starts CodeBuild, and returns a build ID.
+Run `maxtag-image-build sync` first to fast-forward the clean `main` workspace
+from `origin/main` using a short-lived GitHub App installation token. The sync
+refuses dirty worktrees, non-`main` branches, non-fast-forward updates, and any
+repository other than `max-insights/hamer`; the token is never written to Git
+configuration, command arguments, or the persistent workspace.
 Use `maxtag-image-build status <build-id>` to query progress. It never mounts a
 Docker socket or exposes AWS credentials to the agent container.
 

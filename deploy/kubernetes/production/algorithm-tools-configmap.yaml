@@ -13,10 +13,74 @@ data:
     BUCKET="${MAXTAG_BUILD_SOURCE_BUCKET:-maxtag-build-sources-463470979853-us-west-1}"
     PROJECT="${MAXTAG_BUILD_CODEBUILD_PROJECT:-maxtag-hamer-image-build}"
     usage() {
-      echo "usage: maxtag-image-build start <tag> [dockerfile] | status <build-id>" >&2
+      echo "usage: maxtag-image-build sync | start <tag> [dockerfile] | status <build-id>" >&2
       exit 64
     }
+    verify_workspace() {
+      origin="$(git remote get-url origin)"
+      case "$origin" in
+        https://github.com/max-insights/hamer.git|git@github.com:max-insights/hamer.git) ;;
+        *) echo "workspace repository is not max-insights/hamer" >&2; exit 65 ;;
+      esac
+    }
+    require_clean_workspace() {
+      [ -z "$(git status --porcelain)" ] || {
+        echo "workspace has uncommitted changes" >&2
+        exit 65
+      }
+    }
+    github_installation_token() {
+      [ -n "${OPENTAG_GITHUB_APP_ID:-}" ] || { echo "GitHub App ID is not configured" >&2; exit 69; }
+      [ -n "${OPENTAG_GITHUB_APP_INSTALLATION_ID:-}" ] || { echo "GitHub App installation is not configured" >&2; exit 69; }
+      [ -r "${OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE:-}" ] || { echo "GitHub App private key is unavailable" >&2; exit 69; }
+      node --input-type=module -e '
+        import { GitHubAppInstallationTokenProvider } from "/app/packages/platform-github/dist/index.js";
+        const provider = new GitHubAppInstallationTokenProvider({
+          appId: process.env.OPENTAG_GITHUB_APP_ID,
+          installationId: process.env.OPENTAG_GITHUB_APP_INSTALLATION_ID,
+          privateKeyFile: process.env.OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE,
+          baseUrl: process.env.OPENTAG_GITHUB_BASE_URL,
+        });
+        process.stdout.write(await provider.getToken());
+      '
+    }
+    sync_main() {
+      verify_workspace
+      require_clean_workspace
+      branch="$(git symbolic-ref --quiet --short HEAD || true)"
+      [ "$branch" = main ] || { echo "workspace must be on main before sync" >&2; exit 65; }
+      before="$(git rev-parse HEAD)"
+      token="$(github_installation_token)"
+      askpass="$(mktemp /tmp/maxtag-git-askpass-XXXXXX)"
+      cleanup_sync() {
+        rm -f "$askpass"
+        unset token MAXTAG_GITHUB_INSTALLATION_TOKEN
+      }
+      trap cleanup_sync EXIT HUP INT TERM
+      cat >"$askpass" <<'EOF'
+    #!/bin/sh
     case "$1" in
+      *Username*) printf '%s\n' x-access-token ;;
+      *Password*) printf '%s\n' "$MAXTAG_GITHUB_INSTALLATION_TOKEN" ;;
+      *) exit 1 ;;
+    esac
+    EOF
+      chmod 700 "$askpass"
+      MAXTAG_GITHUB_INSTALLATION_TOKEN="$token" \
+        GIT_ASKPASS="$askpass" \
+        GIT_TERMINAL_PROMPT=0 \
+        git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+      git merge --ff-only refs/remotes/origin/main
+      after="$(git rev-parse HEAD)"
+      cleanup_sync
+      trap - EXIT HUP INT TERM
+      printf '{"repository":"max-insights/hamer","branch":"main","before":"%s","after":"%s","updated":%s}\n' \
+        "$before" "$after" "$([ "$before" = "$after" ] && printf false || printf true)"
+    }
+    case "$1" in
+      sync)
+        sync_main
+        ;;
       start)
         tag="$2"
         dockerfile="$3"
@@ -29,15 +93,8 @@ data:
           ""|*[!A-Za-z0-9_.-]*|.*|-*) echo "invalid image tag" >&2; exit 64 ;;
         esac
         [ "$(expr "$tag" : '.*')" -le 128 ] || { echo "image tag too long" >&2; exit 64; }
-        origin="$(git remote get-url origin)"
-        case "$origin" in
-          https://github.com/max-insights/hamer.git|git@github.com:max-insights/hamer.git) ;;
-          *) echo "workspace repository is not max-insights/hamer" >&2; exit 65 ;;
-        esac
-        [ -z "$(git status --porcelain)" ] || {
-          echo "workspace has uncommitted changes; commit before building" >&2
-          exit 65
-        }
+        verify_workspace
+        require_clean_workspace
         sha="$(git rev-parse HEAD)"
         key="hamer/$sha.zip"
         archive="$(mktemp /tmp/maxtag-hamer-XXXXXX.zip)"
