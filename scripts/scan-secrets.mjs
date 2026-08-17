@@ -44,6 +44,10 @@ function trackedFiles() {
 function main() {
   const findings = [];
   for (const file of trackedFiles()) {
+    // `git ls-files --cached` also reports tracked paths deleted in the current
+    // worktree. A deletion cannot introduce a secret and should not make the
+    // pre-commit scan crash before the index is updated.
+    if (!fs.existsSync(file)) continue;
     const bytes = fs.readFileSync(file);
     if (bytes.includes(0)) continue;
     findings.push(...scanText(bytes.toString('utf8'), file));

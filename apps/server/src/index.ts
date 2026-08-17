@@ -3086,9 +3086,9 @@ async function workspaceSnapshot(
               Array.isArray(grant.constraints?.commands) &&
               grant.constraints.commands.some(
                 (command) =>
-                  typeof command === 'string' &&
-                  /^[a-zA-Z0-9_.+-]+$/u.test(command) &&
-                  command !== '*',
+                  command === '*' ||
+                  (typeof command === 'string' &&
+                    /^[a-zA-Z0-9_.+-]+$/u.test(command)),
               )
             )
               ? 1

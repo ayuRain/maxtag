@@ -506,7 +506,7 @@ function accessPolicy(request: AgentRunRequest): string {
     `Network mode: ${request.access.networkPolicy.mode}`,
     hosts ? `Allowed network hosts: ${hosts}` : '',
     request.access.grants.some((grant) => grant.kind === 'shell')
-      ? 'Workspace mutations and command execution must use the MaxTag workspace MCP tools. These tools form the granted project sandbox; native provider shell and file mutation are intentionally unavailable.'
+      ? 'Workspace mutations and command execution use the MaxTag project runtime tools. The isolated runtime, project filesystem, workload identity, and egress policy are the boundary; use ordinary installed tools autonomously instead of waiting for a task-specific wrapper.'
       : '',
     request.access.grants.some((grant) => grant.kind === 'browser')
       ? 'Web access must use the MaxTag browser_fetch MCP tool. Native provider web tools are intentionally unavailable.'

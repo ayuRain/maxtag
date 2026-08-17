@@ -236,8 +236,8 @@ export const OPENTAG_TOOL_CATALOG: OpenTagToolCatalogEntry[] = [
     constraints: [
       {
         key: 'commands',
-        label: 'Allowed commands',
-        placeholder: 'git, npm, node',
+        label: 'Runtime commands',
+        placeholder: '* (all installed programs)',
       },
     ],
   },
@@ -319,7 +319,16 @@ function permissionAllows(grant: ToolGrant, permission: 'read' | 'write'): boole
   return value.some((item) => item === permission);
 }
 
-function allowedWorkspaceCommands(request: AgentRunRequest): string[] {
+function allowedWorkspaceCommands(
+  request: AgentRunRequest,
+  unrestrictedRuntime = false,
+): string[] {
+  if (
+    unrestrictedRuntime &&
+    request.access.grants.some(
+      (grant) => grant.kind === 'shell' && permissionAllows(grant, 'write'),
+    )
+  ) return ['*'];
   return [
     ...new Set(
       request.access.grants.flatMap((grant) => {
@@ -332,7 +341,6 @@ function allowedWorkspaceCommands(request: AgentRunRequest): string[] {
           .filter(
             (value) =>
               Boolean(value) &&
-              value !== '*' &&
               !value.includes('/') &&
               !value.includes('\\'),
           );
@@ -344,6 +352,7 @@ function allowedWorkspaceCommands(request: AgentRunRequest): string[] {
 function wireToolDefinition(
   request: AgentRunRequest,
   definition: ToolDefinition,
+  unrestrictedRuntime = false,
 ): WireToolDefinition {
   if (definition.name !== 'workspace_run') {
     return {
@@ -355,23 +364,25 @@ function wireToolDefinition(
       inputSchema: definition.inputSchema,
     };
   }
-  const commands = allowedWorkspaceCommands(request);
+  const commands = allowedWorkspaceCommands(request, unrestrictedRuntime);
+  const unrestricted = commands.includes('*');
   const properties = objectValue(definition.inputSchema.properties);
   const commandSchema = objectValue(properties.command);
   return {
     name: definition.name,
     title: definition.title,
-    description: `${definition.description} Allowed program names for this run: ${commands.join(', ')}. Use only these exact project-approved executables. Combine them as needed to complete and verify the task; a wrapper is an optional accelerator rather than a required workflow.`,
+    description: unrestricted
+      ? `${definition.description} Any installed executable may be used by basename. Combine ordinary shell, repository, build, test, and diagnostic programs as needed; fixed wrappers are optional accelerators, never the execution model.`
+      : `${definition.description} Allowed program names for this run: ${commands.join(', ')}. Use only these exact project-approved executables. Combine them as needed to complete and verify the task; a wrapper is an optional accelerator rather than a required workflow.`,
     grantKind: definition.grantKind,
     risk: definition.risk,
     inputSchema: {
       ...definition.inputSchema,
       properties: {
         ...properties,
-        command: {
-          ...commandSchema,
-          enum: commands,
-        },
+        command: unrestricted
+          ? commandSchema
+          : { ...commandSchema, enum: commands },
       },
     },
   };
@@ -763,7 +774,11 @@ function toolApprovalRequired(
   request: AgentRunRequest,
   definition: ToolDefinition,
 ): boolean {
-  if (definition.risk !== 'write' || definition.grantKind === 'memory') return false;
+  if (
+    definition.risk !== 'write' ||
+    definition.grantKind === 'memory' ||
+    definition.grantKind === 'shell'
+  ) return false;
   if (definition.approval === 'always') return true;
   const policy = request.access.toolApprovalPolicy;
   if (policy?.mode !== 'require_approval') return false;
@@ -3038,7 +3053,7 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
     let closed = false;
 
     const wireTools: WireToolDefinition[] = definitions.map((definition) =>
-      wireToolDefinition(request, definition),
+      wireToolDefinition(request, definition, Boolean(this.options.projectRunner)),
     );
 
     const invoke = async (body: JsonObject): Promise<WireToolResult> => {

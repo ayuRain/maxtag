@@ -1392,7 +1392,7 @@ test('approved writes fail closed when exact arguments or current grants differ'
   assert.equal(providerCalls, 0);
 });
 
-test('workspace broker isolates project paths and atomically approves exact file writes', async (context) => {
+test('workspace broker isolates project paths and performs digest-guarded file writes inside the sandbox', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-workspace-tools-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));
   const project = path.join(root, 'payments');
@@ -1465,24 +1465,11 @@ test('workspace broker isolates project paths and atomically approves exact file
     content: 'export const value = 2;\n',
     expectedSha256: read.sha256,
   };
-  const pending = await client.callTool({
+  const written = await client.callTool({
     name: 'workspace_write',
     arguments: exactArguments,
   });
-  assert.match(textResult(pending), /pendingApproval/u);
-  assert.equal(
-    await fs.readFile(path.join(project, 'src', 'index.ts'), 'utf8'),
-    'export const value = 1;\n',
-  );
-  const [approval] = await approvals.listToolApprovals({ status: 'pending' });
-  assert.deepEqual(approval.arguments, exactArguments);
-  await approvals.approveToolApproval({ id: approval.id, actorId: 'operator:ada' });
-  const executed = await broker.executeApproved({
-    approvalId: approval.id,
-    request,
-    claimedBy: 'workspace-worker',
-  });
-  assert.equal(executed.approval.status, 'succeeded');
+  assert.equal(written.isError, undefined);
   assert.equal(
     await fs.readFile(path.join(project, 'src', 'index.ts'), 'utf8'),
     exactArguments.content,
@@ -1499,16 +1486,9 @@ test('workspace broker isolates project paths and atomically approves exact file
       content: 'export const value = 3;\n',
     },
   });
-  assert.match(textResult(stale), /pendingApproval/u);
-  const staleApproval = (await approvals.listToolApprovals({ status: 'pending' }))[0];
-  await approvals.approveToolApproval({ id: staleApproval.id, actorId: 'operator:ada' });
-  const staleExecution = await broker.executeApproved({
-    approvalId: staleApproval.id,
-    request,
-    claimedBy: 'workspace-worker-2',
-  });
-  assert.equal(staleExecution.approval.status, 'failed');
-  assert.equal(staleExecution.approval.error, 'workspace_write_precondition_failed');
+  assert.equal(stale.isError, true);
+  assert.match(textResult(stale), /workspace_write_precondition_failed/u);
+  assert.equal((await approvals.listToolApprovals({ status: 'pending' })).length, 0);
 });
 
 test('workspace commands follow project approval policy and recheck their allowlist', async (context) => {
@@ -1590,7 +1570,7 @@ test('workspace commands follow project approval policy and recheck their allowl
   assert.match(failedExecution.stderr, /actionable failure details/u);
 });
 
-test('workspace commands still require approval when the resolved project policy does', async (context) => {
+test('workspace commands remain autonomous inside the project sandbox', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-workspace-command-approval-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, 'payments'));
@@ -1613,12 +1593,42 @@ test('workspace commands still require approval when the resolved project policy
   });
   request.access.toolApprovalPolicy = { mode: 'require_approval', risks: ['write'] };
   const client = await connectedClient(context, await broker.open(request), 'workspace-command-approval-test');
-  const pending = await client.callTool({
+  const result = await client.callTool({
     name: 'workspace_run',
     arguments: { command: path.basename(process.execPath), args: ['-e', "console.log('approved')"] },
   });
-  assert.match(textResult(pending), /pendingApproval/u);
-  assert.equal((await approvals.listToolApprovals({ status: 'pending' })).length, 1);
+  assert.equal(result.isError, undefined);
+  assert.match(textResult(result), /approved/u);
+  assert.equal((await approvals.listToolApprovals({ status: 'pending' })).length, 0);
+});
+
+test('wildcard workspace grant exposes installed runtime commands without an executable allowlist', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-workspace-wildcard-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'payments'));
+  const request = runRequest([]);
+  request.access.grants.push({
+    id: 'shell-runtime',
+    kind: 'shell',
+    scope: 'project',
+    label: 'Agent Runtime',
+    constraints: { permissions: ['read', 'write'], commands: ['*'] },
+  });
+  const broker = createOpenTagToolBroker({
+    memory: new ScopedFileMemoryStore(path.join(root, 'memory')),
+    workspaceRoot: root,
+  });
+  const client = await connectedClient(context, await broker.open(request), 'workspace-wildcard-test');
+  const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'workspace_run');
+  assert.ok(tool);
+  assert.equal(tool.inputSchema.properties.command.enum, undefined);
+  assert.match(tool.description, /Any installed executable/u);
+  const result = await client.callTool({
+    name: 'workspace_run',
+    arguments: { command: path.basename(process.execPath), args: ['-e', "console.log('agent-runtime')"] },
+  });
+  assert.equal(result.isError, undefined);
+  assert.match(textResult(result), /agent-runtime/u);
 });
 
 test('workspace commands use the configured isolated project runner backend', async (context) => {
@@ -1663,16 +1673,21 @@ test('workspace commands use the configured isolated project runner backend', as
     arguments: {},
   })));
   assert.equal(capabilities.executionBackend, 'isolated-project-runner');
+  assert.deepEqual(capabilities.commands, ['*']);
+  const runtimeTool = (await client.listTools()).tools.find(
+    (tool) => tool.name === 'workspace_run',
+  );
+  assert.equal(runtimeTool.inputSchema.properties.command.enum, undefined);
   const result = JSON.parse(textResult(await client.callTool({
     name: 'workspace_run',
-    arguments: { command: 'node', args: ['--version'], timeoutMs: 4_000 },
+    arguments: { command: 'bash', args: ['-lc', 'node --version'], timeoutMs: 4_000 },
   })));
   assert.equal(result.status, 'succeeded');
   assert.match(result.stdout, /remote runner ok/u);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].projectKey, 'payments');
-  assert.equal(calls[0].command, 'node');
-  assert.deepEqual(calls[0].args, ['--version']);
+  assert.equal(calls[0].command, 'bash');
+  assert.deepEqual(calls[0].args, ['-lc', 'node --version']);
   assert.equal(calls[0].timeoutMs, 4_000);
 });
 

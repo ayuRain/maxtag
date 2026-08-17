@@ -30,7 +30,13 @@ export interface HttpProjectRunnerOptions {
 export interface ProjectRunnerServerOptions {
   workspaceRoot: string;
   token: string;
-  allowedCommands: string[];
+  /**
+   * Optional defence-in-depth executable filter. `*` means any basename that
+   * is installed in the runner image. The runner Pod, filesystem mount,
+   * workload identity and network policy are the security boundary; this list
+   * must not turn the project agent into a fixed workflow executor.
+   */
+  allowedCommands?: string[];
   host?: string;
   port?: number;
   maxRequestBytes?: number;
@@ -154,9 +160,12 @@ export function createHttpProjectRunner(options: HttpProjectRunnerOptions): Proj
 
 export function startProjectRunnerServer(options: ProjectRunnerServerOptions): Server {
   if (!options.token) throw new Error('OPENTAG_PROJECT_RUNNER_TOKEN is required.');
-  if (!options.allowedCommands.length) throw new Error('OPENTAG_PROJECT_RUNNER_COMMANDS must not be empty.');
-  const commands = new Set(options.allowedCommands.filter(validCommand));
-  if (!commands.size) throw new Error('OPENTAG_PROJECT_RUNNER_COMMANDS contains no valid commands.');
+  const configuredCommands = options.allowedCommands ?? ['*'];
+  const allowAnyCommand = configuredCommands.includes('*');
+  const commands = new Set(configuredCommands.filter(validCommand));
+  if (!allowAnyCommand && !commands.size) {
+    throw new Error('OPENTAG_PROJECT_RUNNER_COMMANDS contains no valid commands.');
+  }
   const endpoint = options.path || '/v1/execute';
   const server = createServer(async (request, response) => {
     const respond = (status: number, value: unknown): void => {
@@ -182,7 +191,9 @@ export function startProjectRunnerServer(options: ProjectRunnerServerOptions): S
     let input: WireExecuteRequest | undefined;
     try {
       input = wireRequest(await jsonBody(request, options.maxRequestBytes ?? 256 * 1_024));
-      if (!commands.has(input.command)) throw new Error('project_runner_command_not_allowed');
+      if (!allowAnyCommand && !commands.has(input.command)) {
+        throw new Error('project_runner_command_not_allowed');
+      }
       const cwd = await projectDirectory(options.workspaceRoot, input.projectKey);
       const home = path.resolve(options.homeRoot || '/tmp/opentag-project-runner', input.projectKey);
       await fs.mkdir(home, { recursive: true, mode: 0o700 });

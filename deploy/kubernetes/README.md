@@ -18,14 +18,11 @@ control-plane Pod. The runner mounts only the managed Project workspace and a
 dedicated bearer-auth Secret. It does not mount the MaxTag runtime Secret,
 GitHub App key, Cloudflare credentials, Kubernetes service-account token, or
 platform database. A NetworkPolicy accepts requests only from the MaxTag
-control-plane Pod and denies all runner egress by default. Command names must
-pass both the Project capability grant and the runner-wide executable ceiling;
-arguments are executed without a shell.
-
-The temporary reviewed `maxtag-image-build` wrapper remains a control-plane
-boundary command via `OPENTAG_LOCAL_BOUNDARY_COMMANDS`; it needs brokered AWS
-submission and GitHub App identity that are intentionally absent from the
-runner. Ordinary tools such as `git`, `npm`, and `node` never use that path.
+control-plane Pod and denies all runner egress by default. A Project capability
+grant may expose every executable installed in the runtime with `commands: ["*"]`.
+The Pod, Project-only filesystem, workload identity, and egress policy are the
+security boundary—not a workflow-specific executable list. Commands may use an
+ordinary shell when the agent needs pipelines or multi-step diagnostics.
 
 Create the independent auth Secret before applying the production overlay:
 
@@ -33,11 +30,12 @@ Create the independent auth Secret before applying the production overlay:
 deploy/kubernetes/scripts/prepare-project-runner-auth.sh maxtag
 ```
 
-The initial production ceiling is `git,node,npm,npx,python,python3,pytest,make,cmake`.
-This enables local inspect/edit/test/rebase work without exposing `aws`,
-`kubectl`, `gh`, a Docker socket, or external credentials. Private fetch,
-registry publishing, and cloud operations remain brokered boundary operations;
-do not solve them by mounting control-plane credentials into this Pod.
+Production uses the wildcard runtime grant. This enables AgentDock-style
+inspect/edit/test/retry loops with whichever ordinary programs are installed in
+the image. It does not create credentials, a Docker socket, Kubernetes access,
+or network access. Private GitHub, registry publishing, and cloud operations
+remain scoped capability boundaries; do not solve them by mounting control-plane
+secrets into this Pod.
 
 `NetworkPolicy` resources are enforced by the cluster CNI, not Kubernetes
 itself. On EKS, enable Amazon VPC CNI network-policy support in the add-on/IaC
@@ -66,36 +64,13 @@ The image contains pinned Codex and Lark CLIs plus `git`, `gh`, `aws`,
 contain a Docker daemon or mount a node Docker socket. Image builds should run
 as isolated BuildKit/Kaniko Jobs with their own policy and resource limits.
 
-The production overlay currently mounts `maxtag-image-build`, an optional,
-temporary accelerator for the first Hamer acceptance case. It is not the
-MaxTag execution model: the agent should use the generic Project sandbox to
-inspect failures and repair repository state, and may choose this wrapper only
-for the final isolated image submission. The client only
-accepts the `max-insights/hamer` workspace, three reviewed Dockerfile paths,
-and valid OCI image tags. The command archives a clean Git commit, uploads it under
-the dedicated S3 `hamer/` prefix, starts CodeBuild, and returns a build ID.
-Run `maxtag-image-build sync` first to select the clean remote
-`maxhandsv2-c4.03-stable` commit, the reviewed Maxflow release line. Use
-`maxtag-image-build sync main` only when the caller explicitly requests the
-moving `main` branch. Both forms use a short-lived GitHub App installation token. The sync only
-accepts those two branches and `max-insights/hamer`; it checks out the exact
-remote commit in detached mode so local branch state cannot affect a build.
-The token is never written to Git configuration, command arguments, or the
-persistent workspace.
-Use `maxtag-image-build status <build-id>` to query progress. It never mounts a
-Docker socket or exposes AWS credentials to the agent container. The build
-target is configured once for the capability package (currently the
-organization-owned
-`registry.maxinsights.ai/max-infra/hamer-maxhandsv2-business` repository), so
-chat users only choose a tag and optional reviewed Dockerfile. Registry
-credentials are injected into CodeBuild from AWS Secrets Manager; they are not
-available to the MaxTag Pod, model, Project memory, or chat users. Successful
-status responses load the immutable registry digest from a build result object
-under the protected S3 `hamer/results/` prefix for the final card. Projects may
-disable the extra tool-confirmation layer when this narrow
-wrapper is already the approved execution boundary; repository, branch,
-Dockerfile, IAM, and registry restrictions remain enforced by the wrapper and
-AWS roles.
+Image delivery is intentionally not represented by a Hamer-specific wrapper in
+the production overlay. The general agent inspects the repository, chooses the
+real Dockerfile and build arguments, diagnoses failures, and verifies the final
+digest. The organization supplies a separately governed build capability (for
+example CodeBuild, BuildKit, or an external MCP tool) with a scoped workload
+identity and registry target. Secrets are injected at that boundary and never
+stored in chat, memory, or the Project workspace.
 
 ## Shadow deployment
 

@@ -47,7 +47,9 @@ spec:
                   name: maxtag-project-runner-auth
                   key: token
             - name: OPENTAG_PROJECT_RUNNER_COMMANDS
-              value: git,node,npm,npx,python,python3,pytest,make,cmake
+              # The Pod is the sandbox. Do not turn a general agent into a
+              # workflow engine by enumerating individual executable names.
+              value: "*"
             - name: OPENTAG_PROJECT_RUNNER_PORT
               value: "3081"
             - name: OPENTAG_PROJECT_RUNNER_WORKSPACE_ROOT

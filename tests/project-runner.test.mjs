@@ -83,3 +83,32 @@ test('project runner rejects unauthenticated and traversal requests', async (con
   assert.equal(traversal.status, 400);
   assert.match(await traversal.text(), /project_runner_project_key_invalid/u);
 });
+
+test('project runner wildcard uses the isolated Pod as the command boundary', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-project-runtime-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const server = startProjectRunnerServer({
+    workspaceRoot: root,
+    token: 'runtime-token',
+    allowedCommands: ['*'],
+    host: '127.0.0.1',
+    port: 0,
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  if (!server.listening) await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const runner = createHttpProjectRunner({
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    token: 'runtime-token',
+  });
+  const result = await runner.execute({
+    projectKey: 'project-a',
+    command: 'sh',
+    args: ['-c', 'printf agent-runtime'],
+    timeoutMs: 5_000,
+    maxOutputBytes: 16_384,
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, 'agent-runtime');
+});

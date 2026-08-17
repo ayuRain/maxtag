@@ -8,7 +8,7 @@ function numberEnv(name: string, fallback: number): number {
 const server = startProjectRunnerServer({
   workspaceRoot: process.env.OPENTAG_PROJECT_RUNNER_WORKSPACE_ROOT || '/srv/opentag/workspaces',
   token: process.env.OPENTAG_PROJECT_RUNNER_TOKEN || '',
-  allowedCommands: (process.env.OPENTAG_PROJECT_RUNNER_COMMANDS || '')
+  allowedCommands: (process.env.OPENTAG_PROJECT_RUNNER_COMMANDS || '*')
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean),

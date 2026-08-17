@@ -3,7 +3,6 @@ kind: Kustomization
 namespace: maxtag
 resources:
   - ../base
-  - algorithm-tools-configmap.yaml
   - project-runner-service-account.yaml
   - project-runner-service.yaml
   - project-runner-deployment.yaml
@@ -11,6 +10,5 @@ resources:
 patches:
   - path: enable-runtime.yaml
   - path: cloudflared-sidecar.yaml
-  - path: algorithm-tools-patch.yaml
   - path: github-app-patch.yaml
   - path: project-runner-control-plane-patch.yaml

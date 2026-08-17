@@ -67,13 +67,14 @@ test('production overlay explicitly enables singleton consumers and Tunnel', asy
 });
 
 test('production project commands run outside the credential-bearing control plane', async () => {
-  const [deployment, account, policy, patch, kustomization, docs] = await Promise.all([
+  const [deployment, account, policy, patch, kustomization, docs, config] = await Promise.all([
     read('deploy/kubernetes/production/project-runner-deployment.yaml'),
     read('deploy/kubernetes/production/project-runner-service-account.yaml'),
     read('deploy/kubernetes/production/project-runner-network-policy.yaml'),
     read('deploy/kubernetes/production/project-runner-control-plane-patch.yaml'),
     read('deploy/kubernetes/production/kustomization.yaml'),
     read('deploy/kubernetes/README.md'),
+    read('deploy/kubernetes/base/configmap.yaml'),
   ]);
   assert.match(deployment, /^kind: Deployment$/mu);
   assert.match(deployment, /app\.kubernetes\.io\/name: maxtag-project-runner/u);
@@ -81,6 +82,7 @@ test('production project commands run outside the credential-bearing control pla
   assert.match(deployment, /automountServiceAccountToken: false/u);
   assert.match(deployment, /secretKeyRef:\n\s+name: maxtag-project-runner-auth/u);
   assert.match(deployment, /subPath: workspaces/u);
+  assert.match(deployment, /OPENTAG_PROJECT_RUNNER_COMMANDS[\s\S]*value: "\*"/u);
   assert.doesNotMatch(deployment, /maxtag-runtime-env|maxtag-github-app|maxtag-cloudflared/u);
   assert.doesNotMatch(deployment, /aws,kubectl|docker\.sock|privileged/iu);
   assert.match(account, /automountServiceAccountToken: false/u);
@@ -91,45 +93,17 @@ test('production project commands run outside the credential-bearing control pla
   assert.match(patch, /OPENTAG_PROJECT_RUNNER_URL/u);
   assert.match(patch, /OPENTAG_PROJECT_RUNNER_TOKEN/u);
   assert.match(kustomization, /project-runner-deployment\.yaml/u);
+  assert.doesNotMatch(kustomization, /algorithm-tools/u);
+  assert.match(config, /OPENTAG_LOCAL_BOUNDARY_COMMANDS: ""/u);
   assert.match(docs, /does not mount the MaxTag runtime Secret/u);
   assert.match(docs, /denies all runner egress by default/u);
 });
 
-test('algorithm builder selects only reviewed clean hamer branches with a GitHub App token', async () => {
-  const tool = await read('deploy/kubernetes/production/algorithm-tools-configmap.yaml');
-  assert.match(tool, /maxtag-image-build sync/u);
-  assert.match(tool, /\/var\/run\/secrets\/maxtag-github-app/u);
-  assert.match(tool, /secret_dir\/app-id/u);
-  assert.match(tool, /secret_dir\/installation-id/u);
-  assert.match(tool, /secret_dir\/private-key\.pem/u);
-  assert.match(tool, /GitHubAppInstallationTokenProvider/u);
-  assert.match(tool, /MAXTAG_GITHUB_INSTALLATION_TOKEN/u);
-  assert.match(tool, /GIT_ASKPASS/u);
-  assert.match(tool, /GIT_TERMINAL_PROMPT=0/u);
-  assert.match(tool, /branch="\$\{1:-maxhandsv2-c4\.03-stable\}"/u);
-  assert.match(tool, /main\|maxhandsv2-c4\.03-stable/u);
-  assert.match(tool, /git fetch --no-tags origin "refs\/heads\/\$branch:refs\/remotes\/origin\/\$branch"/u);
-  assert.match(tool, /git checkout --detach "refs\/remotes\/origin\/\$branch"/u);
-  assert.match(tool, /workspace repository is not max-insights\/hamer/u);
-  assert.match(tool, /unsupported branch/u);
-  assert.match(tool, /workspace has uncommitted changes/u);
-  assert.match(tool, /MAXTAG_BUILD_REGISTRY/u);
-  assert.match(tool, /registry\.maxinsights\.ai\/max-infra\/hamer-maxhandsv2-business/u);
-  assert.match(tool, /hamer\/results\/\$build_uuid\.json/u);
-  assert.doesNotMatch(tool, /aws ecr describe-images/u);
-  assert.match(tool, /d\.image=process\.argv\[2\]/u);
-  assert.doesNotMatch(tool, /credential\.helper/u);
-});
-
-test('algorithm CodeBuild logs in with an injected secret and emits an immutable result', async () => {
-  const buildspec = await read('deploy/aws/codebuild/hamer-buildspec.yml');
-  assert.match(buildspec, /docker login registry\.maxinsights\.ai/u);
-  assert.match(buildspec, /--password-stdin/u);
-  assert.match(buildspec, /REGISTRY_USERNAME/u);
-  assert.match(buildspec, /REGISTRY_PASSWORD/u);
-  assert.match(buildspec, /registry digest missing/u);
-  assert.match(buildspec, /hamer\/results\/\$BUILD_UUID\.json/u);
-  assert.doesNotMatch(buildspec, /registry-admin|n3wvpI0E/u);
+test('production does not hard-code a Hamer workflow as the agent execution model', async () => {
+  const entries = await fs.readdir('deploy/kubernetes/production');
+  assert.equal(entries.includes('algorithm-tools-configmap.yaml'), false);
+  assert.equal(entries.includes('algorithm-tools-patch.yaml'), false);
+  await assert.rejects(read('deploy/aws/codebuild/hamer-buildspec.yml'), /ENOENT/u);
 });
 
 test('state export refuses live writers and restore requires a scaled-down Pod', async () => {

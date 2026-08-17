@@ -318,23 +318,28 @@ function allowedCommands(grant: ToolGrant): string[] {
     : [];
   return values
     .map((value) => value.trim())
-    .filter((value) => Boolean(value) && value !== '*');
+    .filter(Boolean);
 }
 
 function commandAllowed(grant: ToolGrant, command: string): boolean {
   if (!command || command.includes('/') || command.includes('\\')) return false;
-  return allowedCommands(grant).includes(command);
+  const commands = allowedCommands(grant);
+  return commands.includes('*') || commands.includes(command);
 }
 
 function workspaceCommandGrant(
   request: AgentRunRequest,
   command: string,
+  unrestrictedRuntime = false,
 ): ToolGrant {
+  if (!command || command.includes('/') || command.includes('\\')) {
+    throw new ToolDeniedError('workspace_command_not_allowed');
+  }
   const grant = request.access.grants.find(
     (candidate) =>
       candidate.kind === 'shell' &&
       permissionAllows(candidate, 'write') &&
-      commandAllowed(candidate, command),
+      (unrestrictedRuntime || commandAllowed(candidate, command)),
   );
   if (!grant) throw new ToolDeniedError('workspace_command_not_allowed');
   return grant;
@@ -443,9 +448,11 @@ export function createLocalToolDefinitions(
         const shellGrants = request.access.grants.filter(
           (grant) => grant.kind === 'shell',
         );
-        const commands = [
-          ...new Set(shellGrants.flatMap((grant) => allowedCommands(grant))),
-        ].sort();
+        const commands = options.projectRunner
+          ? ['*']
+          : [
+              ...new Set(shellGrants.flatMap((grant) => allowedCommands(grant))),
+            ].sort();
         return {
           projectRoot: '.',
           projectKey: request.project?.key,
@@ -629,7 +636,7 @@ export function createLocalToolDefinitions(
     {
       name: 'workspace_run',
       title: 'Run workspace command',
-      description: 'Execute one project-approved program directly in the isolated project root without shell parsing. Non-zero exits return bounded stdout/stderr so the agent can diagnose, repair, and retry. The resolved project tool-approval policy decides whether a confirmation is required.',
+      description: 'Execute an installed program directly in the isolated project runtime. The runtime Pod, project filesystem, workload identity and egress policy are the security boundary. Non-zero exits return bounded stdout/stderr so the agent can diagnose, repair, and retry.',
       grantKind: 'shell',
       risk: 'write',
       provider: 'opentag:workspace',
@@ -649,10 +656,14 @@ export function createLocalToolDefinitions(
           (grant) =>
             grant.kind === 'shell' &&
             permissionAllows(grant, 'write') &&
-            allowedCommands(grant).length > 0,
+            (Boolean(options.projectRunner) || allowedCommands(grant).length > 0),
         ),
       authorize(request, input) {
-        return workspaceCommandGrant(request, stringValue(input, 'command'));
+        return workspaceCommandGrant(
+          request,
+          stringValue(input, 'command'),
+          Boolean(options.projectRunner),
+        );
       },
       summarize: (input) => ({ command: stringValue(input, 'command'), args: stringArray(input, 'args'), timeoutMs: integerValue(input, 'timeoutMs', 120_000, 100, 600_000) }),
       async execute({ request, signal }, input) {
