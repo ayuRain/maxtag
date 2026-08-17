@@ -21,14 +21,26 @@ LABEL org.opencontainers.image.source="https://github.com/ayuRain/maxtag" \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-      awscli ca-certificates curl git gh jq openssh-client sqlite3 tini \
-    && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+      ca-certificates curl git jq openssh-client sqlite3 tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Keep runtime components in bounded layers. Besides improving cache locality,
+# this avoids depending on registries accepting one very large monolithic blob.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends awscli gh \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
     && curl -fsSLo /tmp/kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \
     && echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum -c - \
     && chmod 0755 /usr/local/bin/kubectl \
-    && npm install --global "@openai/codex@${CODEX_VERSION}" "@larksuite/cli@${LARK_CLI_VERSION}" \
-    && npm cache clean --force \
-    && rm -rf /var/lib/apt/lists/* /tmp/kubectl.sha256
+    && rm -f /tmp/kubectl.sha256
+
+RUN npm install --global "@openai/codex@${CODEX_VERSION}" \
+    && npm cache clean --force
+
+RUN npm install --global "@larksuite/cli@${LARK_CLI_VERSION}" \
+    && npm cache clean --force
 
 WORKDIR /app
 COPY --from=build --chown=node:node /app /app
