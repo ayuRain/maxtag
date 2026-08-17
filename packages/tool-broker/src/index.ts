@@ -658,7 +658,11 @@ async function resolveCredentialIdentity(
   if (identity.id !== configuredId || identity.provider !== provider) {
     throw new ToolDeniedError('tool_credential_identity_provider_mismatch');
   }
-  if (provider === 'github' && !identity.github?.token) {
+  if (
+    provider === 'github' &&
+    !identity.github?.token &&
+    !identity.github?.tokenProvider
+  ) {
     throw new ToolDeniedError('tool_credential_identity_credentials_missing');
   }
   if (provider === 'lark' && !identity.lark) {
@@ -906,7 +910,9 @@ async function githubRequest(
     signal: AbortSignal;
   },
 ): Promise<unknown> {
-  const github = credentialIdentity?.github ?? options.github;
+  const github = credentialIdentity?.github
+    ? { ...options.github, ...credentialIdentity.github }
+    : options.github;
   const baseUrl = (github?.baseUrl || 'https://api.github.com').replace(/\/+$/u, '');
   const url = new URL(`${baseUrl}${pathname}`);
   for (const [key, value] of Object.entries(request.query ?? {})) {

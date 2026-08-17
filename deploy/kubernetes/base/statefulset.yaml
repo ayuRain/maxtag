@@ -46,6 +46,12 @@ spec:
                 name: maxtag-runtime-env
             - configMapRef:
                 name: maxtag-runtime
+          env:
+            # The dedicated worker owns enrichment polling in this topology.
+            # Disabling the duplicate server poll avoids needless cross-process
+            # writes to the shared file-backed knowledge queue.
+            - name: OPENTAG_KNOWLEDGE_ENRICHMENT_ENABLED
+              value: "false"
           ports:
             - name: http
               containerPort: 3077

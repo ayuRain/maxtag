@@ -123,6 +123,23 @@ test('automated knowledge ingest is idempotent across processes and stale jobs c
   assert.deepEqual(stale.passages, []);
 });
 
+test('empty enrichment polling does not create a cross-process lock', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-knowledge-empty-poll-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const server = new FileKnowledgeSourceStore(root);
+  const worker = new FileKnowledgeSourceStore(root);
+  const [serverJobs, workerJobs] = await Promise.all([
+    server.claimEnrichments({ workerId: 'server' }),
+    worker.claimEnrichments({ workerId: 'worker' }),
+  ]);
+  assert.deepEqual(serverJobs, []);
+  assert.deepEqual(workerJobs, []);
+  await assert.rejects(
+    fs.stat(path.join(root, 'knowledge-sources.json.lock')),
+    (error) => error?.code === 'ENOENT',
+  );
+});
+
 test('low-cost knowledge enrichment builds verified aliases that retrieve current source text', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-knowledge-semantic-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));

@@ -229,8 +229,28 @@ test('brokered GitHub tools resolve short-lived installation tokens lazily', asy
         }), { status: 200 });
       },
     },
+    async resolveCredentialIdentity(id) {
+      assert.equal(id, 'github-default');
+      return {
+        id,
+        displayName: 'GitHub installation identity',
+        provider: 'github',
+        revision: 1,
+        github: {
+          tokenProvider: {
+            async getToken() {
+              tokenCalls += 1;
+              return 'ghs_broker';
+            },
+          },
+        },
+      };
+    },
   });
-  const session = await broker.open(runRequest([]));
+  const request = runRequest([]);
+  request.access.grants.find((grant) => grant.kind === 'github').credentialIdentityId =
+    'github-default';
+  const session = await broker.open(request);
   assert.ok(session);
   context.after(() => session.close());
   const client = new Client({ name: 'github-app-broker-test', version: '0.1.0' });

@@ -13,7 +13,7 @@ data:
     BUCKET="${MAXTAG_BUILD_SOURCE_BUCKET:-maxtag-build-sources-463470979853-us-west-1}"
     PROJECT="${MAXTAG_BUILD_CODEBUILD_PROJECT:-maxtag-hamer-image-build}"
     usage() {
-      echo "usage: maxtag-image-build sync | start <tag> [dockerfile] | status <build-id>" >&2
+      echo "usage: maxtag-image-build sync [main|maxhandsv2-c4.03-stable] | start <tag> [dockerfile] | status <build-id>" >&2
       exit 64
     }
     verify_workspace() {
@@ -44,11 +44,14 @@ data:
         process.stdout.write(await provider.getToken());
       '
     }
-    sync_main() {
+    sync_branch() {
+      branch="${1:-main}"
+      case "$branch" in
+        main|maxhandsv2-c4.03-stable) ;;
+        *) echo "unsupported branch" >&2; exit 64 ;;
+      esac
       verify_workspace
       require_clean_workspace
-      branch="$(git symbolic-ref --quiet --short HEAD || true)"
-      [ "$branch" = main ] || { echo "workspace must be on main before sync" >&2; exit 65; }
       before="$(git rev-parse HEAD)"
       token="$(github_installation_token)"
       askpass="$(mktemp /tmp/maxtag-git-askpass-XXXXXX)"
@@ -69,17 +72,17 @@ data:
       MAXTAG_GITHUB_INSTALLATION_TOKEN="$token" \
         GIT_ASKPASS="$askpass" \
         GIT_TERMINAL_PROMPT=0 \
-        git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
-      git merge --ff-only refs/remotes/origin/main
+        git fetch --no-tags origin "refs/heads/$branch:refs/remotes/origin/$branch"
+      git checkout --detach "refs/remotes/origin/$branch" >/dev/null
       after="$(git rev-parse HEAD)"
       cleanup_sync
       trap - EXIT HUP INT TERM
-      printf '{"repository":"max-insights/hamer","branch":"main","before":"%s","after":"%s","updated":%s}\n' \
-        "$before" "$after" "$([ "$before" = "$after" ] && printf false || printf true)"
+      printf '{"repository":"max-insights/hamer","branch":"%s","before":"%s","after":"%s","updated":%s}\n' \
+        "$branch" "$before" "$after" "$([ "$before" = "$after" ] && printf false || printf true)"
     }
     case "$1" in
       sync)
-        sync_main
+        sync_branch "$2"
         ;;
       start)
         tag="$2"

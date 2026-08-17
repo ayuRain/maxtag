@@ -852,13 +852,20 @@ export class FileKnowledgeSourceStore implements KnowledgeSourceStore {
     const timestamp = now();
     const currentMs = Date.parse(timestamp);
     const leaseMs = Math.max(1_000, Math.min(input.leaseMs ?? 120_000, 900_000));
+    const claimable = (job: KnowledgeSourceEnrichmentJob): boolean => {
+      if (job.attempts >= job.maxAttempts) return false;
+      if (job.status === 'pending') return Date.parse(job.availableAt) <= currentMs;
+      return job.status === 'claimed' && Boolean(job.claimedAt) &&
+        Date.parse(job.claimedAt!) + leaseMs <= currentMs;
+    };
+    // Server and worker processes may both poll this queue. Avoid taking the
+    // cross-process file lock (and rewriting an unchanged file) on every poll
+    // when there is no work. A job created after this read is picked up by the
+    // next pass; candidates are re-evaluated again under the mutation lock.
+    await this.mutationQueue;
+    if (!(await this.load()).enrichments.some(claimable)) return [];
     return this.mutate((state) => state.enrichments
-      .filter((job) => {
-        if (job.attempts >= job.maxAttempts) return false;
-        if (job.status === 'pending') return Date.parse(job.availableAt) <= currentMs;
-        return job.status === 'claimed' && Boolean(job.claimedAt) &&
-          Date.parse(job.claimedAt!) + leaseMs <= currentMs;
-      })
+      .filter(claimable)
       .sort((left, right) => left.availableAt.localeCompare(right.availableAt) || left.createdAt.localeCompare(right.createdAt))
       .slice(0, Math.max(1, Math.min(input.limit ?? 4, 20)))
       .map((job) => {

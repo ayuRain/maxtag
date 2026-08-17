@@ -66,17 +66,18 @@ test('production overlay explicitly enables singleton consumers and Tunnel', asy
   assert.match(docs, /Do not simply restart the old host/u);
 });
 
-test('algorithm builder syncs only the clean hamer main branch with a GitHub App token', async () => {
+test('algorithm builder selects only reviewed clean hamer branches with a GitHub App token', async () => {
   const tool = await read('deploy/kubernetes/production/algorithm-tools-configmap.yaml');
   assert.match(tool, /maxtag-image-build sync/u);
   assert.match(tool, /GitHubAppInstallationTokenProvider/u);
   assert.match(tool, /MAXTAG_GITHUB_INSTALLATION_TOKEN/u);
   assert.match(tool, /GIT_ASKPASS/u);
   assert.match(tool, /GIT_TERMINAL_PROMPT=0/u);
-  assert.match(tool, /git fetch --no-tags origin refs\/heads\/main:refs\/remotes\/origin\/main/u);
-  assert.match(tool, /git merge --ff-only refs\/remotes\/origin\/main/u);
+  assert.match(tool, /main\|maxhandsv2-c4\.03-stable/u);
+  assert.match(tool, /git fetch --no-tags origin "refs\/heads\/\$branch:refs\/remotes\/origin\/\$branch"/u);
+  assert.match(tool, /git checkout --detach "refs\/remotes\/origin\/\$branch"/u);
   assert.match(tool, /workspace repository is not max-insights\/hamer/u);
-  assert.match(tool, /workspace must be on main before sync/u);
+  assert.match(tool, /unsupported branch/u);
   assert.match(tool, /workspace has uncommitted changes/u);
   assert.doesNotMatch(tool, /credential\.helper/u);
 });
