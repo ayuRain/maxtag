@@ -338,6 +338,16 @@ function allowedWorkspaceCommands(request: AgentRunRequest): string[] {
   ].sort();
 }
 
+function workspaceCommandGuidance(commands: string[]): string {
+  const guidance: string[] = [];
+  if (commands.includes('maxtag-image-build')) {
+    guidance.push(
+      'For maxtag-image-build: run sync [main|maxhandsv2-c4.03-stable], then start <tag> [dockerfile], and poll status <build-id> until terminal. The wrapper publishes to the project-configured organization registry and returns the image reference/digest; do not ask the user for registry credentials or substitute docker/aws/git commands.',
+    );
+  }
+  return guidance.length ? ` ${guidance.join(' ')}` : '';
+}
+
 function wireToolDefinition(
   request: AgentRunRequest,
   definition: ToolDefinition,
@@ -358,7 +368,7 @@ function wireToolDefinition(
   return {
     name: definition.name,
     title: definition.title,
-    description: `${definition.description} Allowed program names for this run: ${commands.join(', ')}. Use only these exact deployment-approved wrappers; do not substitute git, a shell, or another executable.`,
+    description: `${definition.description} Allowed program names for this run: ${commands.join(', ')}. Use only these exact deployment-approved wrappers; do not substitute git, a shell, or another executable.${workspaceCommandGuidance(commands)}`,
     grantKind: definition.grantKind,
     risk: definition.risk,
     inputSchema: {

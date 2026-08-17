@@ -79,6 +79,9 @@ test('algorithm builder selects only reviewed clean hamer branches with a GitHub
   assert.match(tool, /workspace repository is not max-insights\/hamer/u);
   assert.match(tool, /unsupported branch/u);
   assert.match(tool, /workspace has uncommitted changes/u);
+  assert.match(tool, /MAXTAG_BUILD_REGISTRY/u);
+  assert.match(tool, /aws ecr describe-images/u);
+  assert.match(tool, /d\.image=process\.argv\[2\]/u);
   assert.doesNotMatch(tool, /credential\.helper/u);
 });
 

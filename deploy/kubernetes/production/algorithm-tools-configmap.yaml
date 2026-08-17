@@ -12,6 +12,7 @@ data:
     export AWS_WEB_IDENTITY_TOKEN_FILE="${AWS_WEB_IDENTITY_TOKEN_FILE:-/var/run/secrets/eks.amazonaws.com/serviceaccount/token}"
     BUCKET="${MAXTAG_BUILD_SOURCE_BUCKET:-maxtag-build-sources-463470979853-us-west-1}"
     PROJECT="${MAXTAG_BUILD_CODEBUILD_PROJECT:-maxtag-hamer-image-build}"
+    REGISTRY="${MAXTAG_BUILD_REGISTRY:-463470979853.dkr.ecr.us-west-1.amazonaws.com/hamer}"
     usage() {
       echo "usage: maxtag-image-build sync [main|maxhandsv2-c4.03-stable] | start <tag> [dockerfile] | status <build-id>" >&2
       exit 64
@@ -104,7 +105,7 @@ data:
         trap 'rm -f "$archive"' EXIT
         git archive --format=zip -o "$archive" HEAD
         aws s3 cp "$archive" "s3://$BUCKET/$key" --only-show-errors
-        aws codebuild start-build \
+        result="$(aws codebuild start-build \
           --project-name "$PROJECT" \
           --source-location-override "$BUCKET/$key" \
           --environment-variables-override \
@@ -112,15 +113,30 @@ data:
             "name=IMAGE_TAG,value=$tag,type=PLAINTEXT" \
             "name=SOURCE_SHA,value=$sha,type=PLAINTEXT" \
           --query 'build.{id:id,status:buildStatus,sourceVersion:sourceVersion,logs:logs.deepLink}' \
-          --output json
+          --output json)"
+        node -e 'const d=JSON.parse(process.argv[1]); d.image=process.argv[2]; process.stdout.write(JSON.stringify(d)+"\n")' \
+          "$result" "$REGISTRY:$tag"
         ;;
       status)
         id="$2"
         [ -n "$id" ] || usage
         case "$id" in "$PROJECT":*) ;; *) echo "build id does not belong to $PROJECT" >&2; exit 64 ;; esac
-        aws codebuild batch-get-builds --ids "$id" \
-          --query 'builds[0].{id:id,status:buildStatus,phase:currentPhase,sourceVersion:sourceVersion,start:startTime,end:endTime,logs:logs.deepLink}' \
-          --output json
+        result="$(aws codebuild batch-get-builds --ids "$id" \
+          --query "builds[0].{id:id,status:buildStatus,phase:currentPhase,sourceVersion:sourceVersion,start:startTime,end:endTime,logs:logs.deepLink,tag:environment.environmentVariables[?name=='IMAGE_TAG']|[0].value,sourceSha:environment.environmentVariables[?name=='SOURCE_SHA']|[0].value}" \
+          --output json)"
+        status="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).status || "")' "$result")"
+        tag="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tag || "")' "$result")"
+        digest=""
+        if [ "$status" = SUCCEEDED ] && [ -n "$tag" ]; then
+          digest="$(aws ecr describe-images --repository-name hamer --image-ids "imageTag=$tag" \
+            --query 'imageDetails[0].imageDigest' --output text)"
+        fi
+        node -e '
+          const d=JSON.parse(process.argv[1]);
+          d.image=process.argv[2] + (d.tag ? `:${d.tag}` : "");
+          if (process.argv[3]) d.digest=process.argv[3];
+          process.stdout.write(JSON.stringify(d)+"\n");
+        ' "$result" "$REGISTRY" "$digest"
         ;;
       *) usage ;;
     esac

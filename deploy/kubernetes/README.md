@@ -34,7 +34,15 @@ remote commit in detached mode so local branch state cannot affect a build.
 The token is never written to Git configuration, command arguments, or the
 persistent workspace.
 Use `maxtag-image-build status <build-id>` to query progress. It never mounts a
-Docker socket or exposes AWS credentials to the agent container.
+Docker socket or exposes AWS credentials to the agent container. The build
+target is configured once for the capability package (currently the
+organization-owned `463470979853.dkr.ecr.us-west-1.amazonaws.com/hamer` ECR
+repository), so chat users only choose a tag and optional reviewed Dockerfile.
+Successful status responses include the immutable ECR digest for the final
+card. Projects may disable the extra tool-confirmation layer when this narrow
+wrapper is already the approved execution boundary; repository, branch,
+Dockerfile, IAM, and registry restrictions remain enforced by the wrapper and
+AWS roles.
 
 ## Shadow deployment
 

@@ -1510,8 +1510,62 @@ test('workspace broker isolates project paths and atomically approves exact file
   assert.equal(staleExecution.approval.error, 'workspace_write_precondition_failed');
 });
 
-test('workspace commands always require approval and recheck their allowlist', async (context) => {
+test('workspace commands follow project approval policy and recheck their allowlist', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-workspace-command-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'payments'));
+  const approvals = new FileDeliveryStore(path.join(root, 'delivery'));
+  const broker = createOpenTagToolBroker({
+    memory: new ScopedFileMemoryStore(path.join(root, 'memory')),
+    approvalStore: approvals,
+    workspaceRoot: root,
+  });
+  const request = runRequest([]);
+  request.access.grants.push({
+    id: 'shell',
+    kind: 'shell',
+    scope: 'project',
+    label: 'Workspace',
+    constraints: {
+      permissions: ['read', 'write'],
+      commands: [path.basename(process.execPath), 'maxtag-image-build'],
+    },
+  });
+  request.access.toolApprovalPolicy = { mode: 'disabled' };
+  const client = await connectedClient(context, await broker.open(request), 'workspace-command-test');
+  const command = path.basename(process.execPath);
+  const workspaceRunTool = (await client.listTools()).tools.find(
+    (tool) => tool.name === 'workspace_run',
+  );
+  assert.deepEqual(workspaceRunTool.inputSchema.properties.command.enum, [
+    command,
+    'maxtag-image-build',
+  ].sort());
+  assert.match(workspaceRunTool.description, /Allowed program names for this run:/u);
+  assert.match(workspaceRunTool.description, new RegExp(command, 'u'));
+  assert.match(workspaceRunTool.description, /do not substitute git/u);
+  assert.match(workspaceRunTool.description, /poll status <build-id> until terminal/u);
+  assert.match(workspaceRunTool.description, /project-configured organization registry/u);
+  const pending = await client.callTool({
+    name: 'workspace_run',
+    arguments: { command, args: ['-e', "console.log('approved')"] },
+  });
+  assert.equal(pending.isError, undefined);
+  const executed = JSON.parse(textResult(pending));
+  assert.equal(executed.exitCode, 0);
+  assert.match(executed.outputPreview, /approved/u);
+  assert.equal((await approvals.listToolApprovals({ status: 'pending' })).length, 0);
+
+  const denied = await client.callTool({
+    name: 'workspace_run',
+    arguments: { command: 'sh', args: ['-c', 'echo denied'] },
+  });
+  assert.equal(denied.isError, true);
+  assert.match(textResult(denied), /workspace_command_not_allowed/u);
+});
+
+test('workspace commands still require approval when the resolved project policy does', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-workspace-command-approval-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, 'payments'));
   const approvals = new FileDeliveryStore(path.join(root, 'delivery'));
@@ -1531,36 +1585,14 @@ test('workspace commands always require approval and recheck their allowlist', a
       commands: [path.basename(process.execPath)],
     },
   });
-  request.access.toolApprovalPolicy = { mode: 'disabled' };
-  const client = await connectedClient(context, await broker.open(request), 'workspace-command-test');
-  const command = path.basename(process.execPath);
-  const workspaceRunTool = (await client.listTools()).tools.find(
-    (tool) => tool.name === 'workspace_run',
-  );
-  assert.deepEqual(workspaceRunTool.inputSchema.properties.command.enum, [command]);
-  assert.match(workspaceRunTool.description, new RegExp(`Allowed program names for this run: ${command}`, 'u'));
-  assert.match(workspaceRunTool.description, /do not substitute git/u);
+  request.access.toolApprovalPolicy = { mode: 'require_approval', risks: ['write'] };
+  const client = await connectedClient(context, await broker.open(request), 'workspace-command-approval-test');
   const pending = await client.callTool({
     name: 'workspace_run',
-    arguments: { command, args: ['-e', "console.log('approved')"] },
+    arguments: { command: path.basename(process.execPath), args: ['-e', "console.log('approved')"] },
   });
   assert.match(textResult(pending), /pendingApproval/u);
-  const [approval] = await approvals.listToolApprovals({ status: 'pending' });
-  await approvals.approveToolApproval({ id: approval.id, actorId: 'operator:ada' });
-  const executed = await broker.executeApproved({
-    approvalId: approval.id,
-    request,
-    claimedBy: 'command-worker',
-  });
-  assert.equal(executed.approval.status, 'succeeded');
-  assert.equal(executed.approval.resultPreview, 'Run workspace command completed');
-
-  const denied = await client.callTool({
-    name: 'workspace_run',
-    arguments: { command: 'sh', args: ['-c', 'echo denied'] },
-  });
-  assert.equal(denied.isError, true);
-  assert.match(textResult(denied), /workspace_command_not_allowed/u);
+  assert.equal((await approvals.listToolApprovals({ status: 'pending' })).length, 1);
 });
 
 test('workspace command authorization selects the matching shell grant', async (context) => {
@@ -1599,11 +1631,12 @@ test('workspace command authorization selects the matching shell grant', async (
     command,
     'not-the-command',
   ].sort());
-  const pending = await client.callTool({
+  const executed = await client.callTool({
     name: 'workspace_run',
     arguments: { command, args: ['-e', "console.log('matched')"] },
   });
-  assert.match(textResult(pending), /pendingApproval/u);
+  assert.equal(executed.isError, undefined);
+  assert.match(textResult(executed), /matched/u);
 });
 
 test('legacy shell grants retain file writes without implicitly enabling commands', async (context) => {

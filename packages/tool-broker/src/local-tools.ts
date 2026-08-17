@@ -587,11 +587,10 @@ export function createLocalToolDefinitions(
     {
       name: 'workspace_run',
       title: 'Run workspace command',
-      description: 'Execute one allowlisted program directly in the project root without shell parsing. Commands always require one exact-argument approval.',
+      description: 'Execute one allowlisted program directly in the project root without shell parsing. The resolved project tool-approval policy decides whether a confirmation is required.',
       grantKind: 'shell',
       risk: 'write',
       provider: 'opentag:workspace',
-      approval: 'always',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
