@@ -421,6 +421,43 @@ export function createLocalToolDefinitions(
     (request: AgentRunRequest): ToolGrant => localGrant(request, 'shell', permission);
   return [
     {
+      name: 'workspace_capabilities',
+      title: 'Inspect project sandbox capabilities',
+      description: 'Describe the current project sandbox, available command programs, approval policy, and network boundary without exposing credentials or host paths.',
+      grantKind: 'shell',
+      risk: 'read',
+      provider: 'opentag:workspace',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+      },
+      available: () => true,
+      authorize: shellAuthorize('read'),
+      summarize: () => ({}),
+      async execute({ request }) {
+        await projectRoot(options, request);
+        const shellGrants = request.access.grants.filter(
+          (grant) => grant.kind === 'shell',
+        );
+        const commands = [
+          ...new Set(shellGrants.flatMap((grant) => allowedCommands(grant))),
+        ].sort();
+        return {
+          projectRoot: '.',
+          projectKey: request.project?.key,
+          permissions: {
+            read: shellGrants.some((grant) => permissionAllows(grant, 'read')),
+            write: shellGrants.some((grant) => permissionAllows(grant, 'write')),
+          },
+          commands,
+          approvalPolicy: request.access.toolApprovalPolicy || { mode: 'disabled' },
+          networkPolicy: request.access.networkPolicy,
+          note: 'Skills and wrappers are optional accelerators. These capabilities may be combined autonomously inside this project sandbox.',
+        };
+      },
+    },
+    {
       name: 'workspace_list',
       title: 'List workspace files',
       description: 'List bounded files and directories below the current project root. Symlinks are never followed.',
@@ -587,7 +624,7 @@ export function createLocalToolDefinitions(
     {
       name: 'workspace_run',
       title: 'Run workspace command',
-      description: 'Execute one allowlisted program directly in the project root without shell parsing. The resolved project tool-approval policy decides whether a confirmation is required.',
+      description: 'Execute one project-approved program directly in the isolated project root without shell parsing. Non-zero exits return bounded stdout/stderr so the agent can diagnose, repair, and retry. The resolved project tool-approval policy decides whether a confirmation is required.',
       grantKind: 'shell',
       risk: 'write',
       provider: 'opentag:workspace',
@@ -623,10 +660,24 @@ export function createLocalToolDefinitions(
           env: { PATH: process.env.PATH || '', HOME: process.env.HOME || '', LANG: process.env.LANG || 'C.UTF-8' },
           abortSignal: signal,
           timeoutMs: integerValue(input, 'timeoutMs', 120_000, 100, 600_000),
-          maxOutputBytes: outputLimit(options),
+          maxOutputBytes: Math.max(2_048, Math.floor(outputLimit(options) / 2)),
+          rejectOnNonZero: false,
         });
         const output = `${result.stdout}${result.stderr}`.replace(/\s+/gu, ' ').trim();
-        return { command: result.command, args: result.args, exitCode: result.exitCode, durationMs: result.durationMs, outputSha256: sha256(`${result.stdout}\n${result.stderr}`), outputPreview: output.slice(0, 300), stdoutTruncated: result.stdoutTruncated, stderrTruncated: result.stderrTruncated };
+        return {
+          status: result.exitCode === 0 ? 'succeeded' : 'failed',
+          command: result.command,
+          args: result.args,
+          exitCode: result.exitCode,
+          signal: result.signal,
+          durationMs: result.durationMs,
+          outputSha256: sha256(`${result.stdout}\n${result.stderr}`),
+          outputPreview: output.slice(0, 300),
+          stdout: result.stdout,
+          stderr: result.stderr,
+          stdoutTruncated: result.stdoutTruncated,
+          stderrTruncated: result.stderrTruncated,
+        };
       },
     },
     {

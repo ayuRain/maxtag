@@ -393,6 +393,7 @@ test('broker invokes only assigned enabled agents with a read-only parent subset
     'browser_fetch',
     'skills_list',
     'skills_load',
+    'workspace_capabilities',
     'workspace_list',
     'workspace_read',
     'workspace_search',

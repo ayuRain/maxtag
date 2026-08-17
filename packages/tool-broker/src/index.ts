@@ -338,16 +338,6 @@ function allowedWorkspaceCommands(request: AgentRunRequest): string[] {
   ].sort();
 }
 
-function workspaceCommandGuidance(commands: string[]): string {
-  const guidance: string[] = [];
-  if (commands.includes('maxtag-image-build')) {
-    guidance.push(
-      'For maxtag-image-build: run sync [main|maxhandsv2-c4.03-stable], then start <tag> [dockerfile], and poll status <build-id> until terminal. The wrapper publishes to the project-configured organization registry and returns the image reference/digest; do not ask the user for registry credentials or substitute docker/aws/git commands.',
-    );
-  }
-  return guidance.length ? ` ${guidance.join(' ')}` : '';
-}
-
 function wireToolDefinition(
   request: AgentRunRequest,
   definition: ToolDefinition,
@@ -368,7 +358,7 @@ function wireToolDefinition(
   return {
     name: definition.name,
     title: definition.title,
-    description: `${definition.description} Allowed program names for this run: ${commands.join(', ')}. Use only these exact deployment-approved wrappers; do not substitute git, a shell, or another executable.${workspaceCommandGuidance(commands)}`,
+    description: `${definition.description} Allowed program names for this run: ${commands.join(', ')}. Use only these exact project-approved executables. Combine them as needed to complete and verify the task; a wrapper is an optional accelerator rather than a required workflow.`,
     grantKind: definition.grantKind,
     risk: definition.risk,
     inputSchema: {
@@ -805,6 +795,17 @@ async function emitToolEvent(
 function errorText(error: unknown): string {
   const value = error instanceof Error ? error.message : String(error);
   return value.replace(/[\r\n]+/gu, ' ').slice(0, 500) || 'tool_call_failed';
+}
+
+function reportedExecutionFailure(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as JsonObject;
+  if (record.status !== 'failed') return undefined;
+  const exitCode = typeof record.exitCode === 'number' ? record.exitCode : 'unknown';
+  const preview = typeof record.outputPreview === 'string'
+    ? record.outputPreview.replace(/[\r\n]+/gu, ' ').slice(0, 300)
+    : '';
+  return `workspace_command_exited_${exitCode}${preview ? `:${preview}` : ''}`;
 }
 
 function abortPromise(signal: AbortSignal): Promise<never> {
@@ -2934,6 +2935,8 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
         ),
         abortPromise(callAbort.signal),
       ]);
+      const reportedFailure = reportedExecutionFailure(value);
+      if (reportedFailure) throw new Error(reportedFailure);
       const rendered = jsonText(
         value,
         Math.max(4096, this.options.maxResultBytes ?? 128 * 1024),
@@ -3185,6 +3188,7 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
         }
         const result = jsonText(value, maxResultBytes);
         const resultUrl = toolResultUrl(definition, input, value);
+        const reportedFailure = reportedExecutionFailure(value);
         await request.onEvent?.({
           type: 'tool_result',
           call: {
@@ -3205,16 +3209,20 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
             resultUrl,
             ...credentialAudit(request, credentialIdentity),
             arguments: definition.summarize(input),
-            status: 'succeeded',
+            status: reportedFailure ? 'failed' : 'succeeded',
             durationMs: Date.now() - startedAt,
-            resultPreview: definition.provider
-              ? `${definition.title} completed`
-              : result.text.replace(/\s+/gu, ' ').slice(0, 300),
+            resultPreview: reportedFailure
+              ? undefined
+              : definition.provider
+                ? `${definition.title} completed`
+                : result.text.replace(/\s+/gu, ' ').slice(0, 300),
+            error: reportedFailure,
           },
         });
         return {
           content: [{ type: 'text', text: result.text }],
           structuredContent: result.structuredContent,
+          ...(reportedFailure ? { isError: true } : {}),
         };
       } catch (error) {
         const message = errorText(error);

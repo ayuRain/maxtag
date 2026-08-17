@@ -23,6 +23,7 @@ import {
   createCliEnvironment,
   isCliContextOverflow,
   memoryCandidateInstructions,
+  resolveProjectWorkingDirectory,
   runCliCommand,
 } from '@opentag/executor-cli';
 
@@ -165,6 +166,49 @@ test('CLI executor prompt exposes the authoritative client route identity', () =
   assert.match(prompt, /Topic ID: omt_topic/u);
   assert.match(prompt, /Thread visibility: private/u);
   assert.match(prompt, /Do not infer route IDs from actor IDs/u);
+});
+
+test('agent prompt owns outcomes and recovers inside the granted project sandbox', () => {
+  const input = request();
+  input.value.access.grants = [{
+    id: 'shell',
+    kind: 'shell',
+    scope: 'project',
+    label: 'Project sandbox',
+    constraints: { permissions: ['read', 'write'], commands: ['git', 'npm'] },
+  }];
+
+  const prompt = buildAgentSystemPrompt(input.value);
+
+  assert.match(prompt, /general-purpose project agent, not a fixed workflow runner/u);
+  assert.match(prompt, /Skills, wrappers, and workflows are optional accelerators/u);
+  assert.match(prompt, /inspect its stdout\/stderr/u);
+  assert.match(prompt, /make a safe in-sandbox correction, and retry/u);
+  assert.match(prompt, /without asking for confirmation/u);
+  assert.match(prompt, /explicit approval boundary/u);
+});
+
+test('project routes receive distinct managed directories instead of sharing the workspace root', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-project-root-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const first = request();
+  const second = request();
+  second.value.project = {
+    ...second.value.project,
+    id: 'acme:analytics',
+    key: 'analytics',
+    name: 'Analytics',
+  };
+
+  const firstDirectory = await resolveProjectWorkingDirectory(root, first.value);
+  const secondDirectory = await resolveProjectWorkingDirectory(root, second.value);
+
+  assert.equal(firstDirectory, path.join(root, 'payments'));
+  assert.equal(secondDirectory, path.join(root, 'analytics'));
+  assert.notEqual(firstDirectory, root);
+  assert.notEqual(secondDirectory, root);
+  assert.equal((await fs.stat(firstDirectory)).isDirectory(), true);
+  assert.equal((await fs.stat(secondDirectory)).isDirectory(), true);
 });
 
 test('Claude native tools stay read-only while brokered tools carry route grants', () => {

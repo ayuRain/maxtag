@@ -21,8 +21,11 @@ The image contains pinned Codex and Lark CLIs plus `git`, `gh`, `aws`,
 contain a Docker daemon or mount a node Docker socket. Image builds should run
 as isolated BuildKit/Kaniko Jobs with their own policy and resource limits.
 
-The production overlay also mounts `maxtag-image-build`, a narrow submission
-client for the isolated `maxtag-hamer-image-build` CodeBuild project. It only
+The production overlay currently mounts `maxtag-image-build`, an optional,
+temporary accelerator for the first Hamer acceptance case. It is not the
+MaxTag execution model: the agent should use the generic Project sandbox to
+inspect failures and repair repository state, and may choose this wrapper only
+for the final isolated image submission. The client only
 accepts the `max-insights/hamer` workspace, three reviewed Dockerfile paths,
 and valid OCI image tags. The command archives a clean Git commit, uploads it under
 the dedicated S3 `hamer/` prefix, starts CodeBuild, and returns a build ID.

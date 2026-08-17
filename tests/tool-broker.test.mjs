@@ -1427,6 +1427,7 @@ test('workspace broker isolates project paths and atomically approves exact file
   const client = await connectedClient(context, await broker.open(request));
   const names = (await client.listTools()).tools.map((tool) => tool.name);
   assert.ok(names.includes('workspace_list'));
+  assert.ok(names.includes('workspace_capabilities'));
   assert.ok(names.includes('workspace_read'));
   assert.ok(names.includes('workspace_search'));
   assert.ok(names.includes('workspace_write'));
@@ -1543,9 +1544,18 @@ test('workspace commands follow project approval policy and recheck their allowl
   ].sort());
   assert.match(workspaceRunTool.description, /Allowed program names for this run:/u);
   assert.match(workspaceRunTool.description, new RegExp(command, 'u'));
-  assert.match(workspaceRunTool.description, /do not substitute git/u);
-  assert.match(workspaceRunTool.description, /poll status <build-id> until terminal/u);
-  assert.match(workspaceRunTool.description, /project-configured organization registry/u);
+  assert.match(workspaceRunTool.description, /Combine them as needed/u);
+  assert.match(workspaceRunTool.description, /optional accelerator rather than a required workflow/u);
+  assert.doesNotMatch(workspaceRunTool.description, /poll status <build-id>/u);
+  const capabilities = JSON.parse(textResult(await client.callTool({
+    name: 'workspace_capabilities',
+    arguments: {},
+  })));
+  assert.equal(capabilities.projectRoot, '.');
+  assert.equal(capabilities.projectKey, 'payments');
+  assert.deepEqual(capabilities.permissions, { read: true, write: true });
+  assert.deepEqual(capabilities.commands, [command, 'maxtag-image-build'].sort());
+  assert.equal(capabilities.approvalPolicy.mode, 'disabled');
   const pending = await client.callTool({
     name: 'workspace_run',
     arguments: { command, args: ['-e', "console.log('approved')"] },
@@ -1553,7 +1563,10 @@ test('workspace commands follow project approval policy and recheck their allowl
   assert.equal(pending.isError, undefined);
   const executed = JSON.parse(textResult(pending));
   assert.equal(executed.exitCode, 0);
+  assert.equal(executed.status, 'succeeded');
   assert.match(executed.outputPreview, /approved/u);
+  assert.match(executed.stdout, /approved/u);
+  assert.equal(executed.stderr, '');
   assert.equal((await approvals.listToolApprovals({ status: 'pending' })).length, 0);
 
   const denied = await client.callTool({
@@ -1562,6 +1575,19 @@ test('workspace commands follow project approval policy and recheck their allowl
   });
   assert.equal(denied.isError, true);
   assert.match(textResult(denied), /workspace_command_not_allowed/u);
+
+  const failedResult = await client.callTool({
+    name: 'workspace_run',
+    arguments: {
+      command,
+      args: ['-e', "console.error('actionable failure details'); process.exit(17)"],
+    },
+  });
+  assert.equal(failedResult.isError, true);
+  const failedExecution = JSON.parse(textResult(failedResult));
+  assert.equal(failedExecution.status, 'failed');
+  assert.equal(failedExecution.exitCode, 17);
+  assert.match(failedExecution.stderr, /actionable failure details/u);
 });
 
 test('workspace commands still require approval when the resolved project policy does', async (context) => {
