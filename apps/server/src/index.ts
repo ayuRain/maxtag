@@ -17455,33 +17455,39 @@ server.listen(port, host, () => {
   console.log(
     `MaxTag operator auth configured=${operatorAuth.configured} principals=${operatorAuth.principalCount}`,
   );
-  startupRecoveryPass = deliveryStore
-    .recoverStaleAgentRuns({
-      olderThanMs: agentWorkerStaleMs,
-      reason: 'server_startup_recovered_stale_run',
-    })
-    .then(async (result) => {
-      if (result.requeued > 0 || result.cancelled > 0) {
-        console.log(
-          `MaxTag recovered agent runs requeued=${result.requeued} cancelled=${result.cancelled}`,
-        );
-      }
-      const recoveredTools = await deliveryStore.recoverStaleToolApprovals({
+  // A dedicated worker owns run recovery when the server is in manual worker
+  // mode. Replaying the same full delivery-state mutation in the HTTP process
+  // can starve health checks while the external worker is recovering a large
+  // run transcript from the shared SQLite document.
+  if (agentWorkerEnabled) {
+    startupRecoveryPass = deliveryStore
+      .recoverStaleAgentRuns({
         olderThanMs: agentWorkerStaleMs,
+        reason: 'server_startup_recovered_stale_run',
+      })
+      .then(async (result) => {
+        if (result.requeued > 0 || result.cancelled > 0) {
+          console.log(
+            `MaxTag recovered agent runs requeued=${result.requeued} cancelled=${result.cancelled}`,
+          );
+        }
+        const recoveredTools = await deliveryStore.recoverStaleToolApprovals({
+          olderThanMs: agentWorkerStaleMs,
+        });
+        if (recoveredTools.failed > 0) {
+          console.warn(
+            `MaxTag marked ${recoveredTools.failed} stale tool approval execution(s) as outcome unknown`,
+          );
+        }
+        if (!serverShuttingDown) scheduleAgentWorkerPass();
+      })
+      .catch((error) => {
+        console.error('MaxTag failed to recover stale agent runs', error);
+      })
+      .finally(() => {
+        startupRecoveryPass = undefined;
       });
-      if (recoveredTools.failed > 0) {
-        console.warn(
-          `MaxTag marked ${recoveredTools.failed} stale tool approval execution(s) as outcome unknown`,
-        );
-      }
-      if (!serverShuttingDown) scheduleAgentWorkerPass();
-    })
-    .catch((error) => {
-      console.error('MaxTag failed to recover stale agent runs', error);
-    })
-    .finally(() => {
-      startupRecoveryPass = undefined;
-    });
+  }
   if (agentWorkerEnabled) {
     agentWorkerInterval = setInterval(() => {
       scheduleAgentWorkerPass();
