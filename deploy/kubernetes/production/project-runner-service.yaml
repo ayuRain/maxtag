@@ -4,12 +4,12 @@ metadata:
   name: maxtag-project-runner
   namespace: maxtag
   labels:
-    app.kubernetes.io/name: maxtag
+    app.kubernetes.io/name: maxtag-project-runner
     app.kubernetes.io/component: project-runner
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: maxtag
+    app.kubernetes.io/name: maxtag-project-runner
     app.kubernetes.io/component: project-runner
   ports:
     - name: http

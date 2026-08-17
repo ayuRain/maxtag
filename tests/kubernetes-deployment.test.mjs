@@ -76,6 +76,7 @@ test('production project commands run outside the credential-bearing control pla
     read('deploy/kubernetes/README.md'),
   ]);
   assert.match(deployment, /^kind: Deployment$/mu);
+  assert.match(deployment, /app\.kubernetes\.io\/name: maxtag-project-runner/u);
   assert.match(deployment, /args: \["project-runner"\]/u);
   assert.match(deployment, /automountServiceAccountToken: false/u);
   assert.match(deployment, /secretKeyRef:\n\s+name: maxtag-project-runner-auth/u);
@@ -84,6 +85,7 @@ test('production project commands run outside the credential-bearing control pla
   assert.doesNotMatch(deployment, /aws,kubectl|docker\.sock|privileged/iu);
   assert.match(account, /automountServiceAccountToken: false/u);
   assert.match(policy, /component: project-runner/u);
+  assert.match(policy, /name: maxtag-project-runner/u);
   assert.match(policy, /component: control-plane/u);
   assert.match(policy, /egress: \[\]/u);
   assert.match(patch, /OPENTAG_PROJECT_RUNNER_URL/u);
@@ -141,4 +143,10 @@ test('state export refuses live writers and restore requires a scaled-down Pod',
   assert.match(restoreScript, /must be scaled to zero/u);
   assert.match(restoreScript, /persistentVolumeClaim/u);
   assert.match(restoreScript, /chown -R 1000:1000/u);
+});
+
+test('Kubernetes verification selects only the control-plane Pod', async () => {
+  const verify = await read('deploy/kubernetes/scripts/verify.sh');
+  assert.match(verify, /app\.kubernetes\.io\/component=control-plane/u);
+  assert.doesNotMatch(verify, /exec statefulset\/maxtag/u);
 });

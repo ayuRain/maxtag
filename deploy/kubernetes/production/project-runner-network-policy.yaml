@@ -6,7 +6,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: maxtag
+      app.kubernetes.io/name: maxtag-project-runner
       app.kubernetes.io/component: project-runner
   policyTypes: [Ingress, Egress]
   ingress:
