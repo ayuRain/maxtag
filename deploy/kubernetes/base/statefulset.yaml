@@ -16,6 +16,8 @@ spec:
         app.kubernetes.io/name: maxtag
     spec:
       serviceAccountName: maxtag
+      imagePullSecrets:
+        - name: maxtag-registry
       terminationGracePeriodSeconds: 60
       securityContext:
         fsGroup: 1000

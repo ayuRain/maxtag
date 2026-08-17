@@ -21,6 +21,8 @@ spec:
         app.kubernetes.io/component: project-runner
     spec:
       serviceAccountName: maxtag-project-runner
+      imagePullSecrets:
+        - name: maxtag-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       affinity:

@@ -78,6 +78,9 @@ Create the runtime secret from the protected host environment file. The helper
 uses a pipe and never writes the rendered Secret to disk:
 
 ```bash
+kubectl -n maxtag create secret generic maxtag-registry \
+  --from-file=.dockerconfigjson=/path/to/protected/docker-config.json \
+  --type=kubernetes.io/dockerconfigjson
 deploy/kubernetes/scripts/prepare-secrets.sh maxtag /etc/opentag/opentag.env
 kubectl apply -k deploy/kubernetes/base
 kubectl -n maxtag set image statefulset/maxtag \

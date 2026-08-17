@@ -28,6 +28,7 @@ test('Kubernetes base is a single-PVC shadow deployment', async () => {
     assert.match(statefulSet, new RegExp(`name: ${name}`));
   }
   assert.match(statefulSet, /claimName: maxtag-state/u);
+  assert.match(statefulSet, /imagePullSecrets:\n\s+- name: maxtag-registry/u);
   assert.match(statefulSet, /readOnlyRootFilesystem: true/u);
   assert.match(statefulSet, /allowPrivilegeEscalation: false/u);
   assert.match(statefulSet, /drop: \["ALL"\]/u);
@@ -80,6 +81,7 @@ test('production project commands run outside the credential-bearing control pla
   assert.match(deployment, /app\.kubernetes\.io\/name: maxtag-project-runner/u);
   assert.match(deployment, /args: \["project-runner"\]/u);
   assert.match(deployment, /automountServiceAccountToken: false/u);
+  assert.match(deployment, /imagePullSecrets:\n\s+- name: maxtag-registry/u);
   assert.match(deployment, /secretKeyRef:\n\s+name: maxtag-project-runner-auth/u);
   assert.match(deployment, /subPath: workspaces/u);
   assert.match(deployment, /OPENTAG_PROJECT_RUNNER_COMMANDS[\s\S]*value: "\*"/u);
