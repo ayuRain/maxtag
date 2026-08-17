@@ -26,9 +26,10 @@ client for the isolated `maxtag-hamer-image-build` CodeBuild project. It only
 accepts the `max-insights/hamer` workspace, three reviewed Dockerfile paths,
 and valid OCI image tags. The command archives a clean Git commit, uploads it under
 the dedicated S3 `hamer/` prefix, starts CodeBuild, and returns a build ID.
-Run `maxtag-image-build sync` first to select the clean remote `main` commit, or
-`maxtag-image-build sync maxhandsv2-c4.03-stable` for the reviewed Maxflow
-release line, using a short-lived GitHub App installation token. The sync only
+Run `maxtag-image-build sync` first to select the clean remote
+`maxhandsv2-c4.03-stable` commit, the reviewed Maxflow release line. Use
+`maxtag-image-build sync main` only when the caller explicitly requests the
+moving `main` branch. Both forms use a short-lived GitHub App installation token. The sync only
 accepts those two branches and `max-insights/hamer`; it checks out the exact
 remote commit in detached mode so local branch state cannot affect a build.
 The token is never written to Git configuration, command arguments, or the

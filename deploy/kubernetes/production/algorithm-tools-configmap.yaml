@@ -47,7 +47,9 @@ data:
       '
     }
     sync_branch() {
-      branch="${1:-main}"
+      # The reviewed Maxflow release line is the safe default. The moving main
+      # branch remains available only when the caller explicitly requests it.
+      branch="${1:-maxhandsv2-c4.03-stable}"
       case "$branch" in
         main|maxhandsv2-c4.03-stable) ;;
         *) echo "unsupported branch" >&2; exit 64 ;;
