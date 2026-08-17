@@ -1534,6 +1534,12 @@ test('workspace commands always require approval and recheck their allowlist', a
   request.access.toolApprovalPolicy = { mode: 'disabled' };
   const client = await connectedClient(context, await broker.open(request), 'workspace-command-test');
   const command = path.basename(process.execPath);
+  const workspaceRunTool = (await client.listTools()).tools.find(
+    (tool) => tool.name === 'workspace_run',
+  );
+  assert.deepEqual(workspaceRunTool.inputSchema.properties.command.enum, [command]);
+  assert.match(workspaceRunTool.description, new RegExp(`Allowed program names for this run: ${command}`, 'u'));
+  assert.match(workspaceRunTool.description, /do not substitute git/u);
   const pending = await client.callTool({
     name: 'workspace_run',
     arguments: { command, args: ['-e', "console.log('approved')"] },
@@ -1555,6 +1561,49 @@ test('workspace commands always require approval and recheck their allowlist', a
   });
   assert.equal(denied.isError, true);
   assert.match(textResult(denied), /workspace_command_not_allowed/u);
+});
+
+test('workspace command authorization selects the matching shell grant', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-workspace-command-grants-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'payments'));
+  const approvals = new FileDeliveryStore(path.join(root, 'delivery'));
+  const broker = createOpenTagToolBroker({
+    memory: new ScopedFileMemoryStore(path.join(root, 'memory')),
+    approvalStore: approvals,
+    workspaceRoot: root,
+  });
+  const request = runRequest([]);
+  request.access.grants.push(
+    {
+      id: 'shell-first',
+      kind: 'shell',
+      scope: 'project',
+      label: 'First wrapper',
+      constraints: { permissions: ['read', 'write'], commands: ['not-the-command'] },
+    },
+    {
+      id: 'shell-second',
+      kind: 'shell',
+      scope: 'project',
+      label: 'Matching wrapper',
+      constraints: { permissions: ['read', 'write'], commands: [path.basename(process.execPath)] },
+    },
+  );
+  const client = await connectedClient(context, await broker.open(request), 'workspace-command-grants-test');
+  const command = path.basename(process.execPath);
+  const workspaceRunTool = (await client.listTools()).tools.find(
+    (tool) => tool.name === 'workspace_run',
+  );
+  assert.deepEqual(workspaceRunTool.inputSchema.properties.command.enum, [
+    command,
+    'not-the-command',
+  ].sort());
+  const pending = await client.callTool({
+    name: 'workspace_run',
+    arguments: { command, args: ['-e', "console.log('matched')"] },
+  });
+  assert.match(textResult(pending), /pendingApproval/u);
 });
 
 test('legacy shell grants retain file writes without implicitly enabling commands', async (context) => {

@@ -316,6 +316,64 @@ function permissionAllows(grant: ToolGrant, permission: 'read' | 'write'): boole
   return value.some((item) => item === permission);
 }
 
+function allowedWorkspaceCommands(request: AgentRunRequest): string[] {
+  return [
+    ...new Set(
+      request.access.grants.flatMap((grant) => {
+        if (grant.kind !== 'shell' || !permissionAllows(grant, 'write')) return [];
+        const configured = grant.constraints?.commands;
+        if (!Array.isArray(configured)) return [];
+        return configured
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.trim())
+          .filter(
+            (value) =>
+              Boolean(value) &&
+              value !== '*' &&
+              !value.includes('/') &&
+              !value.includes('\\'),
+          );
+      }),
+    ),
+  ].sort();
+}
+
+function wireToolDefinition(
+  request: AgentRunRequest,
+  definition: ToolDefinition,
+): WireToolDefinition {
+  if (definition.name !== 'workspace_run') {
+    return {
+      name: definition.name,
+      title: definition.title,
+      description: definition.description,
+      grantKind: definition.grantKind,
+      risk: definition.risk,
+      inputSchema: definition.inputSchema,
+    };
+  }
+  const commands = allowedWorkspaceCommands(request);
+  const properties = objectValue(definition.inputSchema.properties);
+  const commandSchema = objectValue(properties.command);
+  return {
+    name: definition.name,
+    title: definition.title,
+    description: `${definition.description} Allowed program names for this run: ${commands.join(', ')}. Use only these exact deployment-approved wrappers; do not substitute git, a shell, or another executable.`,
+    grantKind: definition.grantKind,
+    risk: definition.risk,
+    inputSchema: {
+      ...definition.inputSchema,
+      properties: {
+        ...properties,
+        command: {
+          ...commandSchema,
+          enum: commands,
+        },
+      },
+    },
+  };
+}
+
 function readOnlyGrant(grant: ToolGrant): ToolGrant {
   return {
     ...grant,
@@ -2963,14 +3021,9 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
     let callCount = 0;
     let closed = false;
 
-    const wireTools: WireToolDefinition[] = definitions.map((definition) => ({
-      name: definition.name,
-      title: definition.title,
-      description: definition.description,
-      grantKind: definition.grantKind,
-      risk: definition.risk,
-      inputSchema: definition.inputSchema,
-    }));
+    const wireTools: WireToolDefinition[] = definitions.map((definition) =>
+      wireToolDefinition(request, definition),
+    );
 
     const invoke = async (body: JsonObject): Promise<WireToolResult> => {
       const name = stringValue(body, 'name');

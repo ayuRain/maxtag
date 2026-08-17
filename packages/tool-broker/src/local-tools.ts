@@ -323,6 +323,20 @@ function commandAllowed(grant: ToolGrant, command: string): boolean {
   return allowedCommands(grant).includes(command);
 }
 
+function workspaceCommandGrant(
+  request: AgentRunRequest,
+  command: string,
+): ToolGrant {
+  const grant = request.access.grants.find(
+    (candidate) =>
+      candidate.kind === 'shell' &&
+      permissionAllows(candidate, 'write') &&
+      commandAllowed(candidate, command),
+  );
+  if (!grant) throw new ToolDeniedError('workspace_command_not_allowed');
+  return grant;
+}
+
 function networkHostAllowed(request: AgentRunRequest, hostname: string): boolean {
   const host = hostname.toLocaleLowerCase().replace(/\.$/u, '');
   if (
@@ -597,11 +611,7 @@ export function createLocalToolDefinitions(
             allowedCommands(grant).length > 0,
         ),
       authorize(request, input) {
-        const grant = localGrant(request, 'shell', 'write');
-        if (!commandAllowed(grant, stringValue(input, 'command'))) {
-          throw new ToolDeniedError('workspace_command_not_allowed');
-        }
-        return grant;
+        return workspaceCommandGrant(request, stringValue(input, 'command'));
       },
       summarize: (input) => ({ command: stringValue(input, 'command'), args: stringArray(input, 'args'), timeoutMs: integerValue(input, 'timeoutMs', 120_000, 100, 600_000) }),
       async execute({ request, signal }, input) {
