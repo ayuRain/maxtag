@@ -77,6 +77,16 @@ test('content extraction rejects binary text, unsupported media, and malformed b
   assert.throws(() => decodeKnowledgeContentBase64('not base64'), /knowledge_extraction_base64_invalid/u);
 });
 
+test('empty refresh polling does not create a cross-process lock', async (context) => {
+  const root = await temporary(context);
+  const refreshes = new FileKnowledgeSourceRefreshStore(root);
+  assert.deepEqual(await refreshes.claim({ workerId: 'worker-a' }), []);
+  await assert.rejects(
+    fs.stat(path.join(root, 'knowledge-source-refresh-jobs.json.lock')),
+    (error) => error?.code === 'ENOENT',
+  );
+});
+
 test('durable refresh updates once, deduplicates active jobs, and uses conditional requests', async (context) => {
   const root = await temporary(context);
   const sources = new FileKnowledgeSourceStore(root);

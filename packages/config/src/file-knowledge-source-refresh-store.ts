@@ -409,6 +409,18 @@ export class FileKnowledgeSourceRefreshStore {
     const at = timestamp();
     const currentMs = Date.parse(at);
     const leaseMs = Math.max(1_000, Math.min(input.leaseMs ?? 120_000, 900_000));
+    const dueOrExpired = (job: KnowledgeSourceRefreshJob): boolean => {
+      if (job.status === 'pending') {
+        return job.attempts < job.maxAttempts && Date.parse(job.availableAt) <= currentMs;
+      }
+      return job.status === 'claimed' && Boolean(job.claimedAt) &&
+        Date.parse(job.claimedAt!) + leaseMs <= currentMs;
+    };
+    // Avoid contending on and rewriting the shared file for empty polling
+    // passes. A job added after this read is intentionally picked up on the
+    // next pass and every candidate is checked again under the mutation lock.
+    await this.mutationQueue;
+    if (!(await this.load()).jobs.some(dueOrExpired)) return [];
     return this.mutate((state) => {
       for (const job of state.jobs) {
         const lostLease = job.status === 'claimed' && Boolean(job.claimedAt) &&

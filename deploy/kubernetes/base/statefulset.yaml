@@ -27,7 +27,10 @@ spec:
           image: busybox:1.36.1
           command: ["sh", "-ec"]
           args:
-            - mkdir -p /mnt/state /mnt/workspaces && chown 1000:1000 /mnt/state /mnt/workspaces
+            - >-
+              mkdir -p /mnt/state /mnt/workspaces &&
+              rm -f /mnt/state/*.lock &&
+              chown 1000:1000 /mnt/state /mnt/workspaces
           securityContext:
             runAsUser: 0
             allowPrivilegeEscalation: false
@@ -51,6 +54,8 @@ spec:
             # Disabling the duplicate server poll avoids needless cross-process
             # writes to the shared file-backed knowledge queue.
             - name: OPENTAG_KNOWLEDGE_ENRICHMENT_ENABLED
+              value: "false"
+            - name: OPENTAG_KNOWLEDGE_REFRESH_ENABLED
               value: "false"
           ports:
             - name: http
