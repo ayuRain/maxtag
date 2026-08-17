@@ -146,7 +146,14 @@ test('state export refuses live writers and restore requires a scaled-down Pod',
 });
 
 test('Kubernetes verification selects only the control-plane Pod', async () => {
-  const verify = await read('deploy/kubernetes/scripts/verify.sh');
+  const [verify, runnerVerify] = await Promise.all([
+    read('deploy/kubernetes/scripts/verify.sh'),
+    read('deploy/kubernetes/scripts/verify-project-runner.sh'),
+  ]);
   assert.match(verify, /app\.kubernetes\.io\/component=control-plane/u);
   assert.doesNotMatch(verify, /exec statefulset\/maxtag/u);
+  assert.match(runnerVerify, /project-runner-ok/u);
+  assert.match(runnerVerify, /api\.github\.com/u);
+  assert.match(runnerVerify, /unexpected direct internet egress/u);
+  assert.match(runnerVerify, /maxtag-github-app\/private-key\.pem/u);
 });

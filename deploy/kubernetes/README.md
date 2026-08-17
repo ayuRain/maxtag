@@ -39,6 +39,22 @@ This enables local inspect/edit/test/rebase work without exposing `aws`,
 registry publishing, and cloud operations remain brokered boundary operations;
 do not solve them by mounting control-plane credentials into this Pod.
 
+`NetworkPolicy` resources are enforced by the cluster CNI, not Kubernetes
+itself. On EKS, enable Amazon VPC CNI network-policy support in the add-on/IaC
+source of truth (`enableNetworkPolicy: true`) and ensure the `aws-node`
+node-agent runs with `--enable-network-policy=true`. Merely applying
+`project-runner-network-policy.yaml` is not sufficient. Before granting any
+Project command, prove both authenticated execution and isolation:
+
+```bash
+deploy/kubernetes/scripts/verify-project-runner.sh maxtag
+```
+
+The check fails if the runner inherits Kubernetes, GitHub App, AWS, or Lark
+credentials, or if it can reach `api.github.com` directly. Keep the add-on
+setting in Terraform/Helm rather than relying on an ad-hoc live patch that a
+future reconciliation could overwrite.
+
 ## Build
 
 ```bash
