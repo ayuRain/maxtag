@@ -1621,6 +1621,61 @@ test('workspace commands still require approval when the resolved project policy
   assert.equal((await approvals.listToolApprovals({ status: 'pending' })).length, 1);
 });
 
+test('workspace commands use the configured isolated project runner backend', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-workspace-remote-runner-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'payments'));
+  const calls = [];
+  const broker = createOpenTagToolBroker({
+    memory: new ScopedFileMemoryStore(path.join(root, 'memory')),
+    workspaceRoot: root,
+    projectRunner: {
+      async execute(input) {
+        calls.push(input);
+        return {
+          requestId: 'runner-request-1',
+          command: input.command,
+          args: input.args,
+          cwd: '.',
+          exitCode: 0,
+          signal: null,
+          stdout: 'remote runner ok\n',
+          stderr: '',
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 3,
+        };
+      },
+    },
+  });
+  const request = runRequest([]);
+  request.access.grants.push({
+    id: 'shell',
+    kind: 'shell',
+    scope: 'project',
+    label: 'Workspace',
+    constraints: { permissions: ['read', 'write'], commands: ['node'] },
+  });
+  request.access.toolApprovalPolicy = { mode: 'disabled' };
+  const client = await connectedClient(context, await broker.open(request), 'remote-project-runner-test');
+  const capabilities = JSON.parse(textResult(await client.callTool({
+    name: 'workspace_capabilities',
+    arguments: {},
+  })));
+  assert.equal(capabilities.executionBackend, 'isolated-project-runner');
+  const result = JSON.parse(textResult(await client.callTool({
+    name: 'workspace_run',
+    arguments: { command: 'node', args: ['--version'], timeoutMs: 4_000 },
+  })));
+  assert.equal(result.status, 'succeeded');
+  assert.match(result.stdout, /remote runner ok/u);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].projectKey, 'payments');
+  assert.equal(calls[0].command, 'node');
+  assert.deepEqual(calls[0].args, ['--version']);
+  assert.equal(calls[0].timeoutMs, 4_000);
+});
+
 test('workspace command authorization selects the matching shell grant', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-workspace-command-grants-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));

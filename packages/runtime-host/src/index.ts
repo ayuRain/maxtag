@@ -95,6 +95,7 @@ import {
   externalMcpRegistryFromJson,
   type OpenTagToolBroker,
 } from '@opentag/tool-broker';
+import { createHttpProjectRunner } from '@opentag/project-runner';
 import {
   WorkflowCoordinatorService,
   type WorkflowCoordinatorTickResult,
@@ -323,6 +324,9 @@ export interface RuntimeHostToolBrokerConfig {
   maxCallsPerRun?: number;
   callTimeoutMs?: number;
   approvalTtlMs?: number;
+  projectRunnerUrl?: string;
+  projectRunnerToken?: string;
+  localBoundaryCommands?: string[];
 }
 
 export interface RuntimeHostConfig {
@@ -751,6 +755,14 @@ export class OpenTagWorkerHost {
       memory: this.memoryStore,
       approvalStore: this.deliveryStore,
       workspaceRoot: config.executors?.workspaceRoot,
+      projectRunner:
+        config.toolBroker?.projectRunnerUrl && config.toolBroker?.projectRunnerToken
+          ? createHttpProjectRunner({
+              baseUrl: config.toolBroker.projectRunnerUrl,
+              token: config.toolBroker.projectRunnerToken,
+            })
+          : undefined,
+      localBoundaryCommands: config.toolBroker?.localBoundaryCommands,
       routines: this.routineStore,
       github: {
         token: config.toolBroker?.githubToken,

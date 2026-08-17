@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import { resolveHostedReportByToken } from '@opentag/executor-cli';
+import { createHttpProjectRunner } from '@opentag/project-runner';
 import {
   memoryScopeGranted,
   memoryExpiryForAccess,
@@ -854,6 +855,17 @@ const toolBroker = createOpenTagToolBroker({
   memory: memoryStore,
   approvalStore: deliveryStore,
   workspaceRoot: executorWorkspaceRoot,
+  projectRunner:
+    process.env.OPENTAG_PROJECT_RUNNER_URL && process.env.OPENTAG_PROJECT_RUNNER_TOKEN
+      ? createHttpProjectRunner({
+          baseUrl: process.env.OPENTAG_PROJECT_RUNNER_URL,
+          token: process.env.OPENTAG_PROJECT_RUNNER_TOKEN,
+        })
+      : undefined,
+  localBoundaryCommands: (process.env.OPENTAG_LOCAL_BOUNDARY_COMMANDS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
   routines: routineStore,
   github: {
     token: githubToken,

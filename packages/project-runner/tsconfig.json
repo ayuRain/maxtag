@@ -6,10 +6,7 @@
     "outDir": "dist"
   },
   "references": [
-    { "path": "../core" },
-    { "path": "../executor-cli" },
-    { "path": "../project-runner" },
-    { "path": "../routines" }
+    { "path": "../executor-cli" }
   ],
   "include": ["src/**/*.ts"]
 }

@@ -16,6 +16,7 @@
     { "path": "../../packages/platform-github" },
     { "path": "../../packages/platform-lark" },
     { "path": "../../packages/platform-slack" },
+    { "path": "../../packages/project-runner" },
     { "path": "../../packages/platform-telegram" },
     { "path": "../../packages/routines" },
     { "path": "../../packages/runtime-host" },

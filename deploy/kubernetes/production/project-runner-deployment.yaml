@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: maxtag-project-runner
+  namespace: maxtag
+  labels:
+    app.kubernetes.io/name: maxtag
+    app.kubernetes.io/component: project-runner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: maxtag
+      app.kubernetes.io/component: project-runner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: maxtag
+        app.kubernetes.io/component: project-runner
+    spec:
+      serviceAccountName: maxtag-project-runner
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: maxtag
+                  app.kubernetes.io/component: control-plane
+              topologyKey: kubernetes.io/hostname
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: project-runner
+          image: maxtag:local
+          args: ["project-runner"]
+          env:
+            - name: OPENTAG_PROJECT_RUNNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: maxtag-project-runner-auth
+                  key: token
+            - name: OPENTAG_PROJECT_RUNNER_COMMANDS
+              value: git,node,npm,npx,python,python3,pytest,make,cmake
+            - name: OPENTAG_PROJECT_RUNNER_PORT
+              value: "3081"
+            - name: OPENTAG_PROJECT_RUNNER_WORKSPACE_ROOT
+              value: /srv/opentag/workspaces
+          ports:
+            - name: http
+              containerPort: 3081
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: 2, memory: 4Gi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: persistent
+              mountPath: /srv/opentag/workspaces
+              subPath: workspaces
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: persistent
+          persistentVolumeClaim:
+            claimName: maxtag-state
+        - name: tmp
+          emptyDir:
+            sizeLimit: 4Gi

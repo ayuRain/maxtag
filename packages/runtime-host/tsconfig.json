@@ -17,6 +17,7 @@
     { "path": "../platform-lark" },
     { "path": "../platform-slack" },
     { "path": "../platform-telegram" },
+    { "path": "../project-runner" },
     { "path": "../routines" },
     { "path": "../storage-sqlite" },
     { "path": "../tool-broker" },

@@ -27,3 +27,6 @@ data:
   OPENTAG_K8S_WORKER_ENABLED: "false"
   OPENTAG_K8S_SCHEDULER_ENABLED: "false"
   OPENTAG_K8S_LARK_BRIDGE_ENABLED: "false"
+  # Reviewed boundary wrappers stay in the control plane during the runner
+  # migration; ordinary Project commands are always sent to the isolated Pod.
+  OPENTAG_LOCAL_BOUNDARY_COMMANDS: maxtag-image-build

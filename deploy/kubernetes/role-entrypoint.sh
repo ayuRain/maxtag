@@ -31,6 +31,9 @@ case "$role" in
     [ "${OPENTAG_K8S_LARK_BRIDGE_ENABLED:-false}" = "true" ] || standby
     exec node /app/scripts/lark-long-connection-bridge.mjs
     ;;
+  project-runner)
+    exec node /app/apps/project-runner/dist/index.js
+    ;;
   *)
     echo "Unknown MaxTag role: $role" >&2
     exit 64

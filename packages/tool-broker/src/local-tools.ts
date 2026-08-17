@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { isIP } from 'node:net';
 import path from 'node:path';
 import type { AgentRunRequest, ToolGrant } from '@opentag/core';
+import type { ProjectRunner } from '@opentag/project-runner';
 import {
   resolveProjectWorkingDirectory,
   runCliCommand,
@@ -37,6 +38,8 @@ export interface LocalToolDefinition {
 
 export interface LocalToolOptions {
   workspaceRoot?: string;
+  projectRunner?: ProjectRunner;
+  localBoundaryCommands?: string[];
   browser?: {
     fetch?: typeof fetch;
     resolve?: (hostname: string) => Promise<string[]>;
@@ -453,6 +456,8 @@ export function createLocalToolDefinitions(
           commands,
           approvalPolicy: request.access.toolApprovalPolicy || { mode: 'disabled' },
           networkPolicy: request.access.networkPolicy,
+          executionBackend: options.projectRunner ? 'isolated-project-runner' : 'local-process',
+          localBoundaryCommands: options.localBoundaryCommands ?? [],
           note: 'Skills and wrappers are optional accelerators. These capabilities may be combined autonomously inside this project sandbox.',
         };
       },
@@ -651,18 +656,33 @@ export function createLocalToolDefinitions(
       },
       summarize: (input) => ({ command: stringValue(input, 'command'), args: stringArray(input, 'args'), timeoutMs: integerValue(input, 'timeoutMs', 120_000, 100, 600_000) }),
       async execute({ request, signal }, input) {
-        const cwd = await projectRoot(options, request);
-        const result = await runCliCommand({
-          command: stringValue(input, 'command'),
-          args: stringArray(input, 'args'),
-          cwd,
-          input: '',
-          env: { PATH: process.env.PATH || '', HOME: process.env.HOME || '', LANG: process.env.LANG || 'C.UTF-8' },
-          abortSignal: signal,
-          timeoutMs: integerValue(input, 'timeoutMs', 120_000, 100, 600_000),
-          maxOutputBytes: Math.max(2_048, Math.floor(outputLimit(options) / 2)),
-          rejectOnNonZero: false,
-        });
+        const command = stringValue(input, 'command');
+        const args = stringArray(input, 'args');
+        const timeoutMs = integerValue(input, 'timeoutMs', 120_000, 100, 600_000);
+        const maxOutputBytes = Math.max(2_048, Math.floor(outputLimit(options) / 2));
+        const projectRunner = options.projectRunner;
+        const useProjectRunner = projectRunner &&
+          !(options.localBoundaryCommands ?? []).includes(command);
+        const result = useProjectRunner
+          ? await projectRunner.execute({
+              projectKey: request.project?.key || (() => { throw new ToolDeniedError('project_runner_project_required'); })(),
+              command,
+              args,
+              timeoutMs,
+              maxOutputBytes,
+              signal,
+            })
+          : await runCliCommand({
+              command,
+              args,
+              cwd: await projectRoot(options, request),
+              input: '',
+              env: { PATH: process.env.PATH || '', HOME: process.env.HOME || '', LANG: process.env.LANG || 'C.UTF-8' },
+              abortSignal: signal,
+              timeoutMs,
+              maxOutputBytes,
+              rejectOnNonZero: false,
+            });
         const output = `${result.stdout}${result.stderr}`.replace(/\s+/gu, ' ').trim();
         return {
           status: result.exitCode === 0 ? 'succeeded' : 'failed',

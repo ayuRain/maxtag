@@ -66,6 +66,33 @@ test('production overlay explicitly enables singleton consumers and Tunnel', asy
   assert.match(docs, /Do not simply restart the old host/u);
 });
 
+test('production project commands run outside the credential-bearing control plane', async () => {
+  const [deployment, account, policy, patch, kustomization, docs] = await Promise.all([
+    read('deploy/kubernetes/production/project-runner-deployment.yaml'),
+    read('deploy/kubernetes/production/project-runner-service-account.yaml'),
+    read('deploy/kubernetes/production/project-runner-network-policy.yaml'),
+    read('deploy/kubernetes/production/project-runner-control-plane-patch.yaml'),
+    read('deploy/kubernetes/production/kustomization.yaml'),
+    read('deploy/kubernetes/README.md'),
+  ]);
+  assert.match(deployment, /^kind: Deployment$/mu);
+  assert.match(deployment, /args: \["project-runner"\]/u);
+  assert.match(deployment, /automountServiceAccountToken: false/u);
+  assert.match(deployment, /secretKeyRef:\n\s+name: maxtag-project-runner-auth/u);
+  assert.match(deployment, /subPath: workspaces/u);
+  assert.doesNotMatch(deployment, /maxtag-runtime-env|maxtag-github-app|maxtag-cloudflared/u);
+  assert.doesNotMatch(deployment, /aws,kubectl|docker\.sock|privileged/iu);
+  assert.match(account, /automountServiceAccountToken: false/u);
+  assert.match(policy, /component: project-runner/u);
+  assert.match(policy, /component: control-plane/u);
+  assert.match(policy, /egress: \[\]/u);
+  assert.match(patch, /OPENTAG_PROJECT_RUNNER_URL/u);
+  assert.match(patch, /OPENTAG_PROJECT_RUNNER_TOKEN/u);
+  assert.match(kustomization, /project-runner-deployment\.yaml/u);
+  assert.match(docs, /does not mount the MaxTag runtime Secret/u);
+  assert.match(docs, /denies all runner egress by default/u);
+});
+
 test('algorithm builder selects only reviewed clean hamer branches with a GitHub App token', async () => {
   const tool = await read('deploy/kubernetes/production/algorithm-tools-configmap.yaml');
   assert.match(tool, /maxtag-image-build sync/u);

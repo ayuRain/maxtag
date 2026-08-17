@@ -32,6 +32,7 @@ import type {
   CliToolSession,
   CliToolSessionFactory,
 } from '@opentag/executor-cli';
+import type { ProjectRunner } from '@opentag/project-runner';
 import {
   formatRoutineSchedule,
   type FileRoutineStore,
@@ -82,6 +83,8 @@ export interface OpenTagToolBrokerOptions {
   memory: MemoryStore;
   approvalStore?: ToolApprovalStore;
   workspaceRoot?: string;
+  projectRunner?: ProjectRunner;
+  localBoundaryCommands?: string[];
   browser?: {
     fetch?: typeof fetch;
     resolve?: (hostname: string) => Promise<string[]>;

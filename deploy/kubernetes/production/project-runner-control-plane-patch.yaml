@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: maxtag
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: control-plane
+    spec:
+      containers:
+        - name: server
+          env: &project-runner-env
+            - name: OPENTAG_PROJECT_RUNNER_URL
+              value: http://maxtag-project-runner:3081
+            - name: OPENTAG_PROJECT_RUNNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: maxtag-project-runner-auth
+                  key: token
+        - name: worker
+          env: *project-runner-env

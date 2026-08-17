@@ -1,14 +1,43 @@
 # Kubernetes deployment
 
 The Kubernetes topology deliberately keeps the server, worker, scheduler, and
-Lark long-connection bridge in one StatefulSet Pod. They share one EBS RWO PVC
+Lark long-connection bridge in one control-plane StatefulSet Pod. They share one EBS RWO PVC
 and one SQLite WAL database. This is a production-safe migration target for the
 current storage model, not horizontal availability. Do not increase replicas
 until SQLite and the in-memory transports have been replaced by hosted stores.
 
 The base is a safe shadow deployment: the HTTP server runs while the worker,
 scheduler, and Lark bridge remain in standby. The production overlay enables
-all three consumers and adds the existing Cloudflare Tunnel as a sidecar.
+all three consumers, adds the existing Cloudflare Tunnel as a sidecar, and
+runs project commands in a separate Project Runner Deployment.
+
+## Project Runner isolation
+
+`workspace_run` is sent to `maxtag-project-runner`, not spawned in the
+control-plane Pod. The runner mounts only the managed Project workspace and a
+dedicated bearer-auth Secret. It does not mount the MaxTag runtime Secret,
+GitHub App key, Cloudflare credentials, Kubernetes service-account token, or
+platform database. A NetworkPolicy accepts requests only from the MaxTag
+control-plane Pod and denies all runner egress by default. Command names must
+pass both the Project capability grant and the runner-wide executable ceiling;
+arguments are executed without a shell.
+
+The temporary reviewed `maxtag-image-build` wrapper remains a control-plane
+boundary command via `OPENTAG_LOCAL_BOUNDARY_COMMANDS`; it needs brokered AWS
+submission and GitHub App identity that are intentionally absent from the
+runner. Ordinary tools such as `git`, `npm`, and `node` never use that path.
+
+Create the independent auth Secret before applying the production overlay:
+
+```bash
+deploy/kubernetes/scripts/prepare-project-runner-auth.sh maxtag
+```
+
+The initial production ceiling is `git,node,npm,npx,python,python3,pytest,make,cmake`.
+This enables local inspect/edit/test/rebase work without exposing `aws`,
+`kubectl`, `gh`, a Docker socket, or external credentials. Private fetch,
+registry publishing, and cloud operations remain brokered boundary operations;
+do not solve them by mounting control-plane credentials into this Pod.
 
 ## Build
 
@@ -63,6 +92,8 @@ kubectl apply -k deploy/kubernetes/base
 kubectl -n maxtag set image statefulset/maxtag \
   server=REGISTRY/maxtag:SHA worker=REGISTRY/maxtag:SHA \
   scheduler=REGISTRY/maxtag:SHA lark-bridge=REGISTRY/maxtag:SHA
+kubectl -n maxtag set image deployment/maxtag-project-runner \
+  project-runner=REGISTRY/maxtag:SHA
 kubectl -n maxtag rollout status statefulset/maxtag
 ```
 
