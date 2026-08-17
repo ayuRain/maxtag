@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: maxtag
+spec:
+  template:
+    spec:
+      containers:
+        - name: server
+          env: &github-app-env
+            - name: OPENTAG_GITHUB_TRANSPORT
+              value: http
+            - name: OPENTAG_GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: maxtag-github-app
+                  key: app-id
+            - name: OPENTAG_GITHUB_APP_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: maxtag-github-app
+                  key: installation-id
+            - name: OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE
+              value: /var/run/secrets/maxtag-github-app/private-key.pem
+          volumeMounts:
+            - name: maxtag-github-app
+              mountPath: /var/run/secrets/maxtag-github-app
+              readOnly: true
+        - name: worker
+          env: *github-app-env
+          volumeMounts:
+            - name: maxtag-github-app
+              mountPath: /var/run/secrets/maxtag-github-app
+              readOnly: true
+      volumes:
+        - name: maxtag-github-app
+          secret:
+            secretName: maxtag-github-app
+            defaultMode: 256

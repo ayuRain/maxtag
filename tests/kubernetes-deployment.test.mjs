@@ -45,14 +45,23 @@ test('Kubernetes base is a single-PVC shadow deployment', async () => {
 });
 
 test('production overlay explicitly enables singleton consumers and Tunnel', async () => {
-  const [runtime, tunnel, docs] = await Promise.all([
+  const [runtime, tunnel, githubApp, kustomization, docs] = await Promise.all([
     read('deploy/kubernetes/production/enable-runtime.yaml'),
     read('deploy/kubernetes/production/cloudflared-sidecar.yaml'),
+    read('deploy/kubernetes/production/github-app-patch.yaml'),
+    read('deploy/kubernetes/production/kustomization.yaml'),
     read('deploy/kubernetes/README.md'),
   ]);
   assert.equal((runtime.match(/: "true"/gu) ?? []).length, 3);
   assert.match(tunnel, /cloudflare\/cloudflared:2026\.8\.1/u);
   assert.match(tunnel, /secretName: maxtag-cloudflared/u);
+  assert.match(kustomization, /github-app-patch\.yaml/u);
+  assert.match(githubApp, /secretName: maxtag-github-app/u);
+  assert.match(githubApp, /OPENTAG_GITHUB_APP_ID/u);
+  assert.match(githubApp, /OPENTAG_GITHUB_APP_INSTALLATION_ID/u);
+  assert.match(githubApp, /OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE/u);
+  assert.match(githubApp, /mountPath: \/var\/run\/secrets\/maxtag-github-app/u);
+  assert.match(githubApp, /defaultMode: 256/u);
   assert.match(docs, /Do not increase replicas/u);
   assert.match(docs, /Do not simply restart the old host/u);
 });

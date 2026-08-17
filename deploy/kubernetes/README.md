@@ -90,6 +90,13 @@ be enabled with KMS. Annotate the `maxtag` ServiceAccount with a dedicated IRSA
 role rather than copying AWS keys. The committed cluster binding grants the
 built-in Kubernetes `view` role and cannot read Secrets or mutate resources.
 
+The production overlay also expects a `maxtag-github-app` Secret with the keys
+`app-id`, `installation-id`, and `private-key.pem`. The private key is mounted
+read-only into the server and worker; it must never be committed or placed in
+the general runtime environment Secret. One organization-owned GitHub App can
+cover multiple repositories. MaxTag project grants remain the authorization
+boundary for which repository a route may operate on.
+
 For algorithm image submission, grant that IRSA role only `s3:PutObject` on
 the configured build-source `hamer/` prefix, `codebuild:StartBuild` on the
 single build project, and `codebuild:BatchGetBuilds`. The CodeBuild service

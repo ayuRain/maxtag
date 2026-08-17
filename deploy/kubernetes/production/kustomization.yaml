@@ -8,3 +8,4 @@ patches:
   - path: enable-runtime.yaml
   - path: cloudflared-sidecar.yaml
   - path: algorithm-tools-patch.yaml
+  - path: github-app-patch.yaml
