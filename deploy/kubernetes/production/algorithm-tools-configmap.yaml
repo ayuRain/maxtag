@@ -32,6 +32,23 @@ data:
       }
     }
     github_installation_token() {
+      # Workspace commands intentionally run with a scrubbed environment so an
+      # agent cannot inherit service credentials. Read the GitHub App identity
+      # from the existing read-only Secret mount instead of relying on the
+      # parent worker environment.
+      secret_dir="${OPENTAG_GITHUB_APP_SECRET_DIR:-/var/run/secrets/maxtag-github-app}"
+      if [ -z "${OPENTAG_GITHUB_APP_ID:-}" ] && [ -r "$secret_dir/app-id" ]; then
+        OPENTAG_GITHUB_APP_ID="$(cat "$secret_dir/app-id")"
+        export OPENTAG_GITHUB_APP_ID
+      fi
+      if [ -z "${OPENTAG_GITHUB_APP_INSTALLATION_ID:-}" ] && [ -r "$secret_dir/installation-id" ]; then
+        OPENTAG_GITHUB_APP_INSTALLATION_ID="$(cat "$secret_dir/installation-id")"
+        export OPENTAG_GITHUB_APP_INSTALLATION_ID
+      fi
+      if [ -z "${OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE:-}" ]; then
+        OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE="$secret_dir/private-key.pem"
+        export OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE
+      fi
       [ -n "${OPENTAG_GITHUB_APP_ID:-}" ] || { echo "GitHub App ID is not configured" >&2; exit 69; }
       [ -n "${OPENTAG_GITHUB_APP_INSTALLATION_ID:-}" ] || { echo "GitHub App installation is not configured" >&2; exit 69; }
       [ -r "${OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE:-}" ] || { echo "GitHub App private key is unavailable" >&2; exit 69; }

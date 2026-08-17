@@ -69,6 +69,10 @@ test('production overlay explicitly enables singleton consumers and Tunnel', asy
 test('algorithm builder selects only reviewed clean hamer branches with a GitHub App token', async () => {
   const tool = await read('deploy/kubernetes/production/algorithm-tools-configmap.yaml');
   assert.match(tool, /maxtag-image-build sync/u);
+  assert.match(tool, /\/var\/run\/secrets\/maxtag-github-app/u);
+  assert.match(tool, /secret_dir\/app-id/u);
+  assert.match(tool, /secret_dir\/installation-id/u);
+  assert.match(tool, /secret_dir\/private-key\.pem/u);
   assert.match(tool, /GitHubAppInstallationTokenProvider/u);
   assert.match(tool, /MAXTAG_GITHUB_INSTALLATION_TOKEN/u);
   assert.match(tool, /GIT_ASKPASS/u);
