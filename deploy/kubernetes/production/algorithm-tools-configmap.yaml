@@ -2,6 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: maxtag-algorithm-tools
+  namespace: maxtag
 data:
   maxtag-image-build: |
     #!/bin/sh
@@ -12,7 +13,7 @@ data:
     export AWS_WEB_IDENTITY_TOKEN_FILE="${AWS_WEB_IDENTITY_TOKEN_FILE:-/var/run/secrets/eks.amazonaws.com/serviceaccount/token}"
     BUCKET="${MAXTAG_BUILD_SOURCE_BUCKET:-maxtag-build-sources-463470979853-us-west-1}"
     PROJECT="${MAXTAG_BUILD_CODEBUILD_PROJECT:-maxtag-hamer-image-build}"
-    REGISTRY="${MAXTAG_BUILD_REGISTRY:-463470979853.dkr.ecr.us-west-1.amazonaws.com/hamer}"
+    REGISTRY="${MAXTAG_BUILD_REGISTRY:-registry.maxinsights.ai/max-infra/hamer-maxhandsv2-business}"
     usage() {
       echo "usage: maxtag-image-build sync [main|maxhandsv2-c4.03-stable] | start <tag> [dockerfile] | status <build-id>" >&2
       exit 64
@@ -112,6 +113,7 @@ data:
             "name=DOCKERFILE,value=$dockerfile,type=PLAINTEXT" \
             "name=IMAGE_TAG,value=$tag,type=PLAINTEXT" \
             "name=SOURCE_SHA,value=$sha,type=PLAINTEXT" \
+            "name=TARGET_IMAGE,value=$REGISTRY,type=PLAINTEXT" \
           --query 'build.{id:id,status:buildStatus,sourceVersion:sourceVersion,logs:logs.deepLink}' \
           --output json)"
         node -e 'const d=JSON.parse(process.argv[1]); d.image=process.argv[2]; process.stdout.write(JSON.stringify(d)+"\n")' \
@@ -127,16 +129,21 @@ data:
         status="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).status || "")' "$result")"
         tag="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tag || "")' "$result")"
         digest=""
+        image="$REGISTRY${tag:+:$tag}"
         if [ "$status" = SUCCEEDED ] && [ -n "$tag" ]; then
-          digest="$(aws ecr describe-images --repository-name hamer --image-ids "imageTag=$tag" \
-            --query 'imageDetails[0].imageDigest' --output text)"
+          build_uuid="${id#*:}"
+          result_json="$(aws s3 cp "s3://$BUCKET/hamer/results/$build_uuid.json" - --only-show-errors 2>/dev/null || true)"
+          if [ -n "$result_json" ]; then
+            digest="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).digest || "")' "$result_json")"
+            image="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).image || process.argv[2])' "$result_json" "$image")"
+          fi
         fi
         node -e '
           const d=JSON.parse(process.argv[1]);
-          d.image=process.argv[2] + (d.tag ? `:${d.tag}` : "");
+          d.image=process.argv[2];
           if (process.argv[3]) d.digest=process.argv[3];
           process.stdout.write(JSON.stringify(d)+"\n");
-        ' "$result" "$REGISTRY" "$digest"
+        ' "$result" "$image" "$digest"
         ;;
       *) usage ;;
     esac

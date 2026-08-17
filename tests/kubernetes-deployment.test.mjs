@@ -80,9 +80,22 @@ test('algorithm builder selects only reviewed clean hamer branches with a GitHub
   assert.match(tool, /unsupported branch/u);
   assert.match(tool, /workspace has uncommitted changes/u);
   assert.match(tool, /MAXTAG_BUILD_REGISTRY/u);
-  assert.match(tool, /aws ecr describe-images/u);
+  assert.match(tool, /registry\.maxinsights\.ai\/max-infra\/hamer-maxhandsv2-business/u);
+  assert.match(tool, /hamer\/results\/\$build_uuid\.json/u);
+  assert.doesNotMatch(tool, /aws ecr describe-images/u);
   assert.match(tool, /d\.image=process\.argv\[2\]/u);
   assert.doesNotMatch(tool, /credential\.helper/u);
+});
+
+test('algorithm CodeBuild logs in with an injected secret and emits an immutable result', async () => {
+  const buildspec = await read('deploy/aws/codebuild/hamer-buildspec.yml');
+  assert.match(buildspec, /docker login registry\.maxinsights\.ai/u);
+  assert.match(buildspec, /--password-stdin/u);
+  assert.match(buildspec, /REGISTRY_USERNAME/u);
+  assert.match(buildspec, /REGISTRY_PASSWORD/u);
+  assert.match(buildspec, /registry digest missing/u);
+  assert.match(buildspec, /hamer\/results\/\$BUILD_UUID\.json/u);
+  assert.doesNotMatch(buildspec, /registry-admin|n3wvpI0E/u);
 });
 
 test('state export refuses live writers and restore requires a scaled-down Pod', async () => {

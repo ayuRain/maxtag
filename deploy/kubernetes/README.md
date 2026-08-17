@@ -24,7 +24,7 @@ as isolated BuildKit/Kaniko Jobs with their own policy and resource limits.
 The production overlay also mounts `maxtag-image-build`, a narrow submission
 client for the isolated `maxtag-hamer-image-build` CodeBuild project. It only
 accepts the `max-insights/hamer` workspace, three reviewed Dockerfile paths,
-and valid ECR tags. The command archives a clean Git commit, uploads it under
+and valid OCI image tags. The command archives a clean Git commit, uploads it under
 the dedicated S3 `hamer/` prefix, starts CodeBuild, and returns a build ID.
 Run `maxtag-image-build sync` first to select the clean remote `main` commit, or
 `maxtag-image-build sync maxhandsv2-c4.03-stable` for the reviewed Maxflow
@@ -36,10 +36,14 @@ persistent workspace.
 Use `maxtag-image-build status <build-id>` to query progress. It never mounts a
 Docker socket or exposes AWS credentials to the agent container. The build
 target is configured once for the capability package (currently the
-organization-owned `463470979853.dkr.ecr.us-west-1.amazonaws.com/hamer` ECR
-repository), so chat users only choose a tag and optional reviewed Dockerfile.
-Successful status responses include the immutable ECR digest for the final
-card. Projects may disable the extra tool-confirmation layer when this narrow
+organization-owned
+`registry.maxinsights.ai/max-infra/hamer-maxhandsv2-business` repository), so
+chat users only choose a tag and optional reviewed Dockerfile. Registry
+credentials are injected into CodeBuild from AWS Secrets Manager; they are not
+available to the MaxTag Pod, model, Project memory, or chat users. Successful
+status responses load the immutable registry digest from a build result object
+under the protected S3 `hamer/results/` prefix for the final card. Projects may
+disable the extra tool-confirmation layer when this narrow
 wrapper is already the approved execution boundary; repository, branch,
 Dockerfile, IAM, and registry restrictions remain enforced by the wrapper and
 AWS roles.
@@ -114,9 +118,11 @@ boundary for which repository a route may operate on.
 
 For algorithm image submission, grant that IRSA role only `s3:PutObject` on
 the configured build-source `hamer/` prefix, `codebuild:StartBuild` on the
-single build project, and `codebuild:BatchGetBuilds`. The CodeBuild service
-role should have read access to that source prefix and push access to the ECR
-`hamer` repository only. Override the default account-specific names with
+single build project, `codebuild:BatchGetBuilds`, and `s3:GetObject` on the
+`hamer/results/` prefix. The CodeBuild service role should have read access to
+the source prefix, write access to the result prefix, and read access to the
+single Secrets Manager registry credential. Override the default
+account-specific names with
 `MAXTAG_BUILD_SOURCE_BUCKET`, `MAXTAG_BUILD_CODEBUILD_PROJECT`,
 `MAXTAG_BUILD_SUBMIT_ROLE_ARN`, and `MAXTAG_BUILD_AWS_REGION` when needed.
 

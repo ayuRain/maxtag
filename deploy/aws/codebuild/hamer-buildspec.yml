@@ -1,0 +1,23 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - set -eu
+      - 'case "$DOCKERFILE" in docker/hamer-dev.Dockerfile|docker/hamer-optimized.Dockerfile|docker/uploader-dev.Dockerfile) ;; *) echo "unsupported Dockerfile"; exit 64 ;; esac'
+      - 'printf "%s\n" "$IMAGE_TAG" | grep -Eq ''^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$'' || { echo "invalid image tag"; exit 64; }'
+      - 'test "$TARGET_IMAGE" = "registry.maxinsights.ai/max-infra/hamer-maxhandsv2-business" || { echo "unsupported target image"; exit 64; }'
+      - 'test -n "$REGISTRY_USERNAME" && test -n "$REGISTRY_PASSWORD" || { echo "registry credentials unavailable"; exit 69; }'
+      - 'if [ ! -f third-party/ViTPose/setup.py ]; then rm -rf third-party/ViTPose; git clone --depth 1 --branch main https://github.com/ViTAE-Transformer/ViTPose.git third-party/ViTPose; fi'
+      - 'printf "%s" "$REGISTRY_PASSWORD" | docker login registry.maxinsights.ai --username "$REGISTRY_USERNAME" --password-stdin'
+  build:
+    commands:
+      - 'DOCKER_BUILDKIT=1 docker build --progress=plain -f "$DOCKERFILE" -t "$TARGET_IMAGE:$IMAGE_TAG" .'
+      - 'PUSH_OUTPUT="$(docker push "$TARGET_IMAGE:$IMAGE_TAG")"'
+      - 'printf "%s\n" "$PUSH_OUTPUT"'
+      - 'DIGEST="$(printf "%s\n" "$PUSH_OUTPUT" | awk ''/digest: sha256:/{print $2}'' | tail -1)"'
+      - 'printf "%s\n" "$DIGEST" | grep -Eq ''^sha256:[0-9a-f]{64}$'' || { echo "registry digest missing"; exit 70; }'
+  post_build:
+    commands:
+      - 'docker logout registry.maxinsights.ai >/dev/null 2>&1 || true'
+      - 'if [ "${CODEBUILD_BUILD_SUCCEEDING:-0}" = 1 ]; then BUILD_UUID="${CODEBUILD_BUILD_ID#*:}"; RESULT_FILE="$(mktemp)"; printf ''{"image":"%s:%s","tag":"%s","digest":"%s","sourceSha":"%s"}\n'' "$TARGET_IMAGE" "$IMAGE_TAG" "$IMAGE_TAG" "$DIGEST" "$SOURCE_SHA" >"$RESULT_FILE"; aws s3 cp "$RESULT_FILE" "s3://$RESULT_BUCKET/hamer/results/$BUILD_UUID.json" --only-show-errors; rm -f "$RESULT_FILE"; fi'
