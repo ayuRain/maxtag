@@ -17527,7 +17527,11 @@ server.listen(port, host, () => {
     }, larkDocumentWatcherIntervalMs);
     larkDocumentWatcherInterval.unref?.();
   }
-  if (memoryWrapupService.enabled) {
+  // In external-worker deployments the worker owns transcript staging and
+  // memory wrapup. Running the same scan in the HTTP process repeatedly reads
+  // and mutates the full shared delivery document, which can starve probes on
+  // a busy workspace.
+  if (agentWorkerEnabled && memoryWrapupService.enabled) {
     void memoryWrapupService.runPass().catch((error) => {
       console.error('MaxTag memory wrapup startup pass failed', error);
     });
