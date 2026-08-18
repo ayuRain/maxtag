@@ -120,6 +120,7 @@ import {
   parseMemoryCommand,
   type ParsedMemoryCommand,
 } from '@opentag/memory';
+import { buildLarkMemoryProposalCard } from '@opentag/ui-cards';
 import {
   GitHubPlatformAdapter,
   GitHubAppInstallationTokenProvider,
@@ -8127,19 +8128,12 @@ async function handleLarkMemoryProposalAction(
     }
   }
 
-  let cardUpdateError: string | undefined;
-  try {
-    const runPlatform = createPlatformForRun(proposal.thread);
-    if (!runPlatform.larkAdapter) throw new Error('lark_adapter_unavailable');
-    await runPlatform.larkAdapter.updateMemoryProposalCard({
-      thread: proposal.thread,
-      proposal: decided,
-      cardId: action.cardMessageId,
-      runId: receipt.runId,
-    });
-  } catch (error) {
-    cardUpdateError = error instanceof Error ? error.message : String(error);
-  }
+  // Replace the card in the callback response. A second Lark OpenAPI update can
+  // cross the three-second callback deadline and surface error 200341 even though
+  // the memory decision has already committed successfully.
+  const responseCard = buildLarkMemoryProposalCard(
+    decided,
+  ) as unknown as Record<string, unknown>;
 
   await deliveryStore.markInboundEventProcessed(inboundEventId, {
     workspaceId: receipt.workspaceId,
@@ -8156,7 +8150,6 @@ async function handleLarkMemoryProposalAction(
       appliedRevisionId: decided.appliedRevisionId,
       alreadyDecided,
       cardMessageId: action.cardMessageId,
-      cardUpdateError,
       receiptId: receipt.id,
       approvalRole: approval.approvalRole,
       authorization: actorAuthorizationPayload(approval.authorization),
@@ -8165,15 +8158,14 @@ async function handleLarkMemoryProposalAction(
   if (alreadyDecided) {
     return larkCardActionResponse(
       'info',
-      `This change was already ${decided.status}.`,
+      `该变更已经是“${decided.status === 'approved' ? '已批准' : '已拒绝'}”状态。`,
+      responseCard,
     );
   }
-  const verb = decided.status === 'approved' ? 'approved' : 'rejected';
   return larkCardActionResponse(
-    cardUpdateError ? 'warning' : 'success',
-    cardUpdateError
-      ? `Memory change ${verb}; card refresh is pending.`
-      : `Memory change ${verb}.`,
+    'success',
+    decided.status === 'approved' ? '记忆变更已批准。' : '记忆变更已拒绝。',
+    responseCard,
   );
 }
 
