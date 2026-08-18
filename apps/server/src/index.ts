@@ -434,6 +434,14 @@ const managedContentStore = new ManagedContentStore({
   maxBytes: maxAttachmentBytes,
 });
 let inboundLarkTransport: HttpLarkTransport | undefined;
+// Reactions are deliberately process-local cosmetic state. The long-connection
+// ingress writes OnIt before touching the durable delivery document, and the
+// worker later adopts/removes the same reaction through LarkPlatformAdapter.
+const larkProcessingReactions = new Map<string, string>();
+const larkProcessingReactionInflight = new Map<
+  string,
+  Promise<{ created: boolean }>
+>();
 const larkChatInfoCache = new Map<
   string,
   { expiresAt: number; value?: LarkChatInfo }
@@ -2522,6 +2530,7 @@ function createPlatformForRun(thread: SourceThread): {
     const larkTransport = createLarkTransportForRun();
     const larkAdapter = new LarkPlatformAdapter(
       new TrackedLarkTransport(larkTransport.transport, deliveryStore),
+      { processingReactions: larkProcessingReactions },
     );
     return {
       platform: larkAdapter,
@@ -5657,6 +5666,59 @@ function larkResourceTransport(): HttpLarkTransport {
     baseUrl: larkBaseUrl,
   });
   return inboundLarkTransport;
+}
+
+async function beginImmediateLarkProcessingReaction(input: {
+  thread: SourceThread;
+  message: SourceMessage;
+}): Promise<{ created: boolean }> {
+  if (
+    input.thread.platform !== 'lark' ||
+    input.message.actor.isBot ||
+    !input.message.mentionsAgent ||
+    larkTransportStatus().mode !== 'http'
+  ) {
+    return { created: false };
+  }
+  if (larkProcessingReactions.has(input.message.id)) {
+    return { created: false };
+  }
+  const active = larkProcessingReactionInflight.get(input.message.id);
+  if (active) {
+    await active;
+    return { created: false };
+  }
+  const pending = (async (): Promise<{ created: boolean }> => {
+    try {
+      const { reactionId } = await larkResourceTransport().addReaction({
+        messageId: input.message.id,
+        emojiType: 'OnIt',
+      });
+      larkProcessingReactions.set(input.message.id, reactionId);
+      return { created: true };
+    } catch (error) {
+      console.warn('MaxTag immediate Lark acknowledgement failed', error);
+      return { created: false };
+    } finally {
+      larkProcessingReactionInflight.delete(input.message.id);
+    }
+  })();
+  larkProcessingReactionInflight.set(input.message.id, pending);
+  return pending;
+}
+
+async function clearImmediateLarkProcessingReaction(
+  messageId: string,
+): Promise<void> {
+  await larkProcessingReactionInflight.get(messageId);
+  const reactionId = larkProcessingReactions.get(messageId);
+  if (!reactionId) return;
+  larkProcessingReactions.delete(messageId);
+  try {
+    await larkResourceTransport().removeReaction({ messageId, reactionId });
+  } catch {
+    // Acknowledgements are cosmetic and must not change ingress semantics.
+  }
 }
 
 async function resolveLarkChatInfo(
@@ -9357,6 +9419,11 @@ async function ingestClientEvent(
     includeDelivery?: boolean;
   },
 ): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+  // Start the native acknowledgement concurrently with the first durable
+  // write. Previously it was only added after routing, queueing, worker claim,
+  // transcript hydration and runtime setup, which made a healthy bot appear
+  // unresponsive for tens of seconds.
+  const immediateReaction = beginImmediateLarkProcessingReaction(normalized);
   const inbound = await deliveryStore.recordInboundEvent({
     platform: normalized.thread.platform,
     externalId: normalized.eventId,
@@ -9367,7 +9434,11 @@ async function ingestClientEvent(
     messageId: normalized.message.id,
     metadata: { ingress: options.ingress },
   });
+  const immediateReactionResult = await immediateReaction;
   if (inbound.duplicate) {
+    if (immediateReactionResult.created) {
+      await clearImmediateLarkProcessingReaction(normalized.message.id);
+    }
     return {
       statusCode: 200,
       body: {
@@ -9381,6 +9452,7 @@ async function ingestClientEvent(
   const routed = await routeMessage(normalized);
   await recordSourceThreadMessage(routed);
   if (!shouldHandleMessage(routed)) {
+    await clearImmediateLarkProcessingReaction(routed.message.id);
     await deliveryStore.markInboundEventIgnored(
       inbound.record.id,
       'mention_required',
@@ -9416,6 +9488,7 @@ async function ingestClientEvent(
 
   const authorization = await authorizeRoutedMessage(routed);
   if (!authorization.allowed) {
+    await clearImmediateLarkProcessingReaction(routed.message.id);
     return {
       statusCode: 202,
       body: await rejectUnauthorizedMessage({
@@ -9427,7 +9500,10 @@ async function ingestClientEvent(
   }
 
   const control = await handleRunControlCommand(routed, inbound.record.id);
-  if (control) return { statusCode: 200, body: control };
+  if (control) {
+    await clearImmediateLarkProcessingReaction(routed.message.id);
+    return { statusCode: 200, body: control };
+  }
 
   if (options.asyncRequested) {
     const queued = await enqueueMessageRun(routed, {
@@ -9439,6 +9515,9 @@ async function ingestClientEvent(
         recoveredIngress: options.ingress !== 'client' ? options.ingress : undefined,
       },
     });
+    if (queued.disposition === 'denied') {
+      await clearImmediateLarkProcessingReaction(routed.message.id);
+    }
     if (queued.disposition !== 'denied') scheduleAgentWorkerPass();
     const body = options.includeDelivery
       ? await queuedMessageRunResponse(queued, routed.thread.workspaceId)
@@ -9648,6 +9727,7 @@ async function executeAgentRun(
     await markRunInboundFailed(initialRun, message);
     throw error;
   }
+  try {
   const threadStatusCommand = parseThreadStatusCommand(
     initialRun.message.text,
   );
@@ -10226,6 +10306,18 @@ async function executeAgentRun(
   } finally {
     stopCancellationMonitor();
     activeRuns.delete(runId);
+  }
+  } finally {
+    if (runPlatform.larkAdapter) {
+      try {
+        await runPlatform.larkAdapter.setMessageProcessingReaction(
+          initialRun.message.id,
+          false,
+        );
+      } catch {
+        // Cosmetic acknowledgement cleanup must not change run semantics.
+      }
+    }
   }
 }
 

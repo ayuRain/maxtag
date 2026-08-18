@@ -779,6 +779,24 @@ test('Lark adapter mirrors AgentDock OnIt acknowledgement lifecycle', async () =
   assert.deepEqual(memory.reactions, []);
 });
 
+test('Lark worker adopts an acknowledgement created by ingress', async () => {
+  const memory = new MemoryLarkTransport();
+  const processingReactions = new Map();
+  const ingressReaction = await memory.addReaction({
+    messageId: 'message-1',
+    emojiType: 'OnIt',
+  });
+  processingReactions.set('message-1', ingressReaction.reactionId);
+  const adapter = new LarkPlatformAdapter(memory, { processingReactions });
+
+  await adapter.setMessageProcessingReaction('message-1', true);
+  assert.equal(memory.reactions.length, 1);
+
+  await adapter.setMessageProcessingReaction('message-1', false);
+  assert.deepEqual(memory.reactions, []);
+  assert.equal(processingReactions.has('message-1'), false);
+});
+
 test('transient Lark progress timeouts do not fail work or replay stale card state', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-progress-timeout-'));
   try {

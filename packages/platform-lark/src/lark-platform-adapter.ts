@@ -91,10 +91,19 @@ export class LarkPlatformAdapter implements PlatformAdapter {
   };
 
   private readonly transport: LarkTransport;
-  private readonly processingReactions = new Map<string, string>();
+  private readonly processingReactions: Map<string, string>;
 
-  constructor(transport: LarkTransport) {
+  constructor(
+    transport: LarkTransport,
+    options?: { processingReactions?: Map<string, string> },
+  ) {
     this.transport = transport;
+    // Ingress can add the acknowledgement before routing, persistence and
+    // worker claim finish. Sharing the registry lets the eventual worker adopt
+    // that reaction instead of posting a duplicate, while retaining the normal
+    // remove-on-completion lifecycle.
+    this.processingReactions =
+      options?.processingReactions ?? new Map<string, string>();
   }
 
   async setMessageProcessingReaction(
