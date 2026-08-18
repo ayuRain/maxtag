@@ -10,6 +10,7 @@ RUN npm ci \
     && npm prune --omit=dev
 
 FROM docker/buildx-bin:0.13.1 AS buildx
+FROM regclient/regctl:v0.11.5 AS regctl
 
 FROM node:24.15.0-bookworm-slim AS runtime
 
@@ -40,6 +41,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=buildx /buildx /usr/libexec/docker/cli-plugins/docker-buildx
+COPY --from=regctl /regctl /usr/local/bin/regctl
 
 RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
     && curl -fsSLo /tmp/kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \

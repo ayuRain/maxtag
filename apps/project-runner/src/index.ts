@@ -127,6 +127,13 @@ const server = startProjectRunnerServer({
       DOCKER_BUILDKIT: process.env.OPENTAG_PROJECT_RUNNER_BUILDKIT_HOST ? '1' : undefined,
       GIT_ASKPASS: process.env.OPENTAG_PROJECT_RUNNER_GIT_ASKPASS,
       GIT_TERMINAL_PROMPT: '0',
+      MAXTAG_BUILD_SECRET_DIR: process.env.OPENTAG_PROJECT_RUNNER_MAXHANDSV2_RUNTIME_ENV_FILE
+        ? path.dirname(process.env.OPENTAG_PROJECT_RUNNER_MAXHANDSV2_RUNTIME_ENV_FILE)
+        : undefined,
+      MAXTAG_MAXHANDSV2_RUNTIME_ENV_FILE:
+        process.env.OPENTAG_PROJECT_RUNNER_MAXHANDSV2_RUNTIME_ENV_FILE,
+      // Backward-compatible alias. New agent instructions should use the
+      // explicit *_FILE name with BuildKit's `src=` secret form.
       MAXTAG_MAXHANDSV2_RUNTIME_ENV:
         process.env.OPENTAG_PROJECT_RUNNER_MAXHANDSV2_RUNTIME_ENV_FILE,
     };
