@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: maxtag-algorithm-buildkit-cache
+  name: maxtag-algorithm-buildkit-cache-v2
   namespace: maxtag
   labels:
     app.kubernetes.io/name: maxtag-algorithm-project-runner

@@ -156,7 +156,7 @@ spec:
           emptyDir: {sizeLimit: 8Gi}
         - name: buildkit-cache
           persistentVolumeClaim:
-            claimName: maxtag-algorithm-buildkit-cache
+            claimName: maxtag-algorithm-buildkit-cache-v2
         - name: github-app
           secret:
             secretName: maxtag-github-app
