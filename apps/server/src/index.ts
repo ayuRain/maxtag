@@ -7735,6 +7735,9 @@ async function authorizeLarkMemoryProposalDecision(input: {
     input.proposal.thread.projectId ||
     input.proposal.thread.channelId ||
     'general';
+  const membershipProjectId = projectId.startsWith(`${workspaceId}:`)
+    ? projectId.slice(workspaceId.length + 1)
+    : projectId;
   const authorization = await accessStore.authorize({
     workspaceId,
     projectId,
@@ -7770,7 +7773,7 @@ async function authorizeLarkMemoryProposalDecision(input: {
   const access = await accessStore.snapshot(workspaceId);
   const isProjectManager = access.projectMemberships.some(
     (membership) =>
-      membership.projectId === projectId &&
+      membership.projectId === membershipProjectId &&
       membership.memberId === authorization.member?.id &&
       membership.role === 'manager',
   );
@@ -7792,6 +7795,9 @@ async function authorizeLarkToolApprovalDecision(input: {
   const workspaceId = input.approval.workspaceId || 'dev-workspace';
   const projectId =
     input.approval.projectId || input.approval.channelId || 'general';
+  const membershipProjectId = projectId.startsWith(`${workspaceId}:`)
+    ? projectId.slice(workspaceId.length + 1)
+    : projectId;
   const authorization = await accessStore.authorize({
     workspaceId,
     projectId,
@@ -7822,7 +7828,7 @@ async function authorizeLarkToolApprovalDecision(input: {
   const access = await accessStore.snapshot(workspaceId);
   const isProjectManager = access.projectMemberships.some(
     (membership) =>
-      membership.projectId === projectId &&
+      membership.projectId === membershipProjectId &&
       membership.memberId === authorization.member?.id &&
       membership.role === 'manager',
   );
