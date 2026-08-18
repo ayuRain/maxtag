@@ -141,8 +141,11 @@ const EMPTY_STATE: FileDeliveryState = {
   dataLifecycleAudit: [],
 };
 
-const SOURCE_THREAD_CONTEXT_MAX_PER_THREAD = 5_000;
-const SOURCE_THREAD_CONTEXT_MAX_GLOBAL = 100_000;
+const SOURCE_THREAD_CONTEXT_MAX_PER_THREAD = 200;
+const SOURCE_THREAD_CONTEXT_MAX_GLOBAL = 5_000;
+const TERMINAL_OUTBOX_MAX = 300;
+const TERMINAL_TURN_DELIVERY_MAX = 300;
+const TERMINAL_RUN_EVENT_MAX = 1_000;
 const INBOUND_EVENT_MAX_RECORDS = 50_000;
 
 function now(): string {
@@ -236,6 +239,52 @@ export function normalizeDeliveryState(
     (highest, event) => Math.max(highest, event.sequence),
     0,
   );
+  const runs = parsed.agentRuns ?? [];
+  const activeRunIds = new Set(
+    runs
+      .filter((run) => !isTerminalRunStatus(run.status))
+      .map((run) => run.id),
+  );
+  const activeOutbox = (parsed.outbox ?? []).filter(
+    (item) => item.status === 'pending' || item.status === 'sending',
+  );
+  const terminalOutbox = (parsed.outbox ?? [])
+    .filter((item) => item.status !== 'pending' && item.status !== 'sending')
+    .sort((a, b) => b.sequence - a.sequence)
+    .slice(0, TERMINAL_OUTBOX_MAX);
+  const activeTurnDeliveries = (parsed.turnDeliveries ?? []).filter(
+    (item) => item.status === 'queued' || item.status === 'accepted',
+  );
+  const terminalTurnDeliveries = (parsed.turnDeliveries ?? [])
+    .filter((item) => item.status !== 'queued' && item.status !== 'accepted')
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, TERMINAL_TURN_DELIVERY_MAX);
+  const activeRunEvents = agentRunEvents.filter((event) =>
+    activeRunIds.has(event.runId),
+  );
+  const activeRunEventIds = new Set(activeRunEvents.map((event) => event.id));
+  const terminalRunEvents = agentRunEvents
+    .filter((event) => !activeRunEventIds.has(event.id))
+    .sort((a, b) => b.sequence - a.sequence)
+    .slice(0, TERMINAL_RUN_EVENT_MAX);
+  const sourceMessagesByThread = new Map<string, SourceThreadMessageRecord[]>();
+  for (const message of parsed.sourceThreadMessages ?? []) {
+    const existing = sourceMessagesByThread.get(message.threadId) ?? [];
+    existing.push(message);
+    sourceMessagesByThread.set(message.threadId, existing);
+  }
+  const sourceThreadMessages = [...sourceMessagesByThread.values()]
+    .flatMap((messages) =>
+      messages
+        .sort(
+          (a, b) =>
+            b.message.createdAt.localeCompare(a.message.createdAt) ||
+            b.lastObservedAt.localeCompare(a.lastObservedAt),
+        )
+        .slice(0, SOURCE_THREAD_CONTEXT_MAX_PER_THREAD),
+    )
+    .sort((a, b) => b.lastObservedAt.localeCompare(a.lastObservedAt))
+    .slice(0, SOURCE_THREAD_CONTEXT_MAX_GLOBAL);
   return {
     nextSequence: parsed.nextSequence ?? 1,
     nextSteeringSequence: parsed.nextSteeringSequence ?? 1,
@@ -243,15 +292,17 @@ export function normalizeDeliveryState(
       parsed.nextAgentRunEventSequence ?? 1,
       highestAgentRunEventSequence + 1,
     ),
-    outbox: parsed.outbox ?? [],
-    turnDeliveries: parsed.turnDeliveries ?? [],
+    outbox: [...terminalOutbox.reverse(), ...activeOutbox],
+    turnDeliveries: [...terminalTurnDeliveries.reverse(), ...activeTurnDeliveries],
     threadBindings: parsed.threadBindings ?? [],
     inboundEvents: parsed.inboundEvents ?? [],
-    agentRuns: parsed.agentRuns ?? [],
-    agentRunEvents,
+    agentRuns: runs,
+    agentRunEvents: [...terminalRunEvents.reverse(), ...activeRunEvents].sort(
+      (a, b) => a.sequence - b.sequence,
+    ),
     agentRunSteering: parsed.agentRunSteering ?? [],
     agentThreadSessions: parsed.agentThreadSessions ?? [],
-    sourceThreadMessages: parsed.sourceThreadMessages ?? [],
+    sourceThreadMessages,
     threadContextSummaries: parsed.threadContextSummaries ?? [],
     threadContextSyncs: parsed.threadContextSyncs ?? [],
     usageRecords: parsed.usageRecords ?? [],
