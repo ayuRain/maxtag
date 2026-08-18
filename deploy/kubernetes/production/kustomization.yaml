@@ -20,3 +20,4 @@ patches:
   - path: cloudflared-sidecar.yaml
   - path: github-app-patch.yaml
   - path: project-runner-control-plane-patch.yaml
+  - path: single-process-runtime.yaml

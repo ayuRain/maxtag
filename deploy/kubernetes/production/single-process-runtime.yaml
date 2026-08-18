@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: maxtag
+spec:
+  template:
+    spec:
+      containers:
+        - name: server
+          resources:
+            requests: {cpu: 2, memory: 3Gi}
+            limits: {cpu: 4, memory: 8Gi}
+        - name: worker
+          $patch: delete
+        - name: scheduler
+          $patch: delete

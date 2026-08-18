@@ -3,6 +3,12 @@ kind: ConfigMap
 metadata:
   name: maxtag-runtime
 data:
-  OPENTAG_K8S_WORKER_ENABLED: "true"
-  OPENTAG_K8S_SCHEDULER_ENABLED: "true"
+  # SQLite stores the delivery state as one transactional document. Keep its
+  # run worker and schedulers in the server process so a long Agent turn cannot
+  # starve separate processes out of the database.
+  OPENTAG_AGENT_WORKER: inline
+  OPENTAG_ROUTINE_SCHEDULER: inline
+  OPENTAG_WORKFLOW_COORDINATOR: inline
+  OPENTAG_K8S_WORKER_ENABLED: "false"
+  OPENTAG_K8S_SCHEDULER_ENABLED: "false"
   OPENTAG_K8S_LARK_BRIDGE_ENABLED: "true"

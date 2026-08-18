@@ -45,18 +45,28 @@ test('Kubernetes base is a single-PVC shadow deployment', async () => {
   assert.doesNotMatch(rbac, /secrets/iu);
 });
 
-test('production overlay explicitly enables singleton consumers and Tunnel', async () => {
-  const [runtime, tunnel, githubApp, kustomization, docs] = await Promise.all([
+test('production overlay runs SQLite consumers inline and explicitly enables the Lark bridge and Tunnel', async () => {
+  const [runtime, singleProcess, tunnel, githubApp, kustomization, docs] = await Promise.all([
     read('deploy/kubernetes/production/enable-runtime.yaml'),
+    read('deploy/kubernetes/production/single-process-runtime.yaml'),
     read('deploy/kubernetes/production/cloudflared-sidecar.yaml'),
     read('deploy/kubernetes/production/github-app-patch.yaml'),
     read('deploy/kubernetes/production/kustomization.yaml'),
     read('deploy/kubernetes/README.md'),
   ]);
-  assert.equal((runtime.match(/: "true"/gu) ?? []).length, 3);
+  assert.match(runtime, /OPENTAG_AGENT_WORKER: inline/u);
+  assert.match(runtime, /OPENTAG_ROUTINE_SCHEDULER: inline/u);
+  assert.match(runtime, /OPENTAG_WORKFLOW_COORDINATOR: inline/u);
+  assert.match(runtime, /OPENTAG_K8S_WORKER_ENABLED: "false"/u);
+  assert.match(runtime, /OPENTAG_K8S_SCHEDULER_ENABLED: "false"/u);
+  assert.match(runtime, /OPENTAG_K8S_LARK_BRIDGE_ENABLED: "true"/u);
+  assert.match(singleProcess, /name: worker\n\s+\$patch: delete/u);
+  assert.match(singleProcess, /name: scheduler\n\s+\$patch: delete/u);
+  assert.match(singleProcess, /limits: \{cpu: 4, memory: 8Gi\}/u);
   assert.match(tunnel, /cloudflare\/cloudflared:2026\.8\.1/u);
   assert.match(tunnel, /secretName: maxtag-cloudflared/u);
   assert.match(kustomization, /github-app-patch\.yaml/u);
+  assert.match(kustomization, /single-process-runtime\.yaml/u);
   assert.match(githubApp, /secretName: maxtag-github-app/u);
   assert.match(githubApp, /OPENTAG_GITHUB_APP_ID/u);
   assert.match(githubApp, /OPENTAG_GITHUB_APP_INSTALLATION_ID/u);
