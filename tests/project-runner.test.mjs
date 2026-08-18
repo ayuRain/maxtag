@@ -114,6 +114,59 @@ test('project runner wildcard uses the isolated Pod as the command boundary', as
   assert.equal(result.stdout, 'agent-runtime');
 });
 
+test('project runner terminates a command when the response client disconnects', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-project-disconnect-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const server = startProjectRunnerServer({
+    workspaceRoot: root,
+    token: 'disconnect-token',
+    allowedCommands: ['node'],
+    host: '127.0.0.1',
+    port: 0,
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  if (!server.listening) await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const controller = new AbortController();
+  const pending = fetch(`http://127.0.0.1:${address.port}/v1/execute`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer disconnect-token', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      projectKey: 'project-a',
+      command: 'node',
+      args: ['-e', 'require("node:fs").writeFileSync("command.pid", String(process.pid)); setInterval(() => {}, 1000)'],
+      timeoutMs: 60_000,
+      maxOutputBytes: 4_096,
+    }),
+    signal: controller.signal,
+  });
+  const pidFile = path.join(root, 'project-a', 'command.pid');
+  let pid;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      pid = Number.parseInt(await fs.readFile(pidFile, 'utf8'), 10);
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  assert.ok(Number.isInteger(pid) && pid > 0, 'command process should have started');
+  controller.abort();
+  await assert.rejects(pending, /abort/u);
+  let alive = true;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } catch {
+      alive = false;
+      break;
+    }
+  }
+  assert.equal(alive, false, 'disconnected command process should be terminated');
+});
+
 test('project runner routes selected projects to a dedicated runtime', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-project-routes-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));

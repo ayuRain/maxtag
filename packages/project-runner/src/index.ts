@@ -253,6 +253,14 @@ export function startProjectRunnerServer(options: ProjectRunnerServerOptions): S
     }
     const abort = new AbortController();
     request.once('aborted', () => abort.abort());
+    // `IncomingMessage#aborted` only covers a client disconnect while the
+    // request body is still arriving. Long commands start after that body has
+    // been consumed, so a broker/agent cancellation closes the response
+    // socket instead. Propagate that disconnect to the command process group
+    // as well, otherwise docker/build/test descendants can outlive their turn.
+    response.once('close', () => {
+      if (!response.writableFinished) abort.abort();
+    });
     const requestId = randomUUID();
     let input: WireExecuteRequest | undefined;
     try {
