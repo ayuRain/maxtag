@@ -287,6 +287,45 @@ async function connectedClient(context, session, name = 'opentag-local-tool-test
   return client;
 }
 
+test('durable Project agents are not stopped by the legacy 100 tool-call guard', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-broker-durable-project-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const session = await createOpenTagToolBroker({
+    memory: new ScopedFileMemoryStore(root),
+  }).open(runRequest([]));
+  const client = await connectedClient(context, session, 'durable-project-agent-test');
+
+  for (let index = 0; index < 105; index += 1) {
+    const result = await client.callTool({
+      name: 'memory_search',
+      arguments: { scope: 'project', query: `poll-${index}` },
+    });
+    assert.equal(result.isError, undefined, `tool call ${index + 1} should remain available`);
+  }
+});
+
+test('an explicitly configured tool-call guard still applies to Project agents', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-broker-explicit-limit-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const session = await createOpenTagToolBroker({
+    memory: new ScopedFileMemoryStore(root),
+    maxCallsPerRun: 1,
+  }).open(runRequest([]));
+  const client = await connectedClient(context, session, 'explicit-tool-limit-test');
+
+  const first = await client.callTool({
+    name: 'memory_search',
+    arguments: { scope: 'project', query: 'first' },
+  });
+  assert.equal(first.isError, undefined);
+  const second = await client.callTool({
+    name: 'memory_search',
+    arguments: { scope: 'project', query: 'second' },
+  });
+  assert.equal(second.isError, true);
+  assert.match(textResult(second), /tool_call_limit_exceeded/);
+});
+
 test('per-run MCP broker filters, authorizes, executes, and audits tools', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-broker-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));

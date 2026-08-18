@@ -3057,7 +3057,16 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
     if (!definitions.length) return undefined;
 
     const token = randomBytes(32).toString('base64url');
-    const maxCalls = Math.max(1, this.options.maxCallsPerRun ?? 100);
+    // A Project agent is a long-lived execution environment, not a short workflow.
+    // Builds and incident investigations routinely need to poll background work for
+    // longer than the old 100-call guard allowed. Keep the guard for non-Project
+    // utility runs and for operators that explicitly configure one, but do not end
+    // a Project run merely because it has used an arbitrary number of tools.
+    const configuredMaxCalls = this.options.maxCallsPerRun;
+    const maxCalls =
+      configuredMaxCalls === undefined && request.project
+        ? Number.POSITIVE_INFINITY
+        : Math.max(1, configuredMaxCalls ?? 100);
     const maxRequestBytes = Math.max(1024, this.options.maxRequestBytes ?? 256 * 1024);
     const maxResultBytes = Math.max(4096, this.options.maxResultBytes ?? 128 * 1024);
     const callTimeoutMs = Math.max(100, this.options.callTimeoutMs ?? 30_000);
