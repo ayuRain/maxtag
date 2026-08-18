@@ -25,6 +25,12 @@ export interface HttpProjectRunnerOptions {
   baseUrl: string;
   token: string;
   fetch?: typeof fetch;
+  /**
+   * Optional per-project runtime endpoints. This keeps build-enabled or
+   * data runtimes isolated from the default sandbox while preserving one
+   * general command interface for the agent.
+   */
+  routes?: Record<string, string>;
 }
 
 export interface ProjectRunnerServerOptions {
@@ -44,6 +50,18 @@ export interface ProjectRunnerServerOptions {
   maxOutputBytes?: number;
   path?: string;
   homeRoot?: string;
+  environment?: (
+    input: { projectKey: string; home: string; command: string },
+  ) => Promise<Record<string, string | undefined>>;
+  prepare?: (
+    input: {
+      projectKey: string;
+      home: string;
+      command: string;
+      env: Record<string, string>;
+      signal: AbortSignal;
+    },
+  ) => Promise<void>;
 }
 
 interface WireExecuteRequest {
@@ -71,6 +89,40 @@ function validProjectKey(value: unknown): value is string {
 
 function validCommand(value: unknown): value is string {
   return typeof value === 'string' && /^[a-zA-Z0-9_.+-]{1,100}$/u.test(value);
+}
+
+export function parseProjectRunnerRoutesJson(
+  value: string | undefined,
+): Record<string, string> {
+  if (!value?.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('OPENTAG_PROJECT_RUNNER_ROUTES_JSON must be valid JSON.');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('OPENTAG_PROJECT_RUNNER_ROUTES_JSON must be an object.');
+  }
+  const routes: Record<string, string> = {};
+  for (const [projectKey, rawUrl] of Object.entries(parsed)) {
+    if (!validProjectKey(projectKey) || typeof rawUrl !== 'string') {
+      throw new Error('project_runner_route_invalid');
+    }
+    const url = new URL(rawUrl);
+    if (
+      url.protocol !== 'http:' ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      url.pathname !== '/'
+    ) {
+      throw new Error('project_runner_route_invalid');
+    }
+    routes[projectKey] = rawUrl.replace(/\/+$/u, '');
+  }
+  return routes;
 }
 
 function wireRequest(value: unknown): WireExecuteRequest {
@@ -127,9 +179,16 @@ async function projectDirectory(root: string, projectKey: string): Promise<strin
 export function createHttpProjectRunner(options: HttpProjectRunnerOptions): ProjectRunner {
   const baseUrl = options.baseUrl.replace(/\/+$/u, '');
   if (!baseUrl || !options.token) throw new Error('project_runner_http_not_configured');
+  const routes = Object.fromEntries(
+    Object.entries(options.routes ?? {}).map(([projectKey, url]) => [
+      projectKey,
+      url.replace(/\/+$/u, ''),
+    ]),
+  );
   return {
     async execute(input) {
-      const response = await (options.fetch ?? fetch)(`${baseUrl}/v1/execute`, {
+      const routedBaseUrl = routes[input.projectKey] || baseUrl;
+      const response = await (options.fetch ?? fetch)(`${routedBaseUrl}/v1/execute`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${options.token}`,
@@ -197,19 +256,35 @@ export function startProjectRunnerServer(options: ProjectRunnerServerOptions): S
       const cwd = await projectDirectory(options.workspaceRoot, input.projectKey);
       const home = path.resolve(options.homeRoot || '/tmp/opentag-project-runner', input.projectKey);
       await fs.mkdir(home, { recursive: true, mode: 0o700 });
+      const dynamicEnvironment = await options.environment?.({
+        projectKey: input.projectKey,
+        home,
+        command: input.command,
+      }) ?? {};
+      const env: Record<string, string> = {
+        PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+        HOME: home,
+        TMPDIR: '/tmp',
+        LANG: process.env.LANG || 'C.UTF-8',
+        CI: '1',
+        NO_COLOR: '1',
+      };
+      for (const [name, value] of Object.entries(dynamicEnvironment)) {
+        if (value !== undefined) env[name] = value;
+      }
+      await options.prepare?.({
+        projectKey: input.projectKey,
+        home,
+        command: input.command,
+        env,
+        signal: abort.signal,
+      });
       const result = await runCliCommand({
         command: input.command,
         args: input.args,
         cwd,
         input: '',
-        env: {
-          PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
-          HOME: home,
-          TMPDIR: '/tmp',
-          LANG: process.env.LANG || 'C.UTF-8',
-          CI: '1',
-          NO_COLOR: '1',
-        },
+        env,
         abortSignal: abort.signal,
         timeoutMs: Math.min(input.timeoutMs, options.maxTimeoutMs ?? 600_000),
         maxOutputBytes: Math.min(input.maxOutputBytes, options.maxOutputBytes ?? 512 * 1_024),

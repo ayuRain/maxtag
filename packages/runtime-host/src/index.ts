@@ -95,7 +95,10 @@ import {
   externalMcpRegistryFromJson,
   type OpenTagToolBroker,
 } from '@opentag/tool-broker';
-import { createHttpProjectRunner } from '@opentag/project-runner';
+import {
+  createHttpProjectRunner,
+  parseProjectRunnerRoutesJson,
+} from '@opentag/project-runner';
 import {
   WorkflowCoordinatorService,
   type WorkflowCoordinatorTickResult,
@@ -326,6 +329,7 @@ export interface RuntimeHostToolBrokerConfig {
   approvalTtlMs?: number;
   projectRunnerUrl?: string;
   projectRunnerToken?: string;
+  projectRunnerRoutesJson?: string;
   localBoundaryCommands?: string[];
 }
 
@@ -760,6 +764,9 @@ export class OpenTagWorkerHost {
           ? createHttpProjectRunner({
               baseUrl: config.toolBroker.projectRunnerUrl,
               token: config.toolBroker.projectRunnerToken,
+              routes: parseProjectRunnerRoutesJson(
+                config.toolBroker.projectRunnerRoutesJson,
+              ),
             })
           : undefined,
       localBoundaryCommands: config.toolBroker?.localBoundaryCommands,

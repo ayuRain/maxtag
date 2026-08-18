@@ -18,5 +18,7 @@ spec:
                 secretKeyRef:
                   name: maxtag-project-runner-auth
                   key: token
+            - name: OPENTAG_PROJECT_RUNNER_ROUTES_JSON
+              value: '{"project-5efdf6ac":"http://maxtag-algorithm-project-runner:3081"}'
         - name: worker
           env: *project-runner-env

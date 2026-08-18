@@ -6,6 +6,7 @@ import test from 'node:test';
 import { once } from 'node:events';
 import {
   createHttpProjectRunner,
+  parseProjectRunnerRoutesJson,
   startProjectRunnerServer,
 } from '@opentag/project-runner';
 
@@ -111,4 +112,47 @@ test('project runner wildcard uses the isolated Pod as the command boundary', as
   });
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout, 'agent-runtime');
+});
+
+test('project runner routes selected projects to a dedicated runtime', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-project-routes-'));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const makeServer = async (workspaceRoot, marker) => {
+    await fs.mkdir(workspaceRoot, { recursive: true });
+    const server = startProjectRunnerServer({
+      workspaceRoot,
+      token: 'route-token',
+      allowedCommands: ['node'],
+      host: '127.0.0.1',
+      port: 0,
+      async environment() { return { OPENTAG_TEST_RUNTIME: marker }; },
+    });
+    context.after(() => new Promise((resolve) => server.close(resolve)));
+    if (!server.listening) await once(server, 'listening');
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return `http://127.0.0.1:${address.port}`;
+  };
+  const normal = await makeServer(path.join(root, 'normal'), 'normal');
+  const algorithm = await makeServer(path.join(root, 'algorithm'), 'algorithm');
+  const runner = createHttpProjectRunner({
+    baseUrl: normal,
+    token: 'route-token',
+    routes: parseProjectRunnerRoutesJson(JSON.stringify({
+      'project-algorithm': algorithm,
+    })),
+  });
+  const execute = (projectKey) => runner.execute({
+    projectKey,
+    command: 'node',
+    args: ['-e', 'process.stdout.write(process.env.OPENTAG_TEST_RUNTIME)'],
+    timeoutMs: 5_000,
+    maxOutputBytes: 16_384,
+  });
+  assert.equal((await execute('project-default')).stdout, 'normal');
+  assert.equal((await execute('project-algorithm')).stdout, 'algorithm');
+  assert.throws(
+    () => parseProjectRunnerRoutesJson('{"project-a":"https://user:pass@example.com"}'),
+    /project_runner_route_invalid/u,
+  );
 });

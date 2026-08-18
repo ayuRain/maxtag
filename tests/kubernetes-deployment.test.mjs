@@ -108,6 +108,28 @@ test('production does not hard-code a Hamer workflow as the agent execution mode
   await assert.rejects(read('deploy/aws/codebuild/hamer-buildspec.yml'), /ENOENT/u);
 });
 
+test('algorithm project gets a direct Docker Buildx runtime instead of CodeBuild workflow wrappers', async () => {
+  const [deployment, policy, patch, kustomization, dockerfile] = await Promise.all([
+    read('deploy/kubernetes/production/algorithm-project-runner-deployment.yaml'),
+    read('deploy/kubernetes/production/algorithm-project-runner-network-policy.yaml'),
+    read('deploy/kubernetes/production/project-runner-control-plane-patch.yaml'),
+    read('deploy/kubernetes/production/kustomization.yaml'),
+    read('Dockerfile'),
+  ]);
+  assert.match(deployment, /moby\/buildkit:v0\.23\.2-rootless/u);
+  assert.match(deployment, /OPENTAG_PROJECT_RUNNER_BUILDKIT_HOST/u);
+  assert.match(deployment, /OPENTAG_PROJECT_RUNNER_REGISTRY_CONFIG_FILE/u);
+  assert.match(deployment, /OPENTAG_GITHUB_APP_PRIVATE_KEY_FILE/u);
+  assert.match(deployment, /maxhandsv2_runtime_env/u);
+  assert.match(deployment, /maxtag-algorithm-buildkit-cache/u);
+  assert.doesNotMatch(deployment, /docker\.sock|privileged|CodeBuild|codebuild/u);
+  assert.match(policy, /port: 443/u);
+  assert.match(patch, /OPENTAG_PROJECT_RUNNER_ROUTES_JSON/u);
+  assert.match(kustomization, /algorithm-project-runner-deployment\.yaml/u);
+  assert.match(dockerfile, /docker\/buildx-bin:0\.13\.1/u);
+  assert.match(dockerfile, /docker-buildx/u);
+});
+
 test('state export refuses live writers and restore requires a scaled-down Pod', async () => {
   const [exportScript, restoreScript] = await Promise.all([
     read('deploy/kubernetes/scripts/export-host-state.sh'),

@@ -60,17 +60,21 @@ docker build --build-arg VCS_REF="$(git rev-parse HEAD)" -t maxtag:"$(git rev-pa
 ```
 
 The image contains pinned Codex and Lark CLIs plus `git`, `gh`, `aws`,
-`kubectl`, `sqlite3`, and common TLS/JSON utilities. It intentionally does not
-contain a Docker daemon or mount a node Docker socket. Image builds should run
-as isolated BuildKit/Kaniko Jobs with their own policy and resource limits.
+`kubectl`, `sqlite3`, Docker CLI/Buildx, and common TLS/JSON utilities. It does
+not contain a Docker daemon or mount a node Docker socket. The production
+algorithm Project is routed to a dedicated runtime Pod with a rootless BuildKit
+sidecar and persistent cache. The Agent therefore uses ordinary `git`, tests,
+and `docker buildx build` commands exactly as it would in a full workstation:
+it can inspect logs, edit files, and retry without translating the task into a
+CodeBuild or Hamer workflow.
 
 Image delivery is intentionally not represented by a Hamer-specific wrapper in
 the production overlay. The general agent inspects the repository, chooses the
 real Dockerfile and build arguments, diagnoses failures, and verifies the final
-digest. The organization supplies a separately governed build capability (for
-example CodeBuild, BuildKit, or an external MCP tool) with a scoped workload
-identity and registry target. Secrets are injected at that boundary and never
-stored in chat, memory, or the Project workspace.
+digest. GitHub App, Registry and project build-secret mounts exist only in the
+dedicated algorithm runtime; the default Project Runner remains networkless and
+credential-free. Rotate the Registry credential to a path-scoped publisher
+identity before granting additional projects access to this runtime.
 
 ## Shadow deployment
 
@@ -145,15 +149,13 @@ the general runtime environment Secret. One organization-owned GitHub App can
 cover multiple repositories. MaxTag project grants remain the authorization
 boundary for which repository a route may operate on.
 
-For algorithm image submission, grant that IRSA role only `s3:PutObject` on
-the configured build-source `hamer/` prefix, `codebuild:StartBuild` on the
-single build project, `codebuild:BatchGetBuilds`, and `s3:GetObject` on the
-`hamer/results/` prefix. The CodeBuild service role should have read access to
-the source prefix, write access to the result prefix, and read access to the
-single Secrets Manager registry credential. Override the default
-account-specific names with
-`MAXTAG_BUILD_SOURCE_BUCKET`, `MAXTAG_BUILD_CODEBUILD_PROJECT`,
-`MAXTAG_BUILD_SUBMIT_ROLE_ARN`, and `MAXTAG_BUILD_AWS_REGION` when needed.
+The algorithm runtime does not need AWS credentials merely to build and publish
+an image. GitHub access is a short-lived installation token generated inside
+the runtime from `maxtag-github-app`; Registry authentication comes from
+`maxtag-registry`; and build-time files come from
+`maxtag-algorithm-build-secrets`. These are Project runtime capabilities, not
+prompt text or memory. Do not copy their values into the control-plane runtime
+Secret or a workspace file.
 
 ## Resource envelope
 

@@ -11,6 +11,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@opentag/platform-github": "0.1.0",
     "@opentag/project-runner": "0.1.0"
   }
 }

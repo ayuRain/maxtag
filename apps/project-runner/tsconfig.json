@@ -6,6 +6,7 @@
     "outDir": "dist"
   },
   "references": [
+    { "path": "../../packages/platform-github" },
     { "path": "../../packages/project-runner" }
   ],
   "include": ["src/**/*.ts"]

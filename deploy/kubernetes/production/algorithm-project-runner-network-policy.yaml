@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: maxtag-algorithm-project-runner
+  namespace: maxtag
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: maxtag-algorithm-project-runner
+      app.kubernetes.io/component: algorithm-project-runner
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: maxtag
+              app.kubernetes.io/component: control-plane
+      ports:
+        - protocol: TCP
+          port: 3081
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+        - {protocol: TCP, port: 80}
+        - {protocol: TCP, port: 443}

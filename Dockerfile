@@ -9,6 +9,8 @@ RUN npm ci \
     && npm run build \
     && npm prune --omit=dev
 
+FROM docker/buildx-bin:0.13.1 AS buildx
+
 FROM node:24.15.0-bookworm-slim AS runtime
 
 ARG CODEX_VERSION=0.144.4
@@ -30,6 +32,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends awscli gh \
     && rm -rf /var/lib/apt/lists/*
 
+# The build-enabled Project runtime uses the ordinary Docker CLI and Buildx
+# against a separate rootless BuildKit sidecar. No Docker daemon or host socket
+# is included in this image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=buildx /buildx /usr/libexec/docker/cli-plugins/docker-buildx
+
 RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
     && curl -fsSLo /tmp/kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \
     && echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum -c - \
@@ -44,6 +55,7 @@ RUN npm install --global "@larksuite/cli@${LARK_CLI_VERSION}" \
 
 WORKDIR /app
 COPY --from=build --chown=node:node /app /app
+RUN chmod 0755 /app/deploy/kubernetes/github-askpass.sh
 
 ENV NODE_ENV=production \
     HOME=/var/lib/opentag \

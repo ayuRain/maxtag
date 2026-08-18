@@ -332,6 +332,7 @@ async function main(): Promise<void> {
       approvalTtlMs: optionalNumberEnv('OPENTAG_TOOL_APPROVAL_TTL_MS'),
       projectRunnerUrl: process.env.OPENTAG_PROJECT_RUNNER_URL,
       projectRunnerToken: process.env.OPENTAG_PROJECT_RUNNER_TOKEN,
+      projectRunnerRoutesJson: process.env.OPENTAG_PROJECT_RUNNER_ROUTES_JSON,
       localBoundaryCommands: listEnv('OPENTAG_LOCAL_BOUNDARY_COMMANDS'),
     },
     runControlPollMs: optionalNumberEnv('OPENTAG_RUN_CONTROL_POLL_MS'),
