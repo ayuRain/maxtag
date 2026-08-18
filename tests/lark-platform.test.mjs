@@ -364,6 +364,61 @@ test('Lark thread history hydration imports prior messages without failing the r
   }
 });
 
+test('Lark main-group context skips topic-history API hydration', async () => {
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'opentag-lark-main-context-'),
+  );
+  try {
+    const store = new FileDeliveryStore(root);
+    const thread = {
+      id: 'lark:chat-main:main',
+      platform: 'lark',
+      externalId: 'chat-main:main',
+      workspaceId: 'tenant-1',
+      projectId: 'project-1',
+      channelId: 'chat-main',
+      visibility: 'private',
+    };
+    const current = await store.createAgentRunOrSteer({
+      runId: 'lark-main-run',
+      thread,
+      message: {
+        id: 'current-main-message',
+        threadId: thread.id,
+        platform: 'lark',
+        text: 'Current main-group request.',
+        actor: { id: 'user-1' },
+        createdAt: new Date('2026-01-01T00:00:02.000Z').toISOString(),
+        mentionsAgent: true,
+      },
+    });
+    const transport = {
+      async getMessage() {
+        throw new Error('main conversation must not call Lark history');
+      },
+      async listMessages() {
+        throw new Error('main conversation must not list topic history');
+      },
+    };
+
+    const result = await hydrateLarkThreadContext({
+      deliveryStore: store,
+      run: current.run,
+      transport,
+    });
+
+    assert.deepEqual(result, {
+      attempted: false,
+      importedMessages: 0,
+      duplicateMessages: 0,
+      truncated: false,
+      skippedReason: 'lark_main_conversation',
+    });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('HTTP Lark transport uploads files, replies with a file key, and downloads resources', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-lark-http-'));
   const localFile = path.join(root, 'report.csv');

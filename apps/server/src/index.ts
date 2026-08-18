@@ -9084,9 +9084,20 @@ async function enqueueMessageRun(input: {
   runId?: string;
   metadata?: Record<string, unknown>;
   authorization?: ActorAuthorizationDecision;
+  preRouted?: {
+    thread: SourceThread;
+    message: SourceMessage;
+    binding?: ThreadBinding;
+    establishedThreadBinding?: ThreadBinding;
+  };
+  sourceMessageRecorded?: boolean;
 }): Promise<QueuedMessageRun> {
   const runId = options?.runId ?? randomUUID();
-  const routedBase = await routeMessage(input);
+  // Webhook/long-connection ingress has already resolved the route before it
+  // checks mention and actor policy. Repeating the route here used to repeat a
+  // potentially slow Lark chat-info call and duplicate a large delivery-state
+  // write on every @MaxTag message.
+  const routedBase = options?.preRouted ?? await routeMessage(input);
   let materializedMessage: SourceMessage;
   try {
     materializedMessage = await materializeMessageAttachments({
@@ -9103,7 +9114,9 @@ async function enqueueMessageRun(input: {
     throw error;
   }
   const routed = { ...routedBase, message: materializedMessage };
-  await recordSourceThreadMessage(routed);
+  if (!options?.sourceMessageRecorded) {
+    await recordSourceThreadMessage(routed);
+  }
   const observedBinding = await deliveryStore.upsertThreadBinding({
     thread: routed.thread,
     workspaceId: routed.thread.workspaceId ?? 'default-workspace',
@@ -9420,6 +9433,8 @@ async function ingestClientEvent(
     const queued = await enqueueMessageRun(routed, {
       inboundEventId: inbound.record.id,
       authorization,
+      preRouted: routed,
+      sourceMessageRecorded: true,
       metadata: {
         recoveredIngress: options.ingress !== 'client' ? options.ingress : undefined,
       },
@@ -16775,6 +16790,8 @@ const server = createServer(async (request, response) => {
       const queued = await enqueueMessageRun(routed, {
         inboundEventId: inbound.record.id,
         authorization,
+        preRouted: routed,
+        sourceMessageRecorded: true,
       });
       if (queued.disposition !== 'denied') scheduleAgentWorkerPass();
       sendJson(
@@ -16948,6 +16965,8 @@ const server = createServer(async (request, response) => {
       const queued = await enqueueMessageRun(routed, {
         inboundEventId: inbound.record.id,
         authorization,
+        preRouted: routed,
+        sourceMessageRecorded: true,
       });
       if (queued.disposition !== 'denied') scheduleAgentWorkerPass();
       sendJson(
@@ -17110,6 +17129,8 @@ const server = createServer(async (request, response) => {
       const queued = await enqueueMessageRun(routed, {
         inboundEventId: inbound.record.id,
         authorization,
+        preRouted: routed,
+        sourceMessageRecorded: true,
       });
       if (queued.disposition !== 'denied') scheduleAgentWorkerPass();
       sendJson(
@@ -17307,6 +17328,8 @@ const server = createServer(async (request, response) => {
       const queued = await enqueueMessageRun(routed, {
         inboundEventId: inbound.record.id,
         authorization,
+        preRouted: routed,
+        sourceMessageRecorded: true,
       });
       if (queued.disposition !== 'denied') scheduleAgentWorkerPass();
       sendJson(

@@ -38,6 +38,13 @@ export async function hydrateLarkThreadContext(
   if (!run.message) {
     return emptyResult('missing_source_message');
   }
+  // A Lark group's `:main` conversation is not a topic thread. Its messages
+  // are already captured continuously by ingress, and asking Lark to resolve
+  // the current message and then list a non-existent thread only adds a slow
+  // remote round trip before the acknowledgement card can be created.
+  if (run.thread.externalId.endsWith(':main')) {
+    return emptyResult('lark_main_conversation');
+  }
   if (!options.transport) {
     return emptyResult('missing_lark_transport');
   }
