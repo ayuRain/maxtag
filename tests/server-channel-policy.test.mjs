@@ -240,7 +240,7 @@ test('channel policy API persists scoped instructions tools and budget', async (
     },
   });
   assert.equal(questionsBinding.response.status, 200);
-  assert.equal(questionsBinding.data.binding.activationMode, 'questions');
+  assert.equal(questionsBinding.data.binding.activationMode, 'mention');
 
   const questionsStatement = await jsonRequest(baseUrl, '/v1/client/events', {
     method: 'POST',
@@ -290,7 +290,7 @@ test('channel policy API persists scoped instructions tools and budget', async (
     },
   });
   assert.equal(questionsQuestion.response.status, 202);
-  assert.equal(questionsQuestion.data.accepted, true);
+  assert.equal(questionsQuestion.data.reason, 'mention_required');
 
   const defaulted = await jsonRequest(baseUrl, '/v1/client/events', {
     method: 'POST',
