@@ -23,21 +23,12 @@ LABEL org.opencontainers.image.source="https://github.com/ayuRain/maxtag" \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-      ca-certificates curl git jq openssh-client sqlite3 tini \
-    && rm -rf /var/lib/apt/lists/*
-
-# Keep runtime components in bounded layers. Besides improving cache locality,
-# this avoids depending on registries accepting one very large monolithic blob.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends awscli gh \
+      awscli ca-certificates curl docker.io gh git jq openssh-client sqlite3 tini \
     && rm -rf /var/lib/apt/lists/*
 
 # The build-enabled Project runtime uses the ordinary Docker CLI and Buildx
 # against a separate rootless BuildKit sidecar. No Docker daemon or host socket
 # is included in this image.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends docker.io \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=buildx /buildx /usr/libexec/docker/cli-plugins/docker-buildx
 
