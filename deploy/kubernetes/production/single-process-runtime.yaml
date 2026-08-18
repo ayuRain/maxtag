@@ -5,6 +5,15 @@ metadata:
 spec:
   template:
     spec:
+      # The control plane and Project runners currently share the RWO workspace
+      # PVC. Keep them on one node until that volume is migrated to RWX.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: maxtag-project-runner
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: server
           resources:
