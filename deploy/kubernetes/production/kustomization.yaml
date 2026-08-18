@@ -14,7 +14,7 @@ resources:
 images:
   - name: maxtag
     newName: registry.maxinsights.ai/max-infra/maxtag
-    newTag: f585aad
+    newTag: 7502d99
 patches:
   - path: enable-runtime.yaml
   - path: cloudflared-sidecar.yaml
