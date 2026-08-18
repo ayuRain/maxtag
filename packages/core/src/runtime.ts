@@ -377,9 +377,14 @@ export class OpenTagRuntime {
             summary: waiting ? state.summary : `“${event.call.title}”已处理，继续执行。`,
             updatedAt: now(),
           };
-          // Approval is the only tool transition that must immediately alter
-          // the shared card. Routine tool chatter stays in the audit log.
-          if (waiting) await progress.update(surfaceId, state);
+          // Keep routine tool chatter in the audit log, but surface durable
+          // workspace phases and their bounded real output. Long build/test
+          // commands commonly report by polling a log every 30-60 seconds;
+          // this updates one card instead of emitting a workflow trace.
+          const workspaceMilestone =
+            event.call.name === 'workspace_run' &&
+            (failed || (event.call.durationMs ?? 0) >= 15_000);
+          if (waiting || workspaceMilestone) await progress.update(surfaceId, state);
           return;
         }
         if (event.type === 'delegation') {

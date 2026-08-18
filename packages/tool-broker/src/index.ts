@@ -815,6 +815,20 @@ function errorText(error: unknown): string {
   return value.replace(/[\r\n]+/gu, ' ').slice(0, 500) || 'tool_call_failed';
 }
 
+function safeWorkspaceOutputPreview(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const preview = (value as JsonObject).outputPreview;
+  if (typeof preview !== 'string' || !preview.trim()) return undefined;
+  return preview
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu, '[REDACTED PRIVATE KEY]')
+    .replace(/\b(AWS_(?:SECRET_)?ACCESS_KEY|(?:API|ACCESS|REFRESH)?_?TOKEN|PASSWORD|PASSWD|CLIENT_SECRET)\s*[:=]\s*\S+/giu, '$1=[REDACTED]')
+    .replace(/\bAKIA[A-Z0-9]{16}\b/gu, '[REDACTED AWS ACCESS KEY]')
+    .replace(/[\r\n]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 300) || undefined;
+}
+
 function reportedExecutionFailure(value: unknown): string | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as JsonObject;
@@ -3207,6 +3221,9 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
         const result = jsonText(value, maxResultBytes);
         const resultUrl = toolResultUrl(definition, input, value);
         const reportedFailure = reportedExecutionFailure(value);
+        const workspacePreview = definition.name === 'workspace_run'
+          ? safeWorkspaceOutputPreview(value)
+          : undefined;
         await request.onEvent?.({
           type: 'tool_result',
           call: {
@@ -3230,9 +3247,9 @@ export class OpenTagToolBroker implements CliToolSessionFactory {
             status: reportedFailure ? 'failed' : 'succeeded',
             durationMs: Date.now() - startedAt,
             resultPreview: reportedFailure
-              ? undefined
+              ? workspacePreview
               : definition.provider
-                ? `${definition.title} completed`
+                ? workspacePreview || `${definition.title} completed`
                 : result.text.replace(/\s+/gu, ' ').slice(0, 300),
             error: reportedFailure,
           },

@@ -1501,7 +1501,8 @@ test('workspace commands follow project approval policy and recheck their allowl
     approvalStore: approvals,
     workspaceRoot: root,
   });
-  const request = runRequest([]);
+  const events = [];
+  const request = runRequest(events);
   request.access.grants.push({
     id: 'shell',
     kind: 'shell',
@@ -1547,6 +1548,10 @@ test('workspace commands follow project approval policy and recheck their allowl
   assert.match(executed.outputPreview, /approved/u);
   assert.match(executed.stdout, /approved/u);
   assert.equal(executed.stderr, '');
+  const succeededEvent = events.find(
+    (event) => event.type === 'tool_result' && event.call?.name === 'workspace_run',
+  );
+  assert.match(succeededEvent.call.resultPreview, /approved/u);
   assert.equal((await approvals.listToolApprovals({ status: 'pending' })).length, 0);
 
   const denied = await client.callTool({

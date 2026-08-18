@@ -203,6 +203,19 @@ test('runtime progress incorporates live follow-ups, delegated work, and pending
           summaryPreview: '证据完整',
         });
         await request.onEvent({
+          type: 'tool_result',
+          call: {
+            id: 'workspace-1',
+            name: 'workspace_run',
+            title: '运行项目命令',
+            grantKind: 'shell',
+            risk: 'write',
+            status: 'succeeded',
+            durationMs: 50_000,
+            resultPreview: '#24 pushing layers 82%',
+          },
+        });
+        await request.onEvent({
           type: 'tool_call',
           call: {
             id: 'tool-1',
@@ -317,6 +330,13 @@ test('runtime progress incorporates live follow-ups, delegated work, and pending
   });
 
   assert.ok(progress.some((state) => state.status === 'waiting'));
+  assert.ok(
+    progress.some((state) =>
+      state.checklist.some(
+        (item) => item.id === 'work' && item.detail === '#24 pushing layers 82%',
+      ),
+    ),
+  );
   assert.ok(
     progress.some((state) =>
       state.checklist.some(
