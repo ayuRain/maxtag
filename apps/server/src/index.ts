@@ -7929,7 +7929,7 @@ async function handleLarkToolApprovalAction(
     );
     return larkCardActionResponse(
       'error',
-      'Only a workspace owner, admin, or project manager can decide this operation.',
+      '只有工作空间所有者、管理员或当前项目经理可以决定此操作。',
     );
   }
 
@@ -8090,7 +8090,7 @@ async function handleLarkMemoryProposalAction(
     );
     return larkCardActionResponse(
       'error',
-      'Only a workspace owner, admin, or project manager can decide this change.',
+      '只有工作空间所有者、管理员或当前项目经理可以决定此变更。',
     );
   }
 
