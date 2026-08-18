@@ -17,7 +17,7 @@ spec:
       containers:
         - name: server
           resources:
-            requests: {cpu: 2, memory: 3Gi}
+            requests: {cpu: 1500m, memory: 3Gi}
             limits: {cpu: 4, memory: 8Gi}
         - name: worker
           $patch: delete

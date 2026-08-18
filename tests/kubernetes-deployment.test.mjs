@@ -62,6 +62,7 @@ test('production overlay runs SQLite consumers inline and explicitly enables the
   assert.match(runtime, /OPENTAG_K8S_LARK_BRIDGE_ENABLED: "true"/u);
   assert.match(singleProcess, /name: worker\n\s+\$patch: delete/u);
   assert.match(singleProcess, /name: scheduler\n\s+\$patch: delete/u);
+  assert.match(singleProcess, /requests: \{cpu: 1500m, memory: 3Gi\}/u);
   assert.match(singleProcess, /limits: \{cpu: 4, memory: 8Gi\}/u);
   assert.match(singleProcess, /requiredDuringSchedulingIgnoredDuringExecution/u);
   assert.match(singleProcess, /app\.kubernetes\.io\/name: maxtag-project-runner/u);
