@@ -110,6 +110,7 @@ test('production project commands run outside the credential-bearing control pla
   assert.match(kustomization, /project-runner-deployment\.yaml/u);
   assert.doesNotMatch(kustomization, /algorithm-tools/u);
   assert.match(config, /OPENTAG_LOCAL_BOUNDARY_COMMANDS: ""/u);
+  assert.match(config, /OPENTAG_TOOL_CALL_TIMEOUT_MS: "7200000"/u);
   assert.match(docs, /does not mount the MaxTag runtime Secret/u);
   assert.match(docs, /denies all runner egress by default/u);
 });
