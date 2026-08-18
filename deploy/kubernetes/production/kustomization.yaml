@@ -11,6 +11,10 @@ resources:
   - algorithm-project-runner-service.yaml
   - algorithm-project-runner-deployment.yaml
   - algorithm-project-runner-network-policy.yaml
+images:
+  - name: maxtag
+    newName: registry.maxinsights.ai/max-infra/maxtag
+    newTag: d65a047
 patches:
   - path: enable-runtime.yaml
   - path: cloudflared-sidecar.yaml
