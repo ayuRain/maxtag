@@ -312,7 +312,10 @@ export class ThreadStatusService {
     const budgetDetails = policies.length
       ? policies.map((policy) => budgetPolicyLabel(budget, policy)).join('; ')
       : '无月度上限';
-    const activationMode = binding?.activationMode ?? 'mention';
+    const activationMode =
+      binding?.activationMode === 'questions'
+        ? 'mention'
+        : binding?.activationMode ?? 'mention';
     const cardModel: ThreadStatusCardModel = {
       agentName: resolved.identity.displayName,
       workspaceName: resolved.workspace.name,

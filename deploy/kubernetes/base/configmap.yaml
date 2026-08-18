@@ -16,6 +16,7 @@ data:
   OPENTAG_DATA_DIR: /var/lib/opentag
   OPENTAG_ARTIFACT_ROOT: /var/lib/opentag/artifacts
   OPENTAG_EXECUTOR_WORKSPACE_ROOT: /srv/opentag/workspaces
+  OPENTAG_EXECUTOR_TIMEOUT_MS: "7200000"
   OPENTAG_STORAGE_DRIVER: sqlite
   OPENTAG_SQLITE_PATH: /var/lib/opentag/opentag.sqlite
   OPENTAG_SQLITE_BUSY_TIMEOUT_MS: "5000"

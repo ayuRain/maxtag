@@ -49,6 +49,8 @@ spec:
               value: "*"
             - name: OPENTAG_PROJECT_RUNNER_PORT
               value: "3081"
+            - name: OPENTAG_PROJECT_RUNNER_MAX_TIMEOUT_MS
+              value: "7200000"
             - name: OPENTAG_PROJECT_RUNNER_WORKSPACE_ROOT
               value: /srv/opentag/workspaces
             - name: OPENTAG_PROJECT_RUNNER_HOME_ROOT
@@ -121,6 +123,8 @@ spec:
           args:
             - --addr=tcp://0.0.0.0:1234
             - --oci-worker-no-process-sandbox
+            - --oci-worker-gc=true
+            - --oci-worker-gc-keepstorage=30000,20000,80000
           ports:
             - name: buildkit
               containerPort: 1234

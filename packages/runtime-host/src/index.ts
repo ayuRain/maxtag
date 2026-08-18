@@ -656,6 +656,19 @@ function agentRunEventSummary(event: AgentRunEvent): {
   };
 }
 
+function shouldPersistAgentRunEvent(
+  event: AgentRunEvent,
+  platform: PlatformKind | undefined,
+): boolean {
+  // Lark/Slack/Telegram only need durable phase, tool, approval and artifact
+  // events. Persisting provider reasoning and token deltas forced the SQLite
+  // document store to rewrite a multi-megabyte delivery document hundreds of
+  // times during one build. Web keeps deltas for its live transcript stream.
+  if (platform !== 'web' && event.type === 'text_delta') return false;
+  if (platform !== 'web' && event.type === 'progress') return false;
+  return true;
+}
+
 export class OpenTagWorkerHost {
   readonly deliveryStore: DeliveryStore;
   readonly memoryStore: StateMemoryStore;
@@ -1396,11 +1409,13 @@ export class OpenTagWorkerHost {
       access: resolved.access,
       memory: '',
       onEvent: async (event) => {
-        await this.deliveryStore.appendAgentRunEvent(
-          approval.runId,
-          event.type,
-          agentRunEventSummary(event),
-        );
+        if (shouldPersistAgentRunEvent(event, approval.platform)) {
+          await this.deliveryStore.appendAgentRunEvent(
+            approval.runId,
+            event.type,
+            agentRunEventSummary(event),
+          );
+        }
         if (
           event.type === 'tool_approval' &&
           event.approval.status !== 'pending'
@@ -2015,12 +2030,14 @@ export class OpenTagWorkerHost {
           workerId: this.workerId,
           pollMs: this.config.runControlPollMs,
         }),
-        onEvent: async (event) => {
+      onEvent: async (event) => {
+        if (shouldPersistAgentRunEvent(event, initialRun.platform)) {
           await this.deliveryStore.appendAgentRunEvent(
             runId,
             event.type,
             agentRunEventSummary(event),
           );
+        }
           if (event.type === 'delegation' && event.status === 'completed') {
             const resolved = await this.threadConfigStore.resolveThreadPolicy(
               initialRun.thread!,

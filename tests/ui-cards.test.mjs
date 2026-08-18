@@ -16,7 +16,7 @@ import {
   buildLarkThreadStatusCard,
 } from '@opentag/ui-cards';
 
-test('Lark thread status card exposes Chinese capability sections and three activation modes', () => {
+test('Lark thread status card exposes explicit mention and always-on activation without intent guessing', () => {
   const card = buildLarkThreadStatusCard({
     agentName: 'MaxTag',
     workspaceName: '研发公司',
@@ -46,10 +46,10 @@ test('Lark thread status card exposes Chinese capability sections and three acti
   });
   const buttons = cardButtons(card);
   assert.equal(card.schema, '2.0');
-  assert.equal(buttons.length, 3);
+  assert.equal(buttons.length, 2);
   assert.deepEqual(
     buttons.map((button) => button.behaviors[0].value),
-    ['mention', 'questions', 'always'].map((mode) => ({
+    ['mention', 'always'].map((mode) => ({
       action: OPENTAG_SET_THREAD_ACTIVATION_ACTION,
       activation_mode: mode,
     })),

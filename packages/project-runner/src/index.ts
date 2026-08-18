@@ -72,6 +72,8 @@ interface WireExecuteRequest {
   maxOutputBytes: number;
 }
 
+const MAX_PROJECT_COMMAND_TIMEOUT_MS = 2 * 60 * 60_000;
+
 function safeEqual(left: string, right: string): boolean {
   const a = Buffer.from(left);
   const b = Buffer.from(right);
@@ -139,7 +141,12 @@ function wireRequest(value: unknown): WireExecuteRequest {
     projectKey: input.projectKey,
     command: input.command,
     args: input.args as string[],
-    timeoutMs: boundedInteger(input.timeoutMs, 120_000, 100, 600_000),
+    timeoutMs: boundedInteger(
+      input.timeoutMs,
+      120_000,
+      100,
+      MAX_PROJECT_COMMAND_TIMEOUT_MS,
+    ),
     maxOutputBytes: boundedInteger(input.maxOutputBytes, 64 * 1_024, 2_048, 512 * 1_024),
   };
 }
@@ -286,7 +293,10 @@ export function startProjectRunnerServer(options: ProjectRunnerServerOptions): S
         input: '',
         env,
         abortSignal: abort.signal,
-        timeoutMs: Math.min(input.timeoutMs, options.maxTimeoutMs ?? 600_000),
+        timeoutMs: Math.min(
+          input.timeoutMs,
+          options.maxTimeoutMs ?? MAX_PROJECT_COMMAND_TIMEOUT_MS,
+        ),
         maxOutputBytes: Math.min(input.maxOutputBytes, options.maxOutputBytes ?? 512 * 1_024),
         rejectOnNonZero: false,
       });

@@ -403,7 +403,7 @@ const executorWorkspaceRoot =
   process.env.OPENTAG_EXECUTOR_WORKSPACE_ROOT || process.cwd();
 const executorTimeoutMs = numberEnvironmentValue(
   'OPENTAG_EXECUTOR_TIMEOUT_MS',
-  20 * 60_000,
+  2 * 60 * 60_000,
 );
 const executorMaxOutputBytes = numberEnvironmentValue(
   'OPENTAG_EXECUTOR_MAX_OUTPUT_BYTES',
@@ -6047,9 +6047,11 @@ function activationModeValue(
   body: Record<string, unknown>,
 ): ThreadActivationMode | undefined {
   const value = stringValue(body, 'activationMode');
-  return value === 'always' || value === 'questions' || value === 'mention'
-    ? value
-    : undefined;
+  // The old "questions" mode guessed intent from punctuation/wording and
+  // could interrupt ordinary group chat. Keep accepting its stored/API value
+  // for compatibility, but normalize it to explicit mention activation.
+  if (value === 'questions') return 'mention';
+  return value === 'always' || value === 'mention' ? value : undefined;
 }
 
 function bindingScopeValue(
@@ -6320,21 +6322,6 @@ function canUseEstablishedThreadBinding(thread: SourceThread): boolean {
   return Boolean(thread.rootMessageId || thread.topicId);
 }
 
-function looksLikeExplicitQuestion(text: string): boolean {
-  const normalized = text.replace(/\s+/gu, ' ').trim();
-  if (!normalized) return false;
-  if (/[?？]/u.test(normalized)) return true;
-  if (/(?:吗|呢|么|嘛|是否|能否|可否|是不是|有没有|要不要|可不可以|行不行)\s*[。！!…]*$/u.test(normalized)) {
-    return true;
-  }
-  if (/^(?:请问|谁|什么|为什么|为何|怎么|怎样|如何|是否|能否|可否|哪(?:个|些|里|儿)?|多少|几(?:个|点|天|次)?|何时|什么时候|在哪里|哪儿)/u.test(normalized)) {
-    return true;
-  }
-  return /^(?:who|what|when|where|why|how|which|whose|can|could|would|should|will|is|are|am|was|were|do|does|did|have|has|may|might)\b/iu.test(
-    normalized,
-  );
-}
-
 async function routeMessage(input: {
   thread: SourceThread;
   message: SourceMessage;
@@ -6398,12 +6385,6 @@ function shouldHandleMessage(input: {
   if (input.thread.visibility === 'direct') return true;
   if (input.message.mentionsAgent) return true;
   if (input.binding?.activationMode === 'always') return true;
-  if (
-    input.binding?.activationMode === 'questions' &&
-    looksLikeExplicitQuestion(input.message.text)
-  ) {
-    return true;
-  }
   if (
     input.establishedThreadBinding?.source === 'observed' ||
     input.establishedThreadBinding?.source === 'configured'
@@ -8649,6 +8630,15 @@ function agentRunEventSummary(event: AgentRunEvent): {
   };
 }
 
+function shouldPersistAgentRunEvent(
+  event: AgentRunEvent,
+  platform: PlatformKind | undefined,
+): boolean {
+  if (platform !== 'web' && event.type === 'text_delta') return false;
+  if (platform !== 'web' && event.type === 'progress') return false;
+  return true;
+}
+
 function recordedArtifact(value: unknown): Artifact | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const artifact = value as Record<string, unknown>;
@@ -10048,11 +10038,13 @@ async function executeAgentRun(
         pollMs: runControlPollMs,
       }),
       onEvent: async (event) => {
-        await deliveryStore.appendAgentRunEvent(
-          runId,
-          event.type,
-          agentRunEventSummary(event),
-        );
+        if (shouldPersistAgentRunEvent(event, initialRun.platform)) {
+          await deliveryStore.appendAgentRunEvent(
+            runId,
+            event.type,
+            agentRunEventSummary(event),
+          );
+        }
         if (event.type === 'delegation' && event.status === 'completed') {
           await deliveryStore.recordAgentRunUsage({
             runId,

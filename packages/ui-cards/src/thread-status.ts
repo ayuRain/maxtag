@@ -103,7 +103,7 @@ function activationControls(model: ThreadStatusCardModel): Record<string, unknow
     tag: 'column_set',
     flex_mode: 'stretch',
     horizontal_spacing: 'small',
-    columns: (['mention', 'questions', 'always'] as const).map((mode) => ({
+    columns: (['mention', 'always'] as const).map((mode) => ({
       tag: 'column',
       width: 'weighted',
       weight: 1,

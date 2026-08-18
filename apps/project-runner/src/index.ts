@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { GitHubAppInstallationTokenProvider } from '@opentag/platform-github';
 import { startProjectRunnerServer } from '@opentag/project-runner';
 
@@ -57,8 +58,21 @@ async function prepareBuildRuntime(input: {
   await fs.mkdir(dockerConfig, { recursive: true, mode: 0o700 });
   const registryConfig = process.env.OPENTAG_PROJECT_RUNNER_REGISTRY_CONFIG_FILE?.trim();
   if (registryConfig) {
-    await fs.copyFile(registryConfig, path.join(dockerConfig, 'config.json'));
-    await fs.chmod(path.join(dockerConfig, 'config.json'), 0o600);
+    // Several tool calls may prepare the same long-lived Project home at the
+    // same time. Never copy directly over the shared Docker config: concurrent
+    // truncate/chmod operations previously surfaced as intermittent EACCES.
+    const destination = path.join(dockerConfig, 'config.json');
+    const temporary = path.join(
+      dockerConfig,
+      `.config.json.${process.pid}.${randomUUID()}.tmp`,
+    );
+    try {
+      await fs.copyFile(registryConfig, temporary);
+      await fs.chmod(temporary, 0o600);
+      await fs.rename(temporary, destination);
+    } finally {
+      await fs.rm(temporary, { force: true }).catch(() => undefined);
+    }
   }
   input.env.DOCKER_CONFIG = dockerConfig;
   input.env.BUILDKIT_HOST = buildkitHost;
@@ -100,7 +114,10 @@ const server = startProjectRunnerServer({
     .filter(Boolean),
   host: process.env.OPENTAG_PROJECT_RUNNER_HOST || '0.0.0.0',
   port: numberEnv('OPENTAG_PROJECT_RUNNER_PORT', 3081),
-  maxTimeoutMs: numberEnv('OPENTAG_PROJECT_RUNNER_MAX_TIMEOUT_MS', 600_000),
+  maxTimeoutMs: numberEnv(
+    'OPENTAG_PROJECT_RUNNER_MAX_TIMEOUT_MS',
+    2 * 60 * 60_000,
+  ),
   maxOutputBytes: numberEnv('OPENTAG_PROJECT_RUNNER_MAX_OUTPUT_BYTES', 512 * 1_024),
   homeRoot: process.env.OPENTAG_PROJECT_RUNNER_HOME_ROOT,
   async environment({ home }) {

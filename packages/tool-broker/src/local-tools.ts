@@ -13,6 +13,8 @@ import { ToolDeniedError } from './errors.js';
 
 type JsonObject = Record<string, unknown>;
 
+const MAX_WORKSPACE_COMMAND_TIMEOUT_MS = 2 * 60 * 60_000;
+
 interface LocalToolContext {
   request: AgentRunRequest;
   grant: ToolGrant;
@@ -646,7 +648,11 @@ export function createLocalToolDefinitions(
         properties: {
           command: { type: 'string', minLength: 1, maxLength: 100, pattern: '^[a-zA-Z0-9_.+-]+$' },
           args: { type: 'array', maxItems: 100, items: { type: 'string', maxLength: 2_000 } },
-          timeoutMs: { type: 'integer', minimum: 100, maximum: 600_000 },
+          timeoutMs: {
+            type: 'integer',
+            minimum: 100,
+            maximum: MAX_WORKSPACE_COMMAND_TIMEOUT_MS,
+          },
         },
         required: ['command'],
       },
@@ -665,11 +671,17 @@ export function createLocalToolDefinitions(
           Boolean(options.projectRunner),
         );
       },
-      summarize: (input) => ({ command: stringValue(input, 'command'), args: stringArray(input, 'args'), timeoutMs: integerValue(input, 'timeoutMs', 120_000, 100, 600_000) }),
+      summarize: (input) => ({ command: stringValue(input, 'command'), args: stringArray(input, 'args'), timeoutMs: integerValue(input, 'timeoutMs', 120_000, 100, MAX_WORKSPACE_COMMAND_TIMEOUT_MS) }),
       async execute({ request, signal }, input) {
         const command = stringValue(input, 'command');
         const args = stringArray(input, 'args');
-        const timeoutMs = integerValue(input, 'timeoutMs', 120_000, 100, 600_000);
+        const timeoutMs = integerValue(
+          input,
+          'timeoutMs',
+          120_000,
+          100,
+          MAX_WORKSPACE_COMMAND_TIMEOUT_MS,
+        );
         const maxOutputBytes = Math.max(2_048, Math.floor(outputLimit(options) / 2));
         const projectRunner = options.projectRunner;
         const useProjectRunner = projectRunner &&

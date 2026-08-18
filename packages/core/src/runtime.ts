@@ -292,11 +292,20 @@ export class OpenTagRuntime {
         if (event.type === 'progress') {
           state = {
             ...state,
-            checklist: updateChecklist(state.checklist, event.item),
+            // Provider progress is intentionally folded into the single durable
+            // work phase.  A Codex turn can emit hundreds of reasoning/tool
+            // progress items; exposing every one of them made the Lark card a
+            // workflow trace and caused one remote card update per token-scale
+            // event.  Detailed events remain available in the run audit log.
+            checklist: updateChecklist(state.checklist, {
+              id: 'work',
+              label: `Run ${executor?.label || 'agent'}`,
+              status: 'running',
+              detail: event.message ?? event.item.label,
+            }),
             summary: event.message ?? state.summary,
             updatedAt: now(),
           };
-          await progress.update(surfaceId, state);
           return;
         }
         if (event.type === 'tool_call') {
@@ -304,18 +313,14 @@ export class OpenTagRuntime {
             ...state,
             status: 'running',
             checklist: updateChecklist(state.checklist, {
-              id: `tool:${event.call.id}`,
-              label: `使用工具：${event.call.title}`,
+              id: 'work',
+              label: `Run ${executor?.label || 'agent'}`,
               status: 'running',
-              detail:
-                event.call.risk === 'write'
-                  ? '准备外部写入'
-                  : '读取所需信息',
+              detail: `正在使用：${event.call.title}`,
             }),
             summary: `正在使用“${event.call.title}”。`,
             updatedAt: now(),
           };
-          await progress.update(surfaceId, state);
           return;
         }
         if (event.type === 'tool_approval') {
@@ -358,19 +363,23 @@ export class OpenTagRuntime {
             ...state,
             status: waiting ? 'waiting' : 'running',
             checklist: updateChecklist(state.checklist, {
-              id: `tool:${event.call.id}`,
-              label: `使用工具：${event.call.title}`,
-              status: waiting ? 'pending' : failed ? 'failed' : 'done',
+              id: 'work',
+              label: `Run ${executor?.label || 'agent'}`,
+              // A failed tool call is not a failed agent phase: a general
+              // agent is expected to inspect the error, repair, and retry.
+              status: waiting ? 'pending' : 'running',
               detail: waiting
                 ? '等待群内确认'
                 : failed
-                  ? event.call.error || '操作未完成'
-                  : event.call.resultPreview || '已完成',
+                  ? `正在处理失败：${event.call.error || '操作未完成'}`
+                  : event.call.resultPreview || `${event.call.title} 已完成`,
             }),
             summary: waiting ? state.summary : `“${event.call.title}”已处理，继续执行。`,
             updatedAt: now(),
           };
-          await progress.update(surfaceId, state);
+          // Approval is the only tool transition that must immediately alter
+          // the shared card. Routine tool chatter stays in the audit log.
+          if (waiting) await progress.update(surfaceId, state);
           return;
         }
         if (event.type === 'delegation') {
