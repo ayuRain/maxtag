@@ -35,6 +35,10 @@ data:
   # launching a second model turn before the actual Project Agent starts.
   OPENTAG_MEMORY_RETRIEVAL_ENABLED: "false"
   OPENTAG_MEMORY_RETRIEVAL_MAX_SELECTED_LINES: "32"
+  # Project commands must go through the brokered Workspace MCP and its
+  # dedicated runner. Codex native shell would execute in the hardened control
+  # plane Pod, where bubblewrap/user namespaces are intentionally unavailable.
+  OPENTAG_CODEX_DISABLE_NATIVE_SHELL: "true"
   OPENTAG_K8S_WORKER_ENABLED: "false"
   OPENTAG_K8S_SCHEDULER_ENABLED: "false"
   OPENTAG_K8S_LARK_BRIDGE_ENABLED: "false"

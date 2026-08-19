@@ -475,6 +475,12 @@ const codexAppServer =
         process.env.OPENTAG_CODEX_APP_SERVER.toLowerCase(),
       )
     : ['codex', 'codex.exe'].includes(path.basename(codexCommand));
+const codexDisableNativeShell =
+  process.env.OPENTAG_CODEX_DISABLE_NATIVE_SHELL === undefined
+    ? true
+    : !['0', 'false', 'no'].includes(
+        process.env.OPENTAG_CODEX_DISABLE_NATIVE_SHELL.toLowerCase(),
+      );
 const codexContextCompactionThreshold = optionalNumberEnvironmentValue(
   'OPENTAG_CODEX_CONTEXT_COMPACTION_THRESHOLD',
 );
@@ -1054,6 +1060,7 @@ const executorRegistry = createDefaultExecutorRegistry(
     codexEnvironment,
     codexModel,
     codexAppServer,
+    codexDisableNativeShell,
     codexContextCompactionThreshold,
     codexHome,
     codexAuthSourceHome,

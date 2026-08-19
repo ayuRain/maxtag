@@ -31,6 +31,7 @@ export interface CodexExecutorOptions extends CliExecutorOptions {
   codexHome?: string;
   codexAuthSourceHome?: string;
   contextCompactionThreshold?: number;
+  disableNativeShell?: boolean;
 }
 
 function allowsEmptyFinalResponse(request: AgentRunRequest): boolean {
@@ -651,6 +652,7 @@ export class CodexExecutor implements Executor {
       resumeThreadId: resumeSessionId,
       ephemeral: !providerSession,
       toolSession,
+      disableNativeShell: this.options.disableNativeShell,
       requestTimeoutMs: Math.min(this.options.timeoutMs ?? 30_000, 30_000),
       onStderrLine: async (line) => {
         await request.onEvent?.({

@@ -1128,6 +1128,7 @@ for await (const line of lines) {
   const executor = createCodexExecutor({
     mode: 'local-cli',
     appServer: true,
+    disableNativeShell: true,
     command: process.execPath,
     commandPrefixArgs: [fakeCli],
     workspaceRoot: files.root,
@@ -1140,7 +1141,15 @@ for await (const line of lines) {
   const result = await executor.run(input.value);
   const detail = JSON.parse(result.summary);
   assert.equal(executor.steeringMode, 'live');
-  assert.deepEqual(detail.args.slice(-3), ['app-server', '--stdio', '--strict-config']);
+  assert.deepEqual(detail.args.slice(-7), [
+    '--disable',
+    'shell_tool',
+    '--disable',
+    'unified_exec',
+    'app-server',
+    '--stdio',
+    '--strict-config',
+  ]);
   assert.equal(detail.cwd, await fs.realpath(files.projectDir));
   assert.equal(detail.codexHome, codexHome);
   assert.equal(detail.authSeeded, true);

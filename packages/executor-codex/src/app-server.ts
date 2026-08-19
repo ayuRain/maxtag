@@ -73,6 +73,7 @@ export interface CodexAppServerOptions {
   resumeThreadId?: string;
   ephemeral: boolean;
   toolSession?: CliToolSession;
+  disableNativeShell?: boolean;
   requestTimeoutMs?: number;
   onStderrLine?(line: string): void | Promise<void>;
   onUnstructuredLine?(line: string): void | Promise<void>;
@@ -739,6 +740,9 @@ export class CodexAppServerSession {
   private async ensureServer(): Promise<void> {
     const args = [
       ...(this.options.commandPrefixArgs ?? []),
+      ...(this.options.disableNativeShell
+        ? ['--disable', 'shell_tool', '--disable', 'unified_exec']
+        : []),
       'app-server',
       '--stdio',
       '--strict-config',

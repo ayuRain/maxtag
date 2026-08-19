@@ -187,6 +187,7 @@ export interface RuntimeHostExecutorConfig {
   codexEnvironment?: Record<string, string>;
   codexModel?: string;
   codexAppServer?: boolean;
+  codexDisableNativeShell?: boolean;
   codexContextCompactionThreshold?: number;
   codexHome?: string;
   codexAuthSourceHome?: string;
@@ -231,6 +232,7 @@ export function createDefaultExecutorRegistry(
     environment: config.codexEnvironment,
     model: config.codexModel,
     appServer: config.codexAppServer,
+    disableNativeShell: config.codexDisableNativeShell,
     contextCompactionThreshold: config.codexContextCompactionThreshold,
     codexHome: config.codexHome,
     codexAuthSourceHome: config.codexAuthSourceHome,
