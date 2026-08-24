@@ -14,10 +14,16 @@ runner_pod="$(kubectl -n "$namespace" get pod \
 
 [ -n "$control_plane_pod" ] || { echo "MaxTag control-plane Pod not found" >&2; exit 1; }
 [ -n "$runner_pod" ] || { echo "MaxTag Project Runner Pod not found" >&2; exit 1; }
+control_plane_containers="$(kubectl -n "$namespace" get pod "$control_plane_pod" -o jsonpath='{.spec.containers[*].name}')"
+case " $control_plane_containers " in
+  *" worker "*) runtime_container=worker ;;
+  *" server "*) runtime_container=server ;;
+  *) echo "MaxTag runtime container not found" >&2; exit 1 ;;
+esac
 
 # Exercise the authenticated control-plane -> runner path. The token stays in
 # the worker environment and is never copied to this process or printed.
-kubectl -n "$namespace" exec "$control_plane_pod" -c worker -- node -e '
+kubectl -n "$namespace" exec "$control_plane_pod" -c "$runtime_container" -- node -e '
 const token = process.env.OPENTAG_PROJECT_RUNNER_TOKEN;
 const url = process.env.OPENTAG_PROJECT_RUNNER_URL;
 if (!token || !url) throw new Error("project runner is not configured");
