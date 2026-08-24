@@ -1307,6 +1307,7 @@ export class OpenTagWorkerHost {
     wal: boolean;
     migration?: {
       deliveryImported: boolean;
+      deliverySplitMigrated: boolean;
       pairingImported: boolean;
       accessImported: boolean;
       memoryImported: boolean;

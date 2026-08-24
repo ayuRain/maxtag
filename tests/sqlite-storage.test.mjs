@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Worker } from 'node:worker_threads';
+import Database from 'better-sqlite3';
 import {
   FilePairingStore,
   FileWorkspaceAccessStore,
@@ -53,6 +54,151 @@ async function runContendingWorkers(databasePath, action, inputs) {
   }
   return messages.map((message) => message.result);
 }
+
+function createV1DeliveryDatabase(databasePath, deliveryState) {
+  const database = new Database(databasePath);
+  database.exec(`
+    CREATE TABLE opentag_state_documents (
+      key TEXT PRIMARY KEY,
+      schema_version INTEGER NOT NULL,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    ) WITHOUT ROWID;
+  `);
+  database.prepare(`
+    INSERT INTO opentag_state_documents
+      (key, schema_version, value_json, updated_at)
+    VALUES ('delivery', 1, ?, ?)
+  `).run(JSON.stringify(deliveryState), '2026-08-24T00:00:00.000Z');
+  database.pragma('user_version = 1');
+  database.close();
+}
+
+test('SQLite storage migrates the v1 delivery document into row storage once', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-sqlite-v2-'));
+  const databasePath = path.join(root, 'opentag.sqlite');
+  let store;
+  context.after(async () => {
+    store?.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const timestamp = '2026-08-24T00:00:00.000Z';
+  const largePayload = 'x'.repeat(2 * 1024 * 1024);
+  const originalState = {
+    nextSequence: 7,
+    nextSteeringSequence: 3,
+    nextAgentRunEventSequence: 11,
+    inboundEvents: [
+      {
+        id: 'inbound:legacy-a',
+        platform: 'lark',
+        externalId: 'legacy-a',
+        status: 'received',
+        duplicateCount: 0,
+        receivedAt: timestamp,
+        updatedAt: timestamp,
+        metadata: { largePayload },
+      },
+      {
+        id: 'inbound:legacy-b',
+        platform: 'lark',
+        externalId: 'legacy-b',
+        status: 'processed',
+        duplicateCount: 0,
+        receivedAt: timestamp,
+        processedAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+  };
+  createV1DeliveryDatabase(databasePath, originalState);
+
+  store = new SqliteOpenTagStore({ databasePath });
+  assert.equal(store.migration.deliverySplitMigrated, true);
+  assert.equal(store.migration.deliveryImported, false);
+  assert.equal((await store.deliveryStore.listInboundEvents({ limit: 10 })).length, 2);
+
+  const inspection = new Database(databasePath);
+  const documentBefore = inspection.prepare(`
+    SELECT schema_version, value_json, updated_at
+    FROM opentag_state_documents WHERE key = 'delivery'
+  `).get();
+  const rowsBefore = inspection.prepare(`
+    SELECT record_key, value_json, updated_at
+    FROM opentag_delivery_records
+    WHERE collection = 'inboundEvents'
+    ORDER BY record_key
+  `).all();
+  assert.equal(documentBefore.schema_version, 2);
+  assert.equal(documentBefore.value_json, JSON.stringify(originalState));
+  assert.equal(rowsBefore.length, 2);
+  inspection.close();
+
+  await store.deliveryStore.recordInboundEvent({
+    platform: 'lark',
+    externalId: 'new-event',
+    messageId: 'message-new-event',
+  });
+
+  const afterWrite = new Database(databasePath);
+  const documentAfter = afterWrite.prepare(`
+    SELECT schema_version, value_json, updated_at
+    FROM opentag_state_documents WHERE key = 'delivery'
+  `).get();
+  const rowsAfter = afterWrite.prepare(`
+    SELECT record_key, value_json, updated_at
+    FROM opentag_delivery_records
+    WHERE collection = 'inboundEvents'
+    ORDER BY record_key
+  `).all();
+  afterWrite.close();
+  assert.deepEqual(documentAfter, documentBefore);
+  assert.equal(rowsAfter.length, 3);
+  assert.deepEqual(
+    rowsAfter.filter((row) => row.record_key !== 'inbound:legacy-a' && row.record_key !== 'inbound:legacy-b').length,
+    1,
+  );
+  assert.deepEqual(
+    rowsAfter.filter((row) => row.record_key === 'inbound:legacy-a' || row.record_key === 'inbound:legacy-b'),
+    rowsBefore,
+  );
+
+  store.close();
+  store = new SqliteOpenTagStore({ databasePath });
+  assert.equal(store.migration.deliverySplitMigrated, false);
+  assert.equal((await store.deliveryStore.listInboundEvents({ limit: 10 })).length, 3);
+});
+
+test('SQLite v1 delivery migration rolls back atomically on invalid records', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-sqlite-v2-rollback-'));
+  const databasePath = path.join(root, 'opentag.sqlite');
+  context.after(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  createV1DeliveryDatabase(databasePath, {
+    nextSequence: 1,
+    nextSteeringSequence: 1,
+    nextAgentRunEventSequence: 1,
+    inboundEvents: [{ platform: 'lark', externalId: 'missing-id' }],
+  });
+
+  assert.throws(
+    () => new SqliteOpenTagStore({ databasePath }),
+    /sqlite_delivery_record_missing_id:inboundEvents/,
+  );
+  const inspection = new Database(databasePath);
+  const document = inspection.prepare(`
+    SELECT schema_version, value_json
+    FROM opentag_state_documents WHERE key = 'delivery'
+  `).get();
+  const deliveryTables = inspection.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name LIKE 'opentag_delivery_%'
+  `).all();
+  inspection.close();
+  assert.equal(document.schema_version, 1);
+  assert.equal(deliveryTables.length, 0);
+});
 
 test('SQLite storage imports existing file state once and preserves it', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-sqlite-migrate-'));
@@ -150,6 +296,7 @@ test('SQLite storage imports existing file state once and preserves it', async (
   });
   assert.deepEqual(sqlite.migration, {
     deliveryImported: true,
+    deliverySplitMigrated: false,
     pairingImported: true,
     accessImported: true,
     memoryImported: true,
@@ -214,6 +361,7 @@ test('SQLite storage imports existing file state once and preserves it', async (
   });
   assert.deepEqual(reopened.migration, {
     deliveryImported: false,
+    deliverySplitMigrated: false,
     pairingImported: false,
     accessImported: false,
     memoryImported: false,

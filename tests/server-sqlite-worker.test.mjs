@@ -173,6 +173,7 @@ test(
     processes.push(secondServer.child);
     assert.deepEqual(secondServer.health.storage.migration, {
       deliveryImported: false,
+      deliverySplitMigrated: false,
       pairingImported: false,
       accessImported: false,
       memoryImported: false,

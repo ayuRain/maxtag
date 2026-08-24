@@ -17592,7 +17592,7 @@ server.listen(port, host, () => {
   console.log(
     `MaxTag storage driver=${storageDriver}${
       sqliteStorage
-        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_pairing=${sqliteStorage.migration.pairingImported} migrated_access=${sqliteStorage.migration.accessImported} migrated_memory=${sqliteStorage.migration.memoryImported} migrated_routines=${sqliteStorage.migration.routinesImported} migrated_workflows=${sqliteStorage.migration.workflowsImported}`
+        ? ` wal=true migrated_delivery=${sqliteStorage.migration.deliveryImported} migrated_delivery_split=${sqliteStorage.migration.deliverySplitMigrated} migrated_pairing=${sqliteStorage.migration.pairingImported} migrated_access=${sqliteStorage.migration.accessImported} migrated_memory=${sqliteStorage.migration.memoryImported} migrated_routines=${sqliteStorage.migration.routinesImported} migrated_workflows=${sqliteStorage.migration.workflowsImported}`
         : ''
     }`,
   );
