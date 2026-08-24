@@ -1805,6 +1805,7 @@ function executorStatus(): Record<string, unknown> {
     maxArtifactBytes: executorMaxArtifactBytes,
     maxArtifacts: executorMaxArtifacts,
     sessionMode: executorSessionMode,
+    sessionScope: executorSessionScope,
     sessionNamespace: executorSessionNamespace,
     transcriptMaxEntries,
     transcriptMaxChars,
