@@ -457,6 +457,10 @@ const executorSessionMode =
 const executorSessionNamespace =
   process.env.OPENTAG_EXECUTOR_SESSION_NAMESPACE ||
   defaultProviderSessionNamespace();
+const executorSessionScope =
+  process.env.OPENTAG_EXECUTOR_SESSION_SCOPE === 'thread'
+    ? 'thread'
+    : 'project';
 const transcriptMaxEntries = numberEnvironmentValue(
   'OPENTAG_THREAD_CONTEXT_MAX_ENTRIES',
   40,
@@ -1051,6 +1055,7 @@ const executorRegistry = createDefaultExecutorRegistry(
     maxOutputBytes: executorMaxOutputBytes,
     inheritEnv: executorInheritEnv,
     sessionMode: executorSessionMode,
+    sessionScope: executorSessionScope,
     artifactRoot: executorArtifactRoot,
     hostedReportBaseUrl,
     maxArtifactBytes: executorMaxArtifactBytes,
@@ -9325,6 +9330,10 @@ async function enqueueMessageRun(input: {
         : managedExecutorSettings?.defaultExecutorId ||
           resolvedPolicy.identity.defaultExecutorId,
     transportMode,
+    runtimeScope:
+      memoryCommand || routineCommand || threadStatusCommand
+        ? 'thread'
+        : executorSessionScope,
     allowLiveSteering: !memoryCommand && !routineCommand && !threadStatusCommand,
     forceNewRun: Boolean(threadStatusCommand),
     metadata: {
@@ -10093,6 +10102,8 @@ async function executeAgentRun(
     const transcript = await loadDurableConversationContext({
       deliveryStore,
       run: initialRun,
+      runtimeScope:
+        initialRun.runtimeScope || executorSessionScope,
       transcriptMaxEntries,
       transcriptMaxChars,
     });
@@ -10103,6 +10114,8 @@ async function executeAgentRun(
             run: initialRun,
             providerId: initialRun.executorId || 'codex',
             namespace: executorSessionNamespace,
+            runtimeScope:
+              initialRun.runtimeScope || executorSessionScope,
           })
         : undefined;
     const result = await runtime.handleMessage({

@@ -239,7 +239,18 @@ export function normalizeDeliveryState(
     (highest, event) => Math.max(highest, event.sequence),
     0,
   );
-  const runs = parsed.agentRuns ?? [];
+  const runs = (parsed.agentRuns ?? []).map((run) => ({
+    ...run,
+    runtimeScope:
+      run.runtimeScope ||
+      (!['thread-status', 'routine-command', 'memory-command'].includes(
+        run.executorId || '',
+      ) &&
+      run.workspaceId &&
+      run.projectId
+        ? 'project'
+        : 'thread'),
+  }));
   const activeRunIds = new Set(
     runs
       .filter((run) => !isTerminalRunStatus(run.status))
@@ -566,14 +577,30 @@ function copySession(
 }
 
 function threadSessionId(input: AgentThreadSessionQuery): string {
-  const scope = JSON.stringify([
-    input.providerId,
-    input.namespace,
-    input.thread.platform,
-    input.thread.workspaceId || '',
-    input.thread.projectId || '',
-    input.thread.id,
-  ]);
+  const runtimeScope =
+    input.runtimeScope === 'project' &&
+    input.thread.workspaceId &&
+    input.thread.projectId
+      ? 'project'
+      : 'thread';
+  const scope = JSON.stringify(
+    runtimeScope === 'project'
+      ? [
+          input.providerId,
+          input.namespace,
+          runtimeScope,
+          input.thread.workspaceId,
+          input.thread.projectId,
+        ]
+      : [
+          input.providerId,
+          input.namespace,
+          input.thread.platform,
+          input.thread.workspaceId || '',
+          input.thread.projectId || '',
+          input.thread.id,
+        ],
+  );
   return `session:${createHash('sha256').update(scope).digest('hex').slice(0, 32)}`;
 }
 
@@ -892,6 +919,28 @@ function sameContextSummaryScope(
   );
 }
 
+function sameConversationScope(
+  record: Pick<
+    AgentRunRecord,
+    'platform' | 'threadId' | 'workspaceId' | 'projectId'
+  >,
+  thread: SourceThread,
+  scope: 'thread' | 'project' = 'thread',
+): boolean {
+  if (scope === 'project' && thread.workspaceId && thread.projectId) {
+    return (
+      record.workspaceId === thread.workspaceId &&
+      record.projectId === thread.projectId
+    );
+  }
+  return (
+    record.platform === thread.platform &&
+    record.threadId === thread.id &&
+    record.workspaceId === thread.workspaceId &&
+    record.projectId === thread.projectId
+  );
+}
+
 function trimSourceThreadMessages(
   state: FileDeliveryState,
   thread: SourceThread,
@@ -1183,6 +1232,30 @@ function sameThread(
     left.workspaceId === right.workspaceId &&
     left.projectId === right.projectId
   );
+}
+
+function runtimeScopeFor(
+  value: Pick<AgentRunRecord, 'runtimeScope' | 'workspaceId' | 'projectId'>,
+): 'thread' | 'project' {
+  return value.runtimeScope === 'project' && value.workspaceId && value.projectId
+    ? 'project'
+    : 'thread';
+}
+
+function sameRuntime(
+  left: Pick<AgentRunRecord, 'runtimeScope' | 'platform' | 'threadId' | 'workspaceId' | 'projectId'>,
+  right: Pick<AgentRunRecord, 'runtimeScope' | 'platform' | 'threadId' | 'workspaceId' | 'projectId'>,
+): boolean {
+  const leftScope = runtimeScopeFor(left);
+  const rightScope = runtimeScopeFor(right);
+  if (leftScope !== rightScope) return false;
+  if (leftScope === 'project') {
+    return (
+      left.workspaceId === right.workspaceId &&
+      left.projectId === right.projectId
+    );
+  }
+  return sameThread(left, right);
 }
 
 function steeringContinuationRunId(steeringId: string): string {
@@ -1635,6 +1708,11 @@ export class FileDeliveryStore {
         }
       }
 
+      // Live steering is only safe inside the same client thread because the
+      // active progress surface and final reply belong to that source thread.
+      // Other groups bound to the same project create their own durable turn;
+      // claimQueuedAgentRuns serializes those turns on the shared project
+      // runtime instead of leaking the reply into the wrong group.
       const active = input.forceNewRun
         ? undefined
         : this.activeRunForThread(state, {
@@ -1702,14 +1780,19 @@ export class FileDeliveryStore {
       for (const run of ordered) {
         if (claimed.length >= limit) break;
         if (run.status !== 'queued') continue;
-        const threadAlreadyRunning = state.agentRuns.some(
+        const runtimeAlreadyRunning = state.agentRuns.some(
           (candidate) =>
             candidate.id !== run.id &&
-            sameThread(candidate, run) &&
+            sameRuntime(candidate, run) &&
             (candidate.status === 'running' ||
               candidate.status === 'cancel_requested'),
         );
-        if (threadAlreadyRunning && run.executorId !== 'thread-status') continue;
+        if (
+          runtimeAlreadyRunning &&
+          !['thread-status', 'routine-command', 'memory-command'].includes(
+            run.executorId || '',
+          )
+        ) continue;
         if (!run.thread || !run.message) {
           run.status = 'failed';
           run.failedAt = timestamp;
@@ -1865,6 +1948,12 @@ export class FileDeliveryStore {
     options: LoadThreadTranscriptOptions,
   ): Promise<LoadedThreadTranscript> {
     const state = await this.readState();
+    const conversationScope =
+      options.conversationScope === 'project' &&
+      options.thread.workspaceId &&
+      options.thread.projectId
+        ? 'project'
+        : 'thread';
     const maxEntries = Math.max(2, Math.min(options.maxEntries ?? 40, 200));
     const maxChars = Math.max(1_000, Math.min(options.maxChars ?? 40_000, 200_000));
     const entries: LoadedThreadTranscript['entries'] = [];
@@ -1874,7 +1963,9 @@ export class FileDeliveryStore {
     const contextSummaries = options.includeContextSummaries === false
       ? []
       : state.threadContextSummaries
-          .filter((record) => sameContextSummaryScope(record, options.thread))
+          .filter((record) =>
+            sameConversationScope(record, options.thread, conversationScope),
+          )
           .filter(
             (record) => !excludedRun || record.endAt <= excludedRun.createdAt,
           );
@@ -1902,10 +1993,7 @@ export class FileDeliveryStore {
       .filter(
         (run) =>
           run.id !== options.excludeRunId &&
-          run.platform === options.thread.platform &&
-          run.threadId === options.thread.id &&
-          run.workspaceId === options.thread.workspaceId &&
-          run.projectId === options.thread.projectId &&
+          sameConversationScope(run, options.thread, conversationScope) &&
           (!excludedRun || run.createdAt <= excludedRun.createdAt) &&
           Boolean(run.message),
       )
@@ -1915,10 +2003,11 @@ export class FileDeliveryStore {
       if (
         steering.status !== 'applied' ||
         steering.mode !== 'live' ||
-        steering.platform !== options.thread.platform ||
-        steering.threadId !== options.thread.id ||
-        steering.workspaceId !== options.thread.workspaceId ||
-        steering.projectId !== options.thread.projectId ||
+        !sameConversationScope(
+          steering,
+          options.thread,
+          conversationScope,
+        ) ||
         (excludedRun && steering.receivedAt > excludedRun.createdAt)
       ) {
         continue;
@@ -1930,7 +2019,9 @@ export class FileDeliveryStore {
 
     const sourceMessageIds = new Set<string>();
     const sourceRecords = state.sourceThreadMessages
-      .filter((record) => sameSourceThreadScope(record, options.thread))
+      .filter((record) =>
+        sameConversationScope(record, options.thread, conversationScope),
+      )
       .filter((record) => !coveredEntryIds.has(`transcript:${record.id}:source`))
       .filter((record) => !record.message.actor.isBot)
       .filter(
@@ -2446,6 +2537,12 @@ export class FileDeliveryStore {
         threadId: input.thread.id,
         workspaceId: input.thread.workspaceId,
         projectId: input.thread.projectId,
+        runtimeScope:
+          input.runtimeScope === 'project' &&
+          input.thread.workspaceId &&
+          input.thread.projectId
+            ? 'project'
+            : 'thread',
         startedByRunId: input.runId,
         lastRunId: input.runId,
         createdAt: timestamp,
@@ -2453,6 +2550,16 @@ export class FileDeliveryStore {
       };
       session.sessionId = input.sessionId;
       session.status = 'active';
+      session.platform = input.thread.platform;
+      session.threadId = input.thread.id;
+      session.workspaceId = input.thread.workspaceId;
+      session.projectId = input.thread.projectId;
+      session.runtimeScope =
+        input.runtimeScope === 'project' &&
+        input.thread.workspaceId &&
+        input.thread.projectId
+          ? 'project'
+          : 'thread';
       if (!resumed) {
         session.startedByRunId = input.runId;
         session.createdAt = timestamp;
@@ -4275,6 +4382,11 @@ export class FileDeliveryStore {
       threadExternalId: input.thread.externalId,
       workspaceId: input.thread.workspaceId,
       projectId: input.thread.projectId,
+      runtimeScope:
+        input.runtimeScope ||
+        (input.thread.workspaceId && input.thread.projectId
+          ? 'project'
+          : 'thread'),
       messageId: input.message?.id,
       actorId: input.message?.actor.id,
       bindingId: input.bindingId,
@@ -4293,6 +4405,11 @@ export class FileDeliveryStore {
         threadId: input.thread.id,
         messageId: input.message?.id,
         bindingId: input.bindingId,
+        runtimeScope:
+          input.runtimeScope ||
+          (input.thread.workspaceId && input.thread.projectId
+            ? 'project'
+            : 'thread'),
       },
     });
     return record;

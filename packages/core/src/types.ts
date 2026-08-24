@@ -1142,6 +1142,7 @@ export interface AgentSteeringProvider {
 export interface ProviderSessionContext {
   providerId: string;
   namespace: string;
+  runtimeScope?: 'thread' | 'project';
   sessionId?: string;
   resumedFromRunId?: string;
   record(sessionId: string): Promise<void>;

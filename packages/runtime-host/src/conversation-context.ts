@@ -13,6 +13,7 @@ export function defaultProviderSessionNamespace(): string {
 export interface DurableConversationContextOptions {
   deliveryStore: DeliveryStore;
   run: AgentRunRecord;
+  runtimeScope?: 'thread' | 'project';
   transcriptMaxEntries?: number;
   transcriptMaxChars?: number;
 }
@@ -22,6 +23,7 @@ export interface DurableProviderSessionOptions {
   run: AgentRunRecord;
   providerId: string;
   namespace: string;
+  runtimeScope?: 'thread' | 'project';
 }
 
 export async function loadDurableConversationContext(
@@ -30,6 +32,7 @@ export async function loadDurableConversationContext(
   if (!options.run.thread) return undefined;
   const transcript = await options.deliveryStore.loadThreadTranscript({
     thread: options.run.thread,
+    conversationScope: options.runtimeScope,
     excludeRunId: options.run.id,
     maxEntries: options.transcriptMaxEntries,
     maxChars: options.transcriptMaxChars,
@@ -38,8 +41,11 @@ export async function loadDurableConversationContext(
     options.run.id,
     'transcript_loaded',
     {
-      message: `${transcript.entries.length} shared-thread context entries loaded`,
+      message: `${transcript.entries.length} shared-${
+        options.runtimeScope === 'project' ? 'project' : 'thread'
+      } context entries loaded`,
       metadata: {
+        runtimeScope: options.runtimeScope ?? 'thread',
         totalEntries: transcript.totalEntries,
         loadedEntries: transcript.entries.length,
         omittedEntries: transcript.omittedEntries,
@@ -58,11 +64,13 @@ export async function createDurableProviderSessionContext(
     providerId: options.providerId,
     namespace: options.namespace,
     thread: options.run.thread,
+    runtimeScope: options.runtimeScope,
   };
   const existing = await options.deliveryStore.getAgentThreadSession(query);
   return {
     providerId: options.providerId,
     namespace: options.namespace,
+    runtimeScope: options.runtimeScope,
     sessionId: existing?.sessionId,
     resumedFromRunId: existing?.lastRunId,
     async record(sessionId: string) {

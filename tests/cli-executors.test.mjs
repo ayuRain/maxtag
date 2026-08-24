@@ -188,6 +188,23 @@ test('agent prompt owns outcomes and recovers inside the granted project sandbox
   assert.match(prompt, /explicit approval boundary/u);
 });
 
+test('project runtime prompt treats multiple groups as entrances to one agent', () => {
+  const input = request();
+  input.value.providerSession = {
+    providerId: 'codex',
+    namespace: 'runtime:test',
+    runtimeScope: 'project',
+    async record() {},
+    async invalidate() {},
+  };
+
+  const prompt = buildAgentSystemPrompt(input.value);
+  assert.match(prompt, /long-lived Agent for this Project/u);
+  assert.match(prompt, /every bound group or client/u);
+  assert.match(prompt, /same Project conversation and persistent workspace/u);
+  assert.match(prompt, /reply through the current source thread/u);
+});
+
 test('project routes receive distinct managed directories instead of sharing the workspace root', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-project-root-'));
   context.after(() => fs.rm(root, { recursive: true, force: true }));

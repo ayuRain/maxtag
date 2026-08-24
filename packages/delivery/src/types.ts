@@ -68,6 +68,16 @@ export type AgentRunSteeringStatus =
 
 export type AgentThreadSessionStatus = 'active' | 'invalidated';
 
+/**
+ * The durable execution boundary for an agent conversation.
+ *
+ * `thread` preserves the historical behaviour where every Lark thread owns a
+ * separate provider session. `project` makes every bound client/thread an
+ * entrance into the same long-lived project agent while replies still return
+ * to the source thread that created the individual run.
+ */
+export type AgentRuntimeScope = 'thread' | 'project';
+
 export type AgentRunEventType =
   | 'created'
   | 'started'
@@ -209,6 +219,7 @@ export interface AgentRunRecord {
   threadExternalId: string;
   workspaceId?: string;
   projectId?: string;
+  runtimeScope?: AgentRuntimeScope;
   messageId?: string;
   actorId?: string;
   bindingId?: string;
@@ -267,6 +278,7 @@ export interface CreateAgentRunInput {
   bindingId?: string;
   executorId?: string;
   transportMode?: string;
+  runtimeScope?: AgentRuntimeScope;
   metadata?: Record<string, unknown>;
 }
 
@@ -346,6 +358,7 @@ export interface AgentThreadSessionRecord {
   threadId: string;
   workspaceId?: string;
   projectId?: string;
+  runtimeScope?: AgentRuntimeScope;
   startedByRunId: string;
   lastRunId: string;
   createdAt: string;
@@ -358,6 +371,7 @@ export interface AgentThreadSessionQuery {
   providerId: string;
   namespace: string;
   thread: SourceThread;
+  runtimeScope?: AgentRuntimeScope;
 }
 
 export interface RecordAgentThreadSessionInput
@@ -368,6 +382,7 @@ export interface RecordAgentThreadSessionInput
 
 export interface LoadThreadTranscriptOptions {
   thread: SourceThread;
+  conversationScope?: AgentRuntimeScope;
   excludeRunId?: string;
   maxEntries?: number;
   maxChars?: number;

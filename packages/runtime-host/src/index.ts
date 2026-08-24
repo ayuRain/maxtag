@@ -196,6 +196,7 @@ export interface RuntimeHostExecutorConfig {
   claudeModel?: string;
   claudeMaxBudgetUsd?: number;
   sessionMode?: 'provider' | 'transcript';
+  sessionScope?: 'thread' | 'project';
   sessionNamespace?: string;
   transcriptMaxEntries?: number;
   transcriptMaxChars?: number;
@@ -1348,6 +1349,7 @@ export class OpenTagWorkerHost {
       timeoutMs: config.timeoutMs ?? 20 * 60_000,
       maxOutputBytes: config.maxOutputBytes ?? 2_000_000,
       sessionMode: config.sessionMode ?? 'provider',
+      sessionScope: config.sessionScope ?? 'project',
       sessionNamespace:
         config.sessionNamespace || defaultProviderSessionNamespace(),
       transcriptMaxEntries: config.transcriptMaxEntries ?? 40,
@@ -1985,6 +1987,10 @@ export class OpenTagWorkerHost {
       const transcript = await loadDurableConversationContext({
         deliveryStore: this.deliveryStore,
         run: initialRun,
+        runtimeScope:
+          initialRun.runtimeScope ||
+          this.config.executors?.sessionScope ||
+          'project',
         transcriptMaxEntries: this.config.executors?.transcriptMaxEntries,
         transcriptMaxChars: this.config.executors?.transcriptMaxChars,
       });
@@ -1998,6 +2004,10 @@ export class OpenTagWorkerHost {
               namespace:
                 this.config.executors?.sessionNamespace ||
                 defaultProviderSessionNamespace(),
+              runtimeScope:
+                initialRun.runtimeScope ||
+                this.config.executors?.sessionScope ||
+                'project',
             })
           : undefined;
       const result = await runtime.handleMessage({

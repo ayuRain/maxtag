@@ -490,3 +490,101 @@ test('provider sessions survive SQLite process boundaries and can be invalidated
   assert.equal(restarted.startedByRunId, resumedRun.run.id);
   assert.equal((await first.deliveryStore.summarize('acme')).sessions.active, 1);
 });
+
+test('one project runtime serializes turns from different groups without cross-thread steering', async (context) => {
+  const root = await rootFixture(context, 'opentag-project-runtime-');
+  const store = new FileDeliveryStore(root);
+  const groupA = thread('group-a');
+  const groupB = {
+    ...thread('group-b'),
+    channelId: 'payments-secondary',
+  };
+
+  const first = await store.createAgentRunOrSteer({
+    runId: 'project-runtime-a',
+    thread: groupA,
+    message: message(groupA, 'project-message-a', 'Start the project build.'),
+  });
+  assert.equal(first.run.runtimeScope, 'project');
+  assert.equal((await store.claimQueuedAgentRuns({ workerId: 'worker-a' }))[0].id, first.run.id);
+
+  const second = await store.createAgentRunOrSteer({
+    runId: 'project-runtime-b',
+    thread: groupB,
+    message: message(groupB, 'project-message-b', 'Inspect progress from this group.'),
+  });
+  assert.equal(second.disposition, 'created');
+  assert.equal(second.steering, undefined);
+  assert.equal(second.run.runtimeScope, 'project');
+  assert.deepEqual(await store.claimQueuedAgentRuns({ workerId: 'worker-b' }), []);
+
+  await store.markAgentRunCompleted(first.run.id, 'Build phase complete.');
+  const resumed = await store.claimQueuedAgentRuns({ workerId: 'worker-b' });
+  assert.equal(resumed.length, 1);
+  assert.equal(resumed[0].id, second.run.id);
+  assert.equal(resumed[0].threadId, groupB.id);
+});
+
+test('project provider session and fallback transcript are shared by every bound group', async (context) => {
+  const root = await rootFixture(context, 'opentag-project-session-');
+  const store = new FileDeliveryStore(root);
+  const groupA = thread('shared-a');
+  const groupB = { ...thread('shared-b'), channelId: 'payments-secondary' };
+  const first = await store.createAgentRunOrSteer({
+    runId: 'project-session-a',
+    thread: groupA,
+    message: {
+      ...message(groupA, 'project-session-message-a', 'Remember the release baseline.'),
+      createdAt: '2026-08-24T00:00:00.000Z',
+    },
+  });
+  await store.recordAgentThreadSession({
+    providerId: 'codex',
+    namespace: 'host:project-runtime',
+    thread: groupA,
+    runtimeScope: 'project',
+    sessionId: 'codex-project-session',
+    runId: first.run.id,
+  });
+  await store.claimQueuedAgentRuns({ workerId: 'worker-a' });
+  await store.markAgentRunCompleted(first.run.id, 'Baseline recorded.');
+
+  const sharedSession = await store.getAgentThreadSession({
+    providerId: 'codex',
+    namespace: 'host:project-runtime',
+    thread: groupB,
+    runtimeScope: 'project',
+  });
+  assert.equal(sharedSession.sessionId, 'codex-project-session');
+  assert.equal(sharedSession.runtimeScope, 'project');
+  assert.equal(
+    await store.getAgentThreadSession({
+      providerId: 'codex',
+      namespace: 'host:project-runtime',
+      thread: groupB,
+      runtimeScope: 'thread',
+    }),
+    undefined,
+  );
+
+  const current = await store.createAgentRunOrSteer({
+    runId: 'project-session-b',
+    thread: groupB,
+    message: {
+      ...message(groupB, 'project-session-message-b', 'Use that baseline here.'),
+      createdAt: '2026-08-24T00:00:01.000Z',
+    },
+  });
+  const transcript = await loadDurableConversationContext({
+    deliveryStore: store,
+    run: current.run,
+    runtimeScope: 'project',
+  });
+  assert.deepEqual(
+    transcript.entries.map((entry) => [entry.role, entry.text]),
+    [
+      ['user', 'Remember the release baseline.'],
+      ['assistant', 'Baseline recorded.'],
+    ],
+  );
+});
