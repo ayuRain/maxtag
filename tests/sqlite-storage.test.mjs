@@ -200,6 +200,38 @@ test('SQLite v1 delivery migration rolls back atomically on invalid records', as
   assert.equal(deliveryTables.length, 0);
 });
 
+test('SQLite delivery cache reloads after a failed transaction', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-sqlite-cache-rollback-'));
+  const databasePath = path.join(root, 'opentag.sqlite');
+  const store = new SqliteOpenTagStore({ databasePath });
+  context.after(async () => {
+    store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const sabotage = new Database(databasePath);
+  sabotage.exec(`
+    CREATE TRIGGER reject_delivery_insert
+    BEFORE INSERT ON opentag_delivery_records
+    BEGIN
+      SELECT RAISE(ABORT, 'test_delivery_write_rejected');
+    END;
+  `);
+
+  await assert.rejects(
+    store.deliveryStore.recordInboundEvent({
+      platform: 'lark',
+      externalId: 'cache-rollback-event',
+    }),
+    /test_delivery_write_rejected/,
+  );
+  sabotage.exec('DROP TRIGGER reject_delivery_insert;');
+  sabotage.close();
+  assert.equal(
+    (await store.deliveryStore.listInboundEvents({ limit: 10 })).length,
+    0,
+  );
+});
+
 test('SQLite storage imports existing file state once and preserves it', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'opentag-sqlite-migrate-'));
   let reopened;

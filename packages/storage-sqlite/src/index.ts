@@ -191,6 +191,14 @@ class SqliteStateBackend {
     string,
     string,
   ]>;
+  private deliveryCache?: {
+    dataVersion: number;
+    state: FileDeliveryState;
+    snapshot: Map<
+      DeliveryCollection,
+      Map<string, { ordinal: number; json: string }>
+    >;
+  };
 
   constructor(options: SqliteOpenTagStoreOptions) {
     this.databasePath = path.resolve(options.databasePath);
@@ -243,13 +251,24 @@ class SqliteStateBackend {
     return this.loadDelivery().state;
   }
 
-  private loadDelivery(): {
+  private loadDelivery(mutable = false): {
+    dataVersion: number;
     state: FileDeliveryState;
     snapshot: Map<
       DeliveryCollection,
       Map<string, { ordinal: number; json: string }>
     >;
   } {
+    const dataVersion = this.deliveryDataVersion();
+    if (this.deliveryCache?.dataVersion === dataVersion) {
+      return {
+        dataVersion,
+        state: mutable
+          ? this.deliveryCache.state
+          : structuredClone(this.deliveryCache.state),
+        snapshot: this.deliveryCache.snapshot,
+      };
+    }
     const meta = this.database
       .prepare(
         `SELECT schema_version, next_sequence, next_steering_sequence,
@@ -264,7 +283,15 @@ class SqliteStateBackend {
     for (const collection of DELIVERY_COLLECTIONS) {
       snapshot.set(collection, new Map());
     }
-    if (!meta) return { state: createEmptyDeliveryState(), snapshot };
+    if (!meta) {
+      const state = createEmptyDeliveryState();
+      this.deliveryCache = { dataVersion, state, snapshot };
+      return {
+        dataVersion,
+        state: mutable ? state : structuredClone(state),
+        snapshot,
+      };
+    }
     if (meta.schema_version > SCHEMA_VERSION) {
       throw new Error(
         `sqlite_delivery_state_newer_schema:${meta.schema_version}`,
@@ -300,7 +327,13 @@ class SqliteStateBackend {
         );
       }
     }
-    return { state: normalizeDeliveryState(state), snapshot };
+    const normalized = normalizeDeliveryState(state);
+    this.deliveryCache = { dataVersion, state: normalized, snapshot };
+    return {
+      dataVersion,
+      state: mutable ? normalized : structuredClone(normalized),
+      snapshot,
+    };
   }
 
   readPairing(): PairingState {
@@ -344,12 +377,32 @@ class SqliteStateBackend {
   }
 
   mutateDelivery<T>(operation: (state: FileDeliveryState) => T): T {
-    return this.immediateTransaction(() => {
-      const { state, snapshot: before } = this.loadDelivery();
-      const result = operation(state);
-      this.writeDeliveryChanges(before, state);
-      return result;
-    });
+    let mutation: {
+      dataVersion: number;
+      result: T;
+      state: FileDeliveryState;
+      snapshot: Map<
+        DeliveryCollection,
+        Map<string, { ordinal: number; json: string }>
+      >;
+    };
+    try {
+      mutation = this.immediateTransaction(() => {
+        const { dataVersion, state, snapshot: before } = this.loadDelivery(true);
+        const result = operation(state);
+        const snapshot = this.writeDeliveryChanges(before, state);
+        return { dataVersion, result, state, snapshot };
+      });
+    } catch (error) {
+      this.deliveryCache = undefined;
+      throw error;
+    }
+    this.deliveryCache = {
+      dataVersion: mutation.dataVersion,
+      state: mutation.state,
+      snapshot: mutation.snapshot,
+    };
+    return structuredClone(mutation.result);
   }
 
   mutatePairing<T>(operation: (state: PairingState) => T): T {
@@ -403,15 +456,39 @@ class SqliteStateBackend {
   mutatePairingAndDelivery<T>(
     operation: (pairing: PairingState, delivery: FileDeliveryState) => T,
   ): T {
-    return this.immediateTransaction(() => {
-      const pairing = this.readPairing();
-      const { state: delivery, snapshot: beforeDelivery } = this.loadDelivery();
-      const result = operation(pairing, delivery);
-      this.trimPairing(pairing);
-      this.writeDocument(PAIRING_DOCUMENT, pairing);
-      this.writeDeliveryChanges(beforeDelivery, delivery);
-      return result;
-    });
+    let mutation: {
+      dataVersion: number;
+      result: T;
+      state: FileDeliveryState;
+      snapshot: Map<
+        DeliveryCollection,
+        Map<string, { ordinal: number; json: string }>
+      >;
+    };
+    try {
+      mutation = this.immediateTransaction(() => {
+        const pairing = this.readPairing();
+        const {
+          dataVersion,
+          state: delivery,
+          snapshot: beforeDelivery,
+        } = this.loadDelivery(true);
+        const result = operation(pairing, delivery);
+        this.trimPairing(pairing);
+        this.writeDocument(PAIRING_DOCUMENT, pairing);
+        const snapshot = this.writeDeliveryChanges(beforeDelivery, delivery);
+        return { dataVersion, result, state: delivery, snapshot };
+      });
+    } catch (error) {
+      this.deliveryCache = undefined;
+      throw error;
+    }
+    this.deliveryCache = {
+      dataVersion: mutation.dataVersion,
+      state: mutation.state,
+      snapshot: mutation.snapshot,
+    };
+    return structuredClone(mutation.result);
   }
 
   private initialize(
@@ -555,6 +632,10 @@ class SqliteStateBackend {
     );
   }
 
+  private deliveryDataVersion(): number {
+    return this.database.pragma('data_version', { simple: true }) as number;
+  }
+
   private writeFullDelivery(state: FileDeliveryState): void {
     this.database.prepare('DELETE FROM opentag_delivery_records').run();
     this.writeDeliveryChanges(new Map(), state);
@@ -566,8 +647,15 @@ class SqliteStateBackend {
       Map<string, { ordinal: number; json: string }>
     >,
     state: FileDeliveryState,
-  ): void {
+  ): Map<
+    DeliveryCollection,
+    Map<string, { ordinal: number; json: string }>
+  > {
     const timestamp = new Date().toISOString();
+    const nextSnapshot = new Map<
+      DeliveryCollection,
+      Map<string, { ordinal: number; json: string }>
+    >();
     const upsert = this.database.prepare(`
       INSERT INTO opentag_delivery_records
         (collection, record_key, ordinal, value_json, updated_at)
@@ -585,6 +673,11 @@ class SqliteStateBackend {
     for (const collection of DELIVERY_COLLECTIONS) {
       const previous = before.get(collection) ?? new Map();
       const seen = new Set<string>();
+      const nextCollection = new Map<
+        string,
+        { ordinal: number; json: string }
+      >();
+      nextSnapshot.set(collection, nextCollection);
       const records = state[collection] as unknown as DeliveryRecord[];
       const existingOrdinals = records.flatMap((record) => {
         const old = previous.get(record.id);
@@ -620,6 +713,7 @@ class SqliteStateBackend {
         const ordinal = preserveOrdinals && old ? old.ordinal : preserveOrdinals
           ? nextOrdinal++
           : index;
+        nextCollection.set(record.id, { ordinal, json });
         if (!old || old.ordinal !== ordinal || old.json !== json) {
           upsert.run(collection, record.id, ordinal, json, timestamp);
         }
@@ -650,6 +744,7 @@ class SqliteStateBackend {
         state.nextAgentRunEventSequence,
         timestamp,
       );
+    return nextSnapshot;
   }
 
   private readDocument<T>(
