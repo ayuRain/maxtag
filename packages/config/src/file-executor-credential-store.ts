@@ -187,10 +187,10 @@ export function managedExecutorRuntimeSettings(
 ): ManagedExecutorRuntimeSettings {
   const shared = {
     mode: 'local-cli' as const,
-    // MaxTag owns conversation continuity. Managed executors are deliberately
-    // stateless so CLI and API-key auth behave the same across restarts and
-    // gateways that implement provider sessions differently.
-    sessionMode: 'transcript' as const,
+    // The Project is the long-lived Agent boundary. Keep the provider-owned
+    // conversation when the selected CLI supports resume, while MaxTag's
+    // durable Project transcript remains the restart/context-loss fallback.
+    sessionMode: 'provider' as const,
     defaultExecutorId: credential.provider,
     enabledExecutorIds: [credential.provider],
   };

@@ -11,8 +11,13 @@ kubectl -n "$namespace" exec "$control_plane_pod" -c server -- \
   node -e "fetch('http://127.0.0.1:3077/health').then(async r => { if (!r.ok) process.exit(1); console.log(await r.text()) })"
 kubectl -n "$namespace" exec "$control_plane_pod" -c server -- \
   sqlite3 /var/lib/opentag/opentag.sqlite 'PRAGMA quick_check;' | grep -qx ok
-for port in 3078 3079 3080; do
-  kubectl -n "$namespace" exec "$control_plane_pod" -c server -- \
-    node -e "fetch('http://127.0.0.1:${port}/health').then(r => { if (!r.ok) process.exit(1) })"
+for service in worker:3078 scheduler:3079 lark-bridge:3080; do
+  container="${service%:*}"
+  port="${service#*:}"
+  if kubectl -n "$namespace" get pod "$control_plane_pod" \
+    -o jsonpath='{.spec.containers[*].name}' | tr ' ' '\n' | grep -qx "$container"; then
+    kubectl -n "$namespace" exec "$control_plane_pod" -c "$container" -- \
+      node -e "fetch('http://127.0.0.1:${port}/health').then(r => { if (!r.ok) process.exit(1) })"
+  fi
 done
 echo "MaxTag Kubernetes verification passed."

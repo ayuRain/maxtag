@@ -49,7 +49,7 @@ test('managed executor credentials are encrypted, revisioned, and never summariz
   const runtime = managedExecutorRuntimeSettings(credential);
   assert.deepEqual(runtime.enabledExecutorIds, ['codex']);
   assert.equal(runtime.defaultExecutorId, 'codex');
-  assert.equal(runtime.sessionMode, 'transcript');
+  assert.equal(runtime.sessionMode, 'provider');
   assert.equal(runtime.codexEnvironment.MAXTAG_EXECUTOR_API_KEY, credential.apiKey);
   assert.equal(runtime.codexCommandPrefixArgs.includes('sk-secret-never-persist-plainly'), false);
   assert.match(runtime.codexCommandPrefixArgs.join(' '), /env_key=.*MAXTAG_EXECUTOR_API_KEY/u);
@@ -99,11 +99,11 @@ test('managed executor configuration rejects unsafe URLs and missing API keys', 
   );
 });
 
-test('managed CLI credentials also use MaxTag-owned transcript continuity', () => {
+test('managed credentials use provider continuity with durable transcript fallback', () => {
   const runtime = managedExecutorRuntimeSettings({
     provider: 'claude',
     authMode: 'cli',
   });
-  assert.equal(runtime.sessionMode, 'transcript');
+  assert.equal(runtime.sessionMode, 'provider');
   assert.deepEqual(runtime.enabledExecutorIds, ['claude']);
 });
